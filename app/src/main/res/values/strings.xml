@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">KeyDeck</string>
+    <string name="media_listener_service_name">KeyDeck Медиа-контроллер</string>
+    <string name="nav_home">Главная</string>
+    <string name="nav_calls">Звонки</string>
+    <string name="nav_hub">Хаб</string>
+    <string name="nav_camera">Камера</string>
+    <string name="hub_chats">Чаты</string>
+    <string name="hub_news">Новости</string>
+    <string name="hub_other">Прочее</string>
+    <string name="calls_log">Журнал</string>
+    <string name="calls_contacts">Контакты</string>
+    <string name="calls_search_hint">ЗВОНКИ: Поиск или номер…</string>
+    <string name="apps_search_hint">Поиск приложений (начните ввод с клавиатуры)…</string>
+    <string name="action_call">ВЫЗОВ</string>
+    <string name="action_add_contact">+КОНТАКТ</string>
+    <string name="action_reset">СБРОС</string>
+    <string name="music_no_track">Музыка не играет</string>
+    <string name="music_tap_to_connect">Разрешить доступ к плеерам</string>
+    <string name="music_open_player">Открыть плеер</string>
+    <string name="music_switch_player">Переключить плеер</string>
+    <string name="music_panel_title">Управление музыкой</string>
+    <string name="favorites_empty">Удерживайте или Ctrl+D</string>
+    <string name="keyboard_shortcuts_title">Горячие клавиши</string>
+</resources>

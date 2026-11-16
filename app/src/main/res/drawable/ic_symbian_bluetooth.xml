@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Symbian S60 Bluetooth badge -->
+    <path
+        android:fillColor="#1C6BC4"
+        android:pathData="M12,2C6.5,2 2,6.5 2,12s4.5,10 10,10s10,-4.5 10,-10S17.5,2 12,2z" />
+    <path
+        android:fillColor="#F0F6FF"
+        android:pathData="M16.7,8.7L12,4h-1v6.2L7.3,6.5L6.1,7.7L10.4,12L6.1,16.3l1.2,1.2l3.7,-3.7V20h1l4.7,-4.7L13.4,12L16.7,8.7zM12.8,7l1.8,1.8l-1.8,1.8V7zM12.8,17v-3.6l1.8,1.8L12.8,17z" />
+</vector>

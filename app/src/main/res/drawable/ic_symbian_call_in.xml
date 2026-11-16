@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Symbian S60 green incoming call badge -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M20,4l-1.4,-1.4L9,12.2V7H7v9h9v-2h-5.2L20,4z" />
+    <path
+        android:fillColor="#86EFAC"
+        android:pathData="M18.6,2.6L20,4L10.4,13.6L9,12.2z" />
+    <path
+        android:fillColor="#1B7F4B"
+        android:pathData="M4,15.5c1.1,2.2 2.8,3.9 5,5l1.7,-1.7c0.2,-0.2 0.5,-0.3 0.8,-0.2c0.9,0.3 1.9,0.4 2.9,0.4c0.4,0 0.6,0.3 0.6,0.7V22c0,0.4 -0.3,0.7 -0.7,0.7C7.6,22.7 2.3,17.4 2.3,10.7C2.3,10.3 2.6,10 3,10h2.3c0.4,0 0.7,0.3 0.7,0.7c0,1 0.1,2 0.4,2.9c0.1,0.3 0,0.6 -0.2,0.8L4,15.5z" />
+</vector>

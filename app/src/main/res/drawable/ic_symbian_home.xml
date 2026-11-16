@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Symbian S60 Home emblem -->
+    <path
+        android:fillColor="#56C2FF"
+        android:pathData="M12,3L2,12h3v8h5v-5h4v5h5v-8h3L12,3z" />
+    <path
+        android:fillColor="#D4ECFF"
+        android:pathData="M12,3L2,12h3.5L12,6.2L18.5,12H22L12,3z" />
+</vector>

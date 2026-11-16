@@ -1,0 +1,6 @@
+{
+  "name": "KeyDeck",
+  "description": "Keyboard-first Android launcher with persistent multi-session music controls, Niagara-style alphabetical search rail, calls and contacts dialer, and adaptive landscape mode.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

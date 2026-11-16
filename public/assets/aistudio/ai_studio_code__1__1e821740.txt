@@ -1,0 +1,12 @@
+// app/src/main/aidl/com/yourname/wplauncher/IShizukuShellService.aidl
+package com.yourname.wplauncher;
+
+interface IShizukuShellService {
+    void destroy() = 16777114;
+    void expandNotifications() = 1;
+    void expandQuickSettings() = 2;
+    void collapsePanels() = 3;
+    String getRecentPackages() = 4;
+    void bringPackageToFront(String packageName, String componentName) = 5;
+    void grantNotificationListener(String component) = 6;
+}

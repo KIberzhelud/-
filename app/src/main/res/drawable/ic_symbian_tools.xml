@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Symbian S60 metallic tools wrench & gear -->
+    <path
+        android:fillColor="#9BB2CC"
+        android:pathData="M21.7,18.9l-7.6,-7.6c0.7,-1.7 0.3,-3.8 -1.1,-5.2c-1.5,-1.5 -3.8,-1.8 -5.6,-0.9l3.2,3.2l-2.1,2.1L5.3,7.3C4.4,9.1 4.7,11.4 6.2,12.9c1.4,1.4 3.5,1.8 5.2,1.1l7.6,7.6c0.4,0.4 1,0.4 1.4,0l1.3,-1.3C22.1,19.9 22.1,19.3 21.7,18.9z" />
+    <path
+        android:fillColor="#E3EDF7"
+        android:pathData="M19.8,19.5l-6.8,-6.8l1,-1l6.8,6.8z" />
+</vector>
