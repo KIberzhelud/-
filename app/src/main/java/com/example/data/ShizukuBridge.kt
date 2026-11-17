@@ -142,6 +142,16 @@ class ShizukuBridge(private val context: Context) {
         return runPrivilegedShell("wm dismiss-keyguard")
     }
 
+    suspend fun forceStopPackagesViaShizuku(packages: Collection<String>): Result<String> {
+        val safePkgs = packages
+            .map { it.trim() }
+            .filter { it.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$""")) }
+            .distinct()
+        if (safePkgs.isEmpty()) return Result.success("Нет пакетов")
+        val cmd = safePkgs.joinToString("; ") { "am force-stop $it" }
+        return runPrivilegedShell(cmd)
+    }
+
     suspend fun runPrivilegedShell(command: String): Result<String> = withContext(Dispatchers.IO) {
         val alive = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
         if (!alive) {

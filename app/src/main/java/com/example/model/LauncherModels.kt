@@ -38,6 +38,23 @@ enum class AppIconMode {
     CUSTOM
 }
 
+enum class UiThemeColor(val title: String) {
+    BLUE("Синий (Vista Blue)"),
+    GRAY("Серый (Graphite)")
+}
+
+data class WallpaperPaletteData(
+    val dominantDarkArgb: Long,
+    val accentArgb: Long,
+    val highlightArgb: Long
+)
+
+enum class MusicDrawerTab(val title: String) {
+    QUEUE("Плейлист"),
+    TELEGRAM("ТГ Музыка"),
+    LOCAL("Файлы")
+}
+
 data class AppIconOverride(
     val mode: AppIconMode,
     val symbianKey: String? = null,
@@ -62,6 +79,31 @@ data class AppEntry(
     val iconOverride: AppIconOverride? = null
 )
 
+data class MediaQueueTrack(
+    val queueId: Long,
+    val title: String,
+    val subtitle: String,
+    val mediaId: String? = null,
+    val packageName: String = "",
+    val appLabel: String = "",
+    val isActive: Boolean = false
+)
+
+data class MediaCustomActionItem(
+    val action: String,
+    val name: String
+)
+
+data class MediaBrowserTrack(
+    val mediaId: String,
+    val packageName: String,
+    val appLabel: String,
+    val title: String,
+    val subtitle: String,
+    val isPlayable: Boolean = true,
+    val isBrowsable: Boolean = false
+)
+
 data class MediaSessionUi(
     val id: String,
     val packageName: String,
@@ -77,7 +119,23 @@ data class MediaSessionUi(
     val artwork: ImageBitmap? = null,
     val canSkipNext: Boolean = true,
     val canSkipPrev: Boolean = true,
-    val canSeek: Boolean = true
+    val canSeek: Boolean = true,
+    val canPlayFromSearch: Boolean = false,
+    val activeQueueItemId: Long = -1L,
+    val queue: List<MediaQueueTrack> = emptyList(),
+    val customActions: List<MediaCustomActionItem> = emptyList()
+)
+
+data class LocalAudioTrack(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val durationMs: Long,
+    val uriString: String,
+    val filePath: String? = null,
+    val displayPath: String = "",
+    val isTelegramAudio: Boolean = false
 )
 
 data class MediaPlayerState(
@@ -86,7 +144,13 @@ data class MediaPlayerState(
     val isListenerGranted: Boolean = false,
     val systemVolume: Int = 0,
     val maxVolume: Int = 15,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    val currentLocalTrackId: String? = null,
+    val recentTracks: List<MediaQueueTrack> = emptyList(),
+    val browsableTracks: List<MediaBrowserTrack> = emptyList(),
+    val browserSearchResults: List<MediaBrowserTrack> = emptyList(),
+    val isSearchingStream: Boolean = false,
+    val connectedBrowserPackage: String? = null
 ) {
     val activeSession: MediaSessionUi?
         get() = sessions.firstOrNull { it.id == selectedSessionId } ?: sessions.firstOrNull()

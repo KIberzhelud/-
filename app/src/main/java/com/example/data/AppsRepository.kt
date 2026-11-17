@@ -326,6 +326,7 @@ class AppsRepository(private val context: Context) {
                     input.copyTo(output)
                 }
             } ?: throw IllegalStateException("Не удалось записать APK в выбранное место")
+            Unit
         }
     }
 

@@ -73,8 +73,21 @@ object NotificationHubRepository {
             .filter { sbn ->
                 sbn.packageName != selfPkg && !isPureMediaTransport(sbn)
             }
-            .mapNotNull { sbn -> parseNotification(service, sbn) }
-            .sortedByDescending { it.postTime }
+            .mapNotNull { sbn ->
+                parseNotification(service, sbn)?.let { item ->
+                    sbn.notification?.category to item
+                }
+            }
+            .sortedWith(
+                compareBy<Pair<String?, HubNotificationItem>> { (category, item) ->
+                    notificationPriorityTier(
+                        packageName = item.packageName,
+                        appName = item.appName,
+                        category = category
+                    )
+                }.thenByDescending { (_, item) -> item.postTime }
+            )
+            .map { it.second }
             .toList()
 
         val validKeys = parsed.mapTo(HashSet()) { it.key }
@@ -371,12 +384,17 @@ object NotificationHubRepository {
             return HubSubTab.NEWS
         }
 
-        val isKnownChatPkg = pkg.contains("telegram") || pkg.contains("whatsapp") ||
+        // Keep VK and Email inside CHATS so user still sees them, just below TG/WhatsApp/IM clients
+        val isKnownChatPkg = pkg.contains("telegram") || pkg.contains("challegram") ||
+            pkg.contains("exteragram") || pkg.contains("nekogram") || pkg.contains("ayugram") ||
+            pkg.contains("nagram") || pkg.contains("forkgram") || pkg.contains("kotatogram") ||
+            pkg.contains("cherrygram") || pkg.contains("whatsapp") ||
             pkg.contains("viber") || pkg.contains("signal") || pkg.contains("discord") ||
             pkg.contains("vk") || pkg.contains("messenger") || pkg.contains("slack") ||
             pkg.contains("teams") || pkg.contains("mms") || pkg.contains("messaging") ||
-            pkg.contains("gmail") || pkg.contains("mail") || pkg.contains("threema") ||
-            pkg.contains("element") || pkg.contains("icq") || pkg.contains("tamtam")
+            pkg.contains("gmail") || pkg.contains("mail") || pkg.contains("outlook") ||
+            pkg.contains("threema") || pkg.contains("element") || pkg.contains("icq") ||
+            pkg.contains("tamtam")
 
         if (hasReply || hasMessagingStyle ||
             category == Notification.CATEGORY_MESSAGE ||
@@ -394,6 +412,73 @@ object NotificationHubRepository {
         }
 
         return HubSubTab.OTHER
+    }
+
+    /**
+     * Hub priority tiers (lower value = shown higher in list even when older):
+     * 0: Telegram (official, X, and third-party TG clients) & WhatsApp (+ Business/clients)
+     * 1: Other messaging / chat clients (Viber, Signal, Discord, SMS, Element, Slack, etc.)
+     * 2: General notifications (neither TG/WA/IM nor VK/Email)
+     * 3: VK & Email clients (explicitly kept below TG, WhatsApp, and IM clients)
+     */
+    fun notificationPriorityTier(
+        packageName: String,
+        appName: String = "",
+        category: String? = null
+    ): Int {
+        val pkg = packageName.lowercase()
+        val label = appName.lowercase()
+
+        fun matchesAny(vararg tokens: String): Boolean =
+            tokens.any { pkg.contains(it) || label.contains(it) }
+
+        val isTelegramOrClient = matchesAny(
+            "org.telegram", "telegram", "challegram", "exteragram", "nekogram",
+            "ayugram", "nagram", "forkgram", "kotatogram", "cherrygram", "graphmessenger",
+            "telegreat", "bgram", "octogram", "momogram", "owlgram", "turrit", "nicegram",
+            "uzgram", "vidogram", "plusmessenger", "messenger.plus", "imem", "telegraph",
+            "телеграм", "extera", "neko"
+        ) || pkg.endsWith(".ime") || pkg.contains(".ime.")
+
+        val isWhatsApp = matchesAny("whatsapp", "com.whatsapp", "ватсап", "wa business")
+
+        if (isTelegramOrClient || isWhatsApp) {
+            return 0
+        }
+
+        val isVk = matchesAny(
+            "com.vkontakte", "com.vk.", "vk.im", "vkontakte", "vkvideo", "vkmusic",
+            "vkclips", "sferum", "вконтакте", "vk мессенджер"
+        ) || label == "vk"
+
+        val isEmail = category == Notification.CATEGORY_EMAIL || matchesAny(
+            "google.android.gm", "gmail", "outlook", "office.outlook", "yandex.mail",
+            "ru.yandex.mail", "mail.ru", "ru.mail", "k9mail", "fairemail", "thunderbird",
+            "protonmail", "ch.protonmail", "proton.android.mail", "sparkmail", "bluemail",
+            "aquamail", "android.email", "samsung.android.email", "mymail", "zoho.mail",
+            "почта", "email", "e-mail"
+        )
+
+        if (isVk || isEmail) {
+            return 3
+        }
+
+        val isOtherMessenger = category == Notification.CATEGORY_MESSAGE || matchesAny(
+            "signal", "viber", "threema", "element", "matrix", "discord", "slack",
+            "teams", "icq", "tamtam", "skype", "mattermost", "rocketchat", "simplex",
+            "session", "conversations", "briar", "mms", "messaging", "apps.messaging",
+            "imo", "wechat", "line", "kakao", "messenger"
+        )
+
+        return if (isOtherMessenger) 1 else 2
+    }
+
+    fun sortNotificationsByPriority(items: List<HubNotificationItem>): List<HubNotificationItem> {
+        return items.sortedWith(
+            compareBy<HubNotificationItem> {
+                notificationPriorityTier(it.packageName, it.appName, null)
+            }.thenByDescending { it.postTime }
+        )
     }
 
     private fun resolveAppLabel(context: Context, packageName: String): String {

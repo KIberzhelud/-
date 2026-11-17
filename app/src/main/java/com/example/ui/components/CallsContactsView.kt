@@ -29,8 +29,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,7 +37,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -61,17 +58,16 @@ import com.example.ui.theme.CallIncomingGreen
 import com.example.ui.theme.CallMissedRed
 import com.example.ui.theme.CallOutgoingBlue
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
-import com.example.ui.theme.SymbianBevelHighlight
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
-import com.example.ui.theme.TileDeepCobalt
 import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 
 @Composable
 fun CallsContactsView(
@@ -97,15 +93,15 @@ fun CallsContactsView(
     onRequestPermissions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     Column(modifier = modifier.fillMaxSize()) {
-        // Portrait-only top sub-tabs: in Landscape they move beside the music player!
         if (!isLandscape) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .symbianMetallicBar()
-                    .padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 SubTabItem(
                     selected = subTab == CallsSubTab.LOG,
@@ -126,70 +122,72 @@ fun CallsContactsView(
                         .testTag("calls_subtab_contacts")
                 )
             }
-            HorizontalDivider(color = NavyDivider, thickness = 1.dp)
+            HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
         }
 
-        // Search & Action Strip: [icon] ЗВОНКИ: Поиск или номер... [ВЫЗОВ] [+КОНТАКТ] [СБРОС]
+        // Vista inset Search & Action Strip: [icon] [Поиск или номер...] [ВЫЗОВ] [+КОНТАКТ] [СБРОС]
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(NavySurface.copy(alpha = 0.88f))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .background(theme.surface.copy(alpha = 0.92f))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Image(
-                painter = painterResource(R.drawable.ic_symbian_phone),
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(5.dp))
-            Text(
-                text = "ЗВОНКИ:",
-                style = MaterialTheme.typography.labelMedium,
-                color = ElectricCyan
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier.weight(1f),
-                contentAlignment = Alignment.CenterStart
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .vistaInsetBox()
+                    .padding(horizontal = 7.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (searchQuery.isEmpty()) {
-                    Text(
-                        text = "Поиск или номер…",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Image(
+                    painter = painterResource(R.drawable.ic_symbian_phone),
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = "Поиск или номер…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                        cursorBrush = SolidColor(ElectricCyan),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(onGo = { onCallClick(searchQuery) }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(callsSearchFocusRequester)
+                            .onFocusChanged { onSearchFocusChange(it.isFocused) }
+                            .testTag("calls_search_input")
                     )
                 }
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = onSearchQueryChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                    cursorBrush = SolidColor(ElectricCyan),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { onCallClick(searchQuery) }),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(callsSearchFocusRequester)
-                        .onFocusChanged { onSearchFocusChange(it.isFocused) }
-                        .testTag("calls_search_input")
-                )
             }
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(5.dp))
             ActionChipButton(
                 text = "ВЫЗОВ",
                 iconRes = R.drawable.ic_symbian_phone,
-                containerColor = TileBrightAzure,
+                isPrimary = true,
                 onClick = { onCallClick(searchQuery) },
                 modifier = Modifier.testTag("calls_dial_button")
             )
             Spacer(Modifier.width(4.dp))
             ActionChipButton(
-                text = "+КОНТАКТ",
+                text = "+КОНТ.",
                 iconRes = R.drawable.ic_symbian_add_contact,
-                containerColor = TileDeepCobalt,
+                isPrimary = false,
                 onClick = onAddContactClick,
                 modifier = Modifier.testTag("calls_add_contact_button")
             )
@@ -197,7 +195,7 @@ fun CallsContactsView(
             ActionChipButton(
                 text = "СБРОС",
                 iconRes = R.drawable.ic_symbian_clear,
-                containerColor = NavySurfaceElevated,
+                isPrimary = false,
                 onClick = onResetClick,
                 modifier = Modifier.testTag("calls_reset_button")
             )
@@ -285,36 +283,27 @@ private fun SubTabItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Row(
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .vistaAeroButton(isPrimary = selected, isActive = selected)
+            .clickable(onClick = onClick)
+            .padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(vertical = 7.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Image(
-                painter = painterResource(iconRes),
-                contentDescription = label,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                ),
-                color = if (selected) ElectricCyan else TextSecondary
-            )
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(2.dp)
-                .background(if (selected) ElectricCyan else Color.Transparent)
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = label,
+            modifier = Modifier.size(17.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            ),
+            color = if (selected) Color.White else TextSecondary
         )
     }
 }
@@ -323,15 +312,13 @@ private fun SubTabItem(
 private fun ActionChipButton(
     text: String,
     iconRes: Int,
-    containerColor: Color,
+    isPrimary: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(3.dp))
-            .background(containerColor)
-            .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+            .vistaAeroButton(isPrimary = isPrimary)
             .clickable(onClick = onClick)
             .padding(horizontal = 7.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
@@ -349,7 +336,7 @@ private fun ActionChipButton(
                     fontWeight = FontWeight.Bold,
                     fontSize = 10.sp
                 ),
-                color = TextPrimary,
+                color = if (isPrimary) Color.White else TextPrimary,
                 maxLines = 1
             )
         }
@@ -383,9 +370,7 @@ private fun CallLogTile(
         Box(
             modifier = Modifier
                 .size(30.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(NavySurface.copy(alpha = 0.72f))
-                .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.35f), RoundedCornerShape(4.dp)),
+                .vistaInsetBox(),
             contentAlignment = Alignment.Center
         ) {
             Image(
@@ -460,9 +445,7 @@ private fun ContactTile(
             Box(
                 modifier = Modifier
                     .size(28.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(NavySurface.copy(alpha = 0.7f))
-                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.35f), RoundedCornerShape(4.dp)),
+                    .vistaInsetBox(),
                 contentAlignment = Alignment.Center
             ) {
                 Image(
@@ -521,9 +504,7 @@ private fun PermissionPromptCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(NavySurfaceElevated)
-                .border(1.dp, NavyDivider, RoundedCornerShape(6.dp))
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -545,13 +526,12 @@ private fun PermissionPromptCard(
                 color = TextSecondary
             )
             Spacer(Modifier.height(14.dp))
-            Button(
+            VistaButton(
+                text = buttonText,
+                isPrimary = true,
                 onClick = onClick,
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure),
                 modifier = Modifier.testTag("grant_calls_contacts_permission")
-            ) {
-                Text(buttonText)
-            }
+            )
         }
     }
 }

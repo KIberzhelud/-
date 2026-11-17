@@ -4,9 +4,11 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppsRepository
+import com.example.data.AutoCloseManager
 import com.example.data.CallsContactsRepository
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.LauncherPreferencesRepository
@@ -15,6 +17,7 @@ import com.example.data.MediaControlRepository
 import com.example.data.NotificationHubRepository
 import com.example.data.ShizukuBridge
 import com.example.data.UniversalSearchRepository
+import com.example.data.WallpaperThemeHelper
 import com.example.model.AlphabetMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
@@ -27,10 +30,15 @@ import com.example.model.HubCategory
 import com.example.model.HubNotificationItem
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
+import com.example.model.LocalAudioTrack
 import com.example.model.MainTab
+import com.example.model.MediaBrowserTrack
 import com.example.model.MediaPlayerState
+import com.example.model.MusicDrawerTab
 import com.example.model.SearchResultKind
 import com.example.model.ShizukuState
+import com.example.model.UiThemeColor
+import com.example.model.WallpaperPaletteData
 import com.example.model.WriterSubTab
 import com.example.ui.LockScreenActivity
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +85,8 @@ data class LauncherUiState(
     val hasCallLogPermission: Boolean = false,
     val hasContactsPermission: Boolean = false,
     val hasCallPhonePermission: Boolean = false,
+    val hasAllFilesAccess: Boolean = false,
+    val hasAudioReadAccess: Boolean = false,
     val hubQuickLinks: List<HubQuickLink> = emptyList(),
     val hubNotifications: List<HubNotificationItem> = emptyList(),
     val shizukuState: ShizukuState = ShizukuState(),
@@ -84,9 +94,20 @@ data class LauncherUiState(
     val writerInitialSubTab: WriterSubTab = WriterSubTab.BOOKS,
     val mediaState: MediaPlayerState = MediaPlayerState(),
     val livePositionMs: Long = 0L,
+    val localAudioTracks: List<LocalAudioTrack> = emptyList(),
+    val localTrackSearchQuery: String = "",
+    val musicDrawerTab: MusicDrawerTab = MusicDrawerTab.QUEUE,
     val showMusicSheet: Boolean = false,
     val showShortcutsDialog: Boolean = false,
     val showAddLinkDialog: Boolean = false,
+    val showAppearanceDialog: Boolean = false,
+    val showAutoKillDialog: Boolean = false,
+    val uiThemeColor: UiThemeColor = UiThemeColor.BLUE,
+    val wallpaperBitmap: ImageBitmap? = null,
+    val wallpaperPalette: WallpaperPaletteData? = null,
+    val hasWallpaper: Boolean = false,
+    val autoKillEnabled: Boolean = true,
+    val autoKillPackages: Set<String> = emptySet(),
     val contextMenuApp: AppEntry? = null,
     val contextMenuFile: DeviceSearchFile? = null,
     val renameTargetApp: AppEntry? = null,
@@ -101,6 +122,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val callsRepo = CallsContactsRepository(application)
     private val mediaRepo = MediaControlRepository(application)
     private val shizukuBridge = ShizukuBridge(application)
+    private val autoCloseManager = AutoCloseManager(application, shizukuBridge)
     private val universalSearchRepo = UniversalSearchRepository(application, shizukuBridge)
 
     private val _allApps = MutableStateFlow<List<AppEntry>>(emptyList())
@@ -121,8 +143,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _permissionsState = MutableStateFlow(Triple(false, false, false))
     private val _livePositionMs = MutableStateFlow(0L)
     private val _showMusicSheet = MutableStateFlow(false)
+    private val _musicDrawerTab = MutableStateFlow(MusicDrawerTab.QUEUE)
     private val _showShortcutsDialog = MutableStateFlow(false)
     private val _showAddLinkDialog = MutableStateFlow(false)
+    private val _showAppearanceDialog = MutableStateFlow(false)
+    private val _showAutoKillDialog = MutableStateFlow(false)
+    private val _wallpaperState = MutableStateFlow<Pair<ImageBitmap?, WallpaperPaletteData?>>(null to null)
     private val _contextMenuApp = MutableStateFlow<AppEntry?>(null)
     private val _contextMenuFile = MutableStateFlow<DeviceSearchFile?>(null)
     private val _renameTargetApp = MutableStateFlow<AppEntry?>(null)
@@ -132,7 +158,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _writerInitialSubTab = MutableStateFlow(WriterSubTab.BOOKS)
     private val _deviceSearchResults = MutableStateFlow<List<DeviceSearchFile>>(emptyList())
     private val _isSearchingDevice = MutableStateFlow(false)
+    private val _storageAccessState = MutableStateFlow(false to false)
+    private val _localTrackSearchQuery = MutableStateFlow("")
 
+    @Volatile
+    private var wasPausedSinceResume: Boolean = false
     private var deviceSearchJob: Job? = null
     private var musicAppRotationIndex: Int = -1
 
@@ -329,10 +359,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _livePositionMs,
         prefsRepo.hubQuickLinks,
         _callsSearchQuery,
-        combine(_showAddLinkDialog, _contextMenuApp, _isLoadingApps, _statusToast) { a, b, c, d ->
-            arrayOf<Any?>(a, b, c, d)
+        combine(
+            combine(_showAddLinkDialog, _contextMenuApp, _isLoadingApps, _statusToast) { a, b, c, d ->
+                arrayOf<Any?>(a, b, c, d)
+            },
+            _storageAccessState,
+            mediaRepo.localTracks,
+            _localTrackSearchQuery
+        ) { extras, storageAccess, tracks, trackQuery ->
+            arrayOf<Any?>(extras[0], extras[1], extras[2], extras[3], storageAccess, tracks, trackQuery)
         }
     ) { media, livePos, links, callsQuery, extras ->
+        @Suppress("UNCHECKED_CAST")
+        val storagePair = extras[4] as Pair<Boolean, Boolean>
+        @Suppress("UNCHECKED_CAST")
+        val allTracks = extras[5] as List<LocalAudioTrack>
+        val trackQuery = extras[6] as String
+        val filteredTracks = if (trackQuery.isBlank()) {
+            allTracks
+        } else {
+            allTracks.filter {
+                KeyboardSearchMatcher.matches(it.title, trackQuery) ||
+                    KeyboardSearchMatcher.matches(it.artist, trackQuery) ||
+                    KeyboardSearchMatcher.matches(it.album, trackQuery)
+            }
+        }
         MediaAndExtrasBundle(
             media = media,
             livePos = livePos,
@@ -341,7 +392,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             addLink = extras[0] as Boolean,
             ctxApp = extras[1] as AppEntry?,
             loading = extras[2] as Boolean,
-            toast = extras[3] as String?
+            toast = extras[3] as String?,
+            hasAllFiles = storagePair.first,
+            hasAudioAccess = storagePair.second,
+            localTracks = filteredTracks,
+            localTrackSearchQuery = trackQuery
         )
     }
 
@@ -353,7 +408,43 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val addLink: Boolean,
         val ctxApp: AppEntry?,
         val loading: Boolean,
-        val toast: String?
+        val toast: String?,
+        val hasAllFiles: Boolean,
+        val hasAudioAccess: Boolean,
+        val localTracks: List<LocalAudioTrack>,
+        val localTrackSearchQuery: String
+    )
+
+    private val customizationPrefsFlow = combine(
+        prefsRepo.uiThemeColor,
+        _wallpaperState,
+        prefsRepo.autoKillEnabled,
+        prefsRepo.autoKillPackages,
+        combine(_showAppearanceDialog, _showAutoKillDialog, _musicDrawerTab) { appDlg, killDlg, mTab ->
+            Triple(appDlg, killDlg, mTab)
+        }
+    ) { themeColor, wallpaperPair, autoKillOn, autoKillPkgs, uiTriple ->
+        CustomizationBundle(
+            themeColor = themeColor,
+            wallpaperBitmap = wallpaperPair.first,
+            wallpaperPalette = wallpaperPair.second,
+            autoKillEnabled = autoKillOn,
+            autoKillPackages = autoKillPkgs,
+            showAppearanceDialog = uiTriple.first,
+            showAutoKillDialog = uiTriple.second,
+            musicDrawerTab = uiTriple.third
+        )
+    }
+
+    private data class CustomizationBundle(
+        val themeColor: UiThemeColor,
+        val wallpaperBitmap: ImageBitmap?,
+        val wallpaperPalette: WallpaperPaletteData?,
+        val autoKillEnabled: Boolean,
+        val autoKillPackages: Set<String>,
+        val showAppearanceDialog: Boolean,
+        val showAutoKillDialog: Boolean,
+        val musicDrawerTab: MusicDrawerTab
     )
 
     val uiState: StateFlow<LauncherUiState> = combine(
@@ -361,10 +452,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         callsFlow,
         navFlow,
         uiOverlaysFlow,
-        combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> Pair(m, hw) }
-    ) { appsTriple, calls, nav, overlays, rightPair ->
-        val mediaBundle = rightPair.first
-        val hw = rightPair.second
+        combine(
+            combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> Pair(m, hw) },
+            customizationPrefsFlow
+        ) { mh, cust -> mh to cust }
+    ) { appsTriple, calls, nav, overlays, rightTriple ->
+        val mediaBundle = rightTriple.first.first
+        val hw = rightTriple.first.second
+        val cust = rightTriple.second
         val (updatedAll, filtered, pinned) = appsTriple
         val coercedAppFocus = if (filtered.isEmpty()) 0 else overlays.focus.appIdx.coerceIn(0, filtered.lastIndex)
         val coercedLogFocus = if (calls.logs.isEmpty()) 0 else overlays.focus.callIdx.coerceIn(0, calls.logs.lastIndex)
@@ -403,6 +498,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             hasCallLogPermission = calls.perms.first,
             hasContactsPermission = calls.perms.second,
             hasCallPhonePermission = calls.perms.third,
+            hasAllFilesAccess = mediaBundle.hasAllFiles,
+            hasAudioReadAccess = mediaBundle.hasAudioAccess,
             hubQuickLinks = mediaBundle.links,
             hubNotifications = hw.notifications,
             shizukuState = hw.shizuku,
@@ -410,9 +507,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             writerInitialSubTab = hw.writerSubTab,
             mediaState = mediaBundle.media,
             livePositionMs = mediaBundle.livePos,
+            localAudioTracks = mediaBundle.localTracks,
+            localTrackSearchQuery = mediaBundle.localTrackSearchQuery,
+            musicDrawerTab = cust.musicDrawerTab,
             showMusicSheet = overlays.musicSheet,
             showShortcutsDialog = overlays.shortcuts,
             showAddLinkDialog = mediaBundle.addLink,
+            showAppearanceDialog = cust.showAppearanceDialog,
+            showAutoKillDialog = cust.showAutoKillDialog,
+            uiThemeColor = cust.themeColor,
+            wallpaperBitmap = cust.wallpaperBitmap,
+            wallpaperPalette = cust.wallpaperPalette,
+            hasWallpaper = cust.wallpaperBitmap != null,
+            autoKillEnabled = cust.autoKillEnabled,
+            autoKillPackages = cust.autoKillPackages,
             contextMenuApp = mediaBundle.ctxApp,
             contextMenuFile = hw.searchBundle.contextMenuFile,
             renameTargetApp = hw.searchBundle.renameTargetApp,
@@ -435,8 +543,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         refreshInstalledApps()
         refreshCallsAndContacts()
+        refreshStorageAndAudioAccess()
         mediaRepo.startObserving()
         shizukuBridge.startObserving()
+
+        viewModelScope.launch {
+            prefsRepo.wallpaperPath.collect { path ->
+                _wallpaperState.value = WallpaperThemeHelper.loadWallpaperAndPalette(path)
+            }
+        }
 
         viewModelScope.launch {
             combine(
@@ -480,11 +595,57 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         shizukuBridge.stopObserving()
     }
 
+    fun onLauncherPause() {
+        wasPausedSinceResume = true
+    }
+
     fun onResumeRefresh() {
         mediaRepo.refreshListenerStatusAndSessions()
         NotificationHubRepository.refreshFromAttachedService()
         shizukuBridge.refreshStatus()
         refreshCallsAndContacts()
+        refreshStorageAndAudioAccess()
+
+        if (wasPausedSinceResume) {
+            wasPausedSinceResume = false
+            val state = uiState.value
+            if (state.autoKillEnabled && state.autoKillPackages.isNotEmpty()) {
+                val activeAudioPkgs = state.mediaState.sessions
+                    .filter { it.isPlaying }
+                    .map { it.packageName }
+                    .toSet()
+                viewModelScope.launch {
+                    val closedCount = autoCloseManager.terminateExitedOneTimeApps(
+                        configuredPackages = state.autoKillPackages,
+                        activeMediaPackages = activeAudioPkgs
+                    )
+                    if (closedCount > 0) {
+                        val shizukuActive = state.shizukuState.isBinderAlive && state.shizukuState.isPermissionGranted
+                        if (shizukuActive) {
+                            showToast("Одноразовые приложения завершены ($closedCount)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun refreshStorageAndAudioAccess() {
+        val ctx = getApplication<Application>()
+        val allFiles = UniversalSearchRepository.hasAllFilesAccess(ctx)
+        val audioRead = UniversalSearchRepository.hasAudioReadAccess(ctx)
+        _storageAccessState.value = allFiles to audioRead
+        if (audioRead || allFiles) {
+            viewModelScope.launch {
+                mediaRepo.refreshLocalTracks()
+            }
+        }
+    }
+
+    fun openAllFilesAccessSettings() {
+        if (!UniversalSearchRepository.openAllFilesAccessSettings(getApplication())) {
+            showToast("Откройте Настройки → Приложения → KeyDeck → Разрешения")
+        }
     }
 
     fun refreshInstalledApps() {
@@ -492,6 +653,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val loaded = appsRepo.loadInstalledApps(emptySet())
             _allApps.value = loaded
             _isLoadingApps.value = false
+            val defaults = autoCloseManager.discoverDefaultOneTimePackages(loaded)
+            prefsRepo.initDefaultAutoKillPackagesIfNeeded(defaults)
         }
     }
 
@@ -794,7 +957,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val totalCount = when (state.hubSubTab) {
                     HubSubTab.CHATS -> listCount
                     HubSubTab.NEWS -> listCount + state.hubQuickLinks.count { it.category == HubSubTab.NEWS }
-                    HubSubTab.OTHER -> listCount + 7
+                    HubSubTab.OTHER -> listCount + 10
                 }
                 if (totalCount <= 0) return
                 val step = if (dy != 0) dy else dx
@@ -863,13 +1026,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                     HubSubTab.OTHER -> {
                         when (remIdx) {
-                            0 -> openDefaultLauncherSettings()
-                            1 -> openNotificationListenerSettings()
-                            2 -> setShowMusicSheet(true)
-                            3 -> setShowShortcutsDialog(true)
-                            4 -> openSystemSettings(Settings.ACTION_WIFI_SETTINGS)
-                            5 -> openSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
-                            6 -> openSystemSettings(Settings.ACTION_SETTINGS)
+                            0 -> setShowAppearanceDialog(true)
+                            1 -> setShowAutoKillDialog(true)
+                            2 -> openDefaultLauncherSettings()
+                            3 -> openNotificationListenerSettings()
+                            4 -> setShowMusicSheet(true)
+                            5 -> setShowShortcutsDialog(true)
+                            6 -> openSystemSettings(Settings.ACTION_WIFI_SETTINGS)
+                            7 -> openSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
+                            8 -> openSystemSettings(Settings.ACTION_SETTINGS)
+                            9 -> openAllFilesAccessSettings()
                         }
                     }
                     HubSubTab.CHATS -> Unit
@@ -983,6 +1149,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launchApp(app: AppEntry) {
+        autoCloseManager.recordLaunchedPackage(app.packageName)
         val ok = appsRepo.launchApp(app)
         if (!ok) {
             showToast("Не удалось открыть ${app.label}")
@@ -990,6 +1157,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launchPackage(packageName: String) {
+        autoCloseManager.recordLaunchedPackage(packageName)
         appsRepo.launchPackage(packageName)
     }
 
@@ -1124,6 +1292,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launchCamera() {
+        uiState.value.allApps
+            .filter { AutoCloseManager.isHeuristicOneTimeApp(it.packageName, it.originalLabel) }
+            .forEach { autoCloseManager.recordLaunchedPackage(it.packageName) }
         val ok = appsRepo.launchCamera()
         if (!ok) {
             showToast("Камера не найдена на устройстве")
@@ -1148,6 +1319,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun placeCall(numberOrQuery: String) {
+        uiState.value.allApps
+            .filter { AutoCloseManager.isDialerPackage(it.packageName) }
+            .forEach { autoCloseManager.recordLaunchedPackage(it.packageName) }
         val trimmed = numberOrQuery.trim()
         if (trimmed.isEmpty()) {
             val topLog = uiState.value.callLogs.firstOrNull()
@@ -1269,10 +1443,129 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun toggleMute() = mediaRepo.toggleMute()
     fun openNotificationListenerSettings() = mediaRepo.openNotificationListenerSettings()
 
+    fun updateLocalTrackSearchQuery(query: String) {
+        _localTrackSearchQuery.value = query
+        mediaRepo.searchConnectedMediaBrowser(query)
+    }
+
+    fun selectMusicDrawerTab(tab: MusicDrawerTab) {
+        _musicDrawerTab.value = tab
+    }
+
+    fun skipToQueueItem(queueId: Long) {
+        mediaRepo.skipToQueueItem(queueId)
+    }
+
+    fun invokeMediaCustomAction(action: String) {
+        mediaRepo.invokeCustomAction(action)
+    }
+
+    fun playBrowserTrack(track: MediaBrowserTrack) {
+        if (!mediaRepo.playBrowserTrack(track)) {
+            showToast("Не удалось запустить «${track.title}»")
+        }
+    }
+
+    fun searchAndPlayInActiveStream(query: String, packageName: String? = null) {
+        val targetQuery = query.trim()
+        if (targetQuery.isEmpty()) return
+        if (mediaRepo.playFromSearchInStream(targetQuery, packageName)) {
+            showToast("Поиск в стриминге: «$targetQuery»")
+        } else {
+            mediaRepo.searchConnectedMediaBrowser(targetQuery)
+            showToast("Откройте медиасессию плеера или выберите сервис ниже")
+        }
+    }
+
+    fun connectBrowserForPackage(packageName: String?) {
+        mediaRepo.connectMediaBrowserForActiveOrPackage(packageName)
+    }
+
+    fun playLocalAudioTrack(track: LocalAudioTrack) {
+        mediaRepo.playLocalTrack(track)
+        showToast("Воспроизведение: ${track.title}")
+    }
+
+    fun refreshLocalAudioTracks() {
+        viewModelScope.launch {
+            mediaRepo.refreshLocalTracks()
+            mediaRepo.connectMediaBrowserForActiveOrPackage(
+                mediaRepo.mediaState.value.activeSession?.packageName
+            )
+        }
+    }
+
+    fun toggleMusicDrawer() {
+        setShowMusicSheet(!_showMusicSheet.value)
+    }
+
     fun setShowMusicSheet(show: Boolean) {
         _showMusicSheet.value = show
         if (show) {
             mediaRepo.refreshListenerStatusAndSessions()
+            refreshStorageAndAudioAccess()
+        }
+    }
+
+    // Appearance, Wallpaper & Vista Theme
+    fun setShowAppearanceDialog(show: Boolean) {
+        _showAppearanceDialog.value = show
+    }
+
+    fun setUiThemeColor(color: UiThemeColor) {
+        viewModelScope.launch {
+            prefsRepo.setUiThemeColor(color)
+            showToast("Цвет интерфейса: ${color.title}")
+        }
+    }
+
+    fun setWallpaperFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val res = WallpaperThemeHelper.importWallpaperFromUri(getApplication(), uri)
+            res.onSuccess { path ->
+                prefsRepo.setWallpaperPath(path)
+                _wallpaperState.value = WallpaperThemeHelper.loadWallpaperAndPalette(path)
+                showToast("Обои применены • Включён стеклянный режим Aero")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось установить обои")
+            }
+        }
+    }
+
+    fun clearWallpaper() {
+        viewModelScope.launch {
+            val oldPath = prefsRepo.wallpaperPath.first()
+            prefsRepo.setWallpaperPath(null)
+            WallpaperThemeHelper.deleteWallpaperFile(oldPath)
+            _wallpaperState.value = null to null
+            showToast("Обои убраны • Классический непрозрачный вид")
+        }
+    }
+
+    // One-Time Auto-Close Apps Settings
+    fun setShowAutoKillDialog(show: Boolean) {
+        _showAutoKillDialog.value = show
+    }
+
+    fun toggleAutoKillEnabled() {
+        val next = !uiState.value.autoKillEnabled
+        viewModelScope.launch {
+            prefsRepo.setAutoKillEnabled(next)
+            showToast(
+                if (next) "Автозавершение одноразовых приложений включено"
+                else "Автозавершение одноразовых приложений выключено"
+            )
+        }
+    }
+
+    fun toggleAutoKillPackage(packageName: String) {
+        viewModelScope.launch {
+            val existed = uiState.value.autoKillPackages.contains(packageName)
+            prefsRepo.toggleAutoKillPackage(packageName)
+            showToast(
+                if (existed) "Убрано из автозавершения"
+                else "Добавлено в одноразовые (будет закрываться при выходе)"
+            )
         }
     }
 

@@ -11,7 +11,9 @@ import com.example.model.AppIconMode
 import com.example.model.AppIconOverride
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
+import com.example.model.UiThemeColor
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 
@@ -29,6 +31,11 @@ class LauncherPreferencesRepository(private val context: Context) {
         val SEARCH_TREE_URIS = stringSetPreferencesKey("universal_search_tree_uris")
         val CUSTOM_APP_LABELS = stringSetPreferencesKey("custom_app_labels")
         val APP_ICON_OVERRIDES = stringSetPreferencesKey("app_icon_overrides")
+        val UI_THEME_COLOR = stringPreferencesKey("ui_theme_color")
+        val WALLPAPER_PATH = stringPreferencesKey("wallpaper_path")
+        val AUTO_KILL_ENABLED = booleanPreferencesKey("auto_kill_enabled")
+        val AUTO_KILL_PACKAGES = stringSetPreferencesKey("auto_kill_packages")
+        val AUTO_KILL_INITIALIZED = booleanPreferencesKey("auto_kill_initialized")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -110,6 +117,27 @@ class LauncherPreferencesRepository(private val context: Context) {
             }.sortedBy { it.title.lowercase() }
         }
         .onStart { emit(emptyList()) }
+
+    val uiThemeColor: Flow<UiThemeColor> = context.launcherDataStore.data
+        .map { prefs ->
+            when (prefs[Keys.UI_THEME_COLOR]) {
+                UiThemeColor.GRAY.name -> UiThemeColor.GRAY
+                else -> UiThemeColor.BLUE
+            }
+        }
+        .onStart { emit(UiThemeColor.BLUE) }
+
+    val wallpaperPath: Flow<String?> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.WALLPAPER_PATH]?.takeIf { it.isNotBlank() } }
+        .onStart { emit(null) }
+
+    val autoKillEnabled: Flow<Boolean> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.AUTO_KILL_ENABLED] ?: true }
+        .onStart { emit(true) }
+
+    val autoKillPackages: Flow<Set<String>> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.AUTO_KILL_PACKAGES] ?: emptySet() }
+        .onStart { emit(emptySet()) }
 
     suspend fun togglePinApp(appId: String) {
         context.launcherDataStore.edit { prefs ->
@@ -206,6 +234,68 @@ class LauncherPreferencesRepository(private val context: Context) {
             val current = prefs[Keys.HUB_LINKS]?.toMutableSet() ?: mutableSetOf()
             current.removeAll { it.startsWith("$id||") }
             prefs[Keys.HUB_LINKS] = current
+        }
+    }
+
+    suspend fun setUiThemeColor(color: UiThemeColor) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.UI_THEME_COLOR] = color.name
+        }
+    }
+
+    suspend fun setWallpaperPath(path: String?) {
+        context.launcherDataStore.edit { prefs ->
+            if (path.isNullOrBlank()) {
+                prefs.remove(Keys.WALLPAPER_PATH)
+            } else {
+                prefs[Keys.WALLPAPER_PATH] = path
+            }
+        }
+    }
+
+    suspend fun setAutoKillEnabled(enabled: Boolean) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.AUTO_KILL_ENABLED] = enabled
+        }
+    }
+
+    suspend fun initDefaultAutoKillPackagesIfNeeded(defaults: Set<String>) {
+        context.launcherDataStore.edit { prefs ->
+            if (prefs[Keys.AUTO_KILL_INITIALIZED] != true) {
+                prefs[Keys.AUTO_KILL_INITIALIZED] = true
+                if (defaults.isNotEmpty()) {
+                    prefs[Keys.AUTO_KILL_PACKAGES] = defaults
+                }
+            }
+        }
+    }
+
+    suspend fun toggleAutoKillPackage(packageName: String) {
+        context.launcherDataStore.edit { prefs ->
+            val current = prefs[Keys.AUTO_KILL_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            if (!current.add(packageName)) {
+                current.remove(packageName)
+            }
+            prefs[Keys.AUTO_KILL_INITIALIZED] = true
+            prefs[Keys.AUTO_KILL_PACKAGES] = current
+        }
+    }
+
+    suspend fun addAutoKillPackage(packageName: String) {
+        context.launcherDataStore.edit { prefs ->
+            val current = prefs[Keys.AUTO_KILL_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            current.add(packageName)
+            prefs[Keys.AUTO_KILL_INITIALIZED] = true
+            prefs[Keys.AUTO_KILL_PACKAGES] = current
+        }
+    }
+
+    suspend fun removeAutoKillPackage(packageName: String) {
+        context.launcherDataStore.edit { prefs ->
+            val current = prefs[Keys.AUTO_KILL_PACKAGES]?.toMutableSet() ?: mutableSetOf()
+            current.remove(packageName)
+            prefs[Keys.AUTO_KILL_INITIALIZED] = true
+            prefs[Keys.AUTO_KILL_PACKAGES] = current
         }
     }
 }

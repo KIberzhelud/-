@@ -1,28 +1,40 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.example.data.writer.BookEntity
 import com.example.ui.theme.CallMissedRed
-import com.example.ui.theme.NavySurfaceElevated
+import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.FocusBorderCyan
+import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
+import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 
 @Composable
 fun CreateBookDialog(
@@ -33,53 +45,66 @@ fun CreateBookDialog(
     var author by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf("") }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = NavySurfaceElevated,
-        title = { Text("Новая книга", color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .symbianMetallicBar()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "НОВАЯ КНИГА",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = FocusBorderCyan
+                )
+            }
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                VistaLabeledInput(
+                    label = "Название книги",
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Название книги") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("create_book_title_input")
+                    placeholder = "Например, Старый город",
+                    inputModifier = Modifier.testTag("create_book_title_input")
                 )
-                OutlinedTextField(
+                VistaLabeledInput(
+                    label = "Автор (необязательно)",
                     value = author,
                     onValueChange = { author = it },
-                    label = { Text("Автор (необязательно)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = "Имя автора"
                 )
-                OutlinedTextField(
+                VistaLabeledInput(
+                    label = "Жанр / заметка",
                     value = genre,
                     onValueChange = { genre = it },
-                    label = { Text("Жанр / заметка") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = "Фантастика, заметки…"
                 )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onCreate(title, author, genre) },
-                enabled = title.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure),
-                modifier = Modifier.testTag("create_book_confirm")
-            ) {
-                Text("Создать")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена", color = TextSecondary)
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    VistaButton(text = "Отмена", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Создать",
+                        isPrimary = true,
+                        enabled = title.isNotBlank(),
+                        onClick = { onCreate(title, author, genre) },
+                        modifier = Modifier.testTag("create_book_confirm")
+                    )
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -93,53 +118,67 @@ fun EditBookMetaDialog(
     var author by remember(book.id) { mutableStateOf(book.author) }
     var genre by remember(book.id) { mutableStateOf(book.genre) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = NavySurfaceElevated,
-        title = { Text("Параметры книги", color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .symbianMetallicBar()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ПАРАМЕТРЫ КНИГИ",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = FocusBorderCyan
+                )
+            }
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                VistaLabeledInput(
+                    label = "Название книги",
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Название книги") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = "Название"
                 )
-                OutlinedTextField(
+                VistaLabeledInput(
+                    label = "Автор",
                     value = author,
                     onValueChange = { author = it },
-                    label = { Text("Автор") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = "Автор"
                 )
-                OutlinedTextField(
+                VistaLabeledInput(
+                    label = "Жанр",
                     value = genre,
                     onValueChange = { genre = it },
-                    label = { Text("Жанр") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    placeholder = "Жанр"
                 )
-                TextButton(onClick = onDeleteBook) {
-                    Text("Удалить книгу и все главы", color = CallMissedRed)
+                VistaButton(
+                    text = "Удалить книгу и главы",
+                    onClick = onDeleteBook
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    VistaButton(text = "Отмена", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Сохранить",
+                        isPrimary = true,
+                        enabled = title.isNotBlank(),
+                        onClick = { onSave(title, author, genre) }
+                    )
                 }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSave(title, author, genre) },
-                enabled = title.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure)
-            ) {
-                Text("Сохранить")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена", color = TextSecondary)
-            }
         }
-    )
+    }
 }
 
 @Composable
@@ -150,35 +189,83 @@ fun AddChapterDialog(
 ) {
     var title by remember { mutableStateOf("Глава $suggestedNumber") }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = NavySurfaceElevated,
-        title = { Text("Новая глава", color = TextPrimary) },
-        text = {
-            OutlinedTextField(
-                value = title,
-                onValueChange = { title = it },
-                label = { Text("Заголовок главы") },
-                singleLine = true,
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
+        ) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("add_chapter_title_input")
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { onCreate(title) },
-                enabled = title.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure),
-                modifier = Modifier.testTag("add_chapter_confirm")
+                    .symbianMetallicBar()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Добавить")
+                Text(
+                    text = "НОВАЯ ГЛАВА",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = FocusBorderCyan
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена", color = TextSecondary)
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                VistaLabeledInput(
+                    label = "Заголовок главы",
+                    value = title,
+                    onValueChange = { title = it },
+                    placeholder = "Глава 1",
+                    inputModifier = Modifier.testTag("add_chapter_title_input")
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    VistaButton(text = "Отмена", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Добавить",
+                        isPrimary = true,
+                        enabled = title.isNotBlank(),
+                        onClick = { onCreate(title) },
+                        modifier = Modifier.testTag("add_chapter_confirm")
+                    )
+                }
             }
         }
-    )
+    }
+}
+
+@Composable
+private fun VistaLabeledInput(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    inputModifier: Modifier = Modifier
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaInsetBox()
+                .padding(horizontal = 9.dp, vertical = 8.dp)
+        ) {
+            if (value.isEmpty()) {
+                Text(placeholder, style = MaterialTheme.typography.bodySmall, color = TextMuted)
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                cursorBrush = SolidColor(ElectricCyan),
+                modifier = inputModifier.fillMaxWidth()
+            )
+        }
+    }
 }

@@ -5,30 +5,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.unit.dp
-
-private val KeyDeckDarkColorScheme = darkColorScheme(
-    primary = TileBrightAzure,
-    onPrimary = TextPrimary,
-    primaryContainer = TileDeepCobalt,
-    onPrimaryContainer = TextPrimary,
-    secondary = ElectricCyan,
-    onSecondary = NavyBackground,
-    secondaryContainer = NavySurfaceElevated,
-    onSecondaryContainer = TextPrimary,
-    tertiary = MusicSourceAmber,
-    onTertiary = NavyBackground,
-    background = NavyBackground,
-    onBackground = TextPrimary,
-    surface = NavySurface,
-    onSurface = TextPrimary,
-    surfaceVariant = NavySurfaceElevated,
-    onSurfaceVariant = TextSecondary,
-    outline = NavyDivider,
-    outlineVariant = NavyDivider,
-    error = CallMissedRed,
-    onError = NavyBackground
-)
 
 private val KeyDeckShapes = Shapes(
     extraSmall = RoundedCornerShape(2.dp),
@@ -40,12 +18,38 @@ private val KeyDeckShapes = Shapes(
 
 @Composable
 fun KeyDeckTheme(
+    vistaTokens: VistaThemeTokens = BlueVistaTokens,
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = KeyDeckDarkColorScheme,
-        typography = KeyDeckTypography,
-        shapes = KeyDeckShapes,
-        content = content
+    val colorScheme = darkColorScheme(
+        primary = vistaTokens.primaryButtonUpperMid,
+        onPrimary = TextPrimary,
+        primaryContainer = vistaTokens.activeButtonLowerMid,
+        onPrimaryContainer = TextPrimary,
+        secondary = vistaTokens.accent,
+        onSecondary = vistaTokens.background,
+        secondaryContainer = vistaTokens.surfaceElevated,
+        onSecondaryContainer = TextPrimary,
+        tertiary = MusicSourceAmber,
+        onTertiary = vistaTokens.background,
+        background = vistaTokens.background,
+        onBackground = TextPrimary,
+        surface = vistaTokens.surface,
+        onSurface = TextPrimary,
+        surfaceVariant = vistaTokens.surfaceElevated,
+        onSurfaceVariant = TextSecondary,
+        outline = vistaTokens.divider,
+        outlineVariant = vistaTokens.divider,
+        error = CallMissedRed,
+        onError = vistaTokens.background
     )
+
+    CompositionLocalProvider(LocalVistaTheme provides vistaTokens) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = KeyDeckTypography,
+            shapes = KeyDeckShapes,
+            content = content
+        )
+    }
 }

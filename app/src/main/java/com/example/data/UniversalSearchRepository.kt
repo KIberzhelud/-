@@ -1,18 +1,23 @@
 package com.example.data
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.Settings
 import android.webkit.MimeTypeMap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.model.DeviceSearchFile
 import com.example.model.SearchResultKind
@@ -37,20 +42,25 @@ class UniversalSearchRepository(
         // 1. KeyDeck local exported/workspace files
         searchLocalDirs(trimmed, results)
 
-        // 2. SAF user-connected folders (0-permission DocumentTree)
+        // 2. Full /sdcard filesystem scan when All Files Access (MANAGE_EXTERNAL_STORAGE) is granted
+        if (hasAllFilesAccess(context)) {
+            searchExternalStorageRecursive(trimmed, results)
+        }
+
+        // 3. SAF user-connected folders (0-permission DocumentTree)
         treeUris.forEach { treeUriStr ->
             runCatching {
                 searchDocumentTree(Uri.parse(treeUriStr), trimmed, results)
             }
         }
 
-        // 3. MediaStore scoped queries (works safely without crashing on scoped storage)
+        // 4. MediaStore scoped queries (works safely without crashing on scoped storage)
         queryMediaStoreImages(trimmed, results)
         queryMediaStoreFiles(trimmed, results)
 
-        // 4. Privileged Shizuku /sdcard search fallback when Shizuku is granted
+        // 5. Privileged Shizuku /sdcard search fallback when Shizuku is granted
         val shizukuStatus = shizukuBridge.statusState.value
-        if (shizukuStatus.isBinderAlive && shizukuStatus.isPermissionGranted && results.size < 40) {
+        if (shizukuStatus.isBinderAlive && shizukuStatus.isPermissionGranted && results.size < 45) {
             searchViaShizuku(trimmed, results)
         }
 
@@ -60,7 +70,71 @@ class UniversalSearchRepository(
                     .thenBy { it.kind }
                     .thenByDescending { it.modifiedMs }
             )
-            .take(60)
+            .take(70)
+    }
+
+    private fun searchExternalStorageRecursive(
+        query: String,
+        out: MutableMap<String, DeviceSearchFile>
+    ) {
+        val root = runCatching { Environment.getExternalStorageDirectory() }.getOrNull() ?: return
+        if (!root.exists() || !root.canRead()) return
+
+        val queue = ArrayDeque<File>()
+        queue.add(root)
+
+        var visitedDirs = 0
+        val maxDirs = 260
+        val maxMatches = 50
+
+        while (queue.isNotEmpty() && visitedDirs < maxDirs && out.size < maxMatches) {
+            val dir = queue.removeFirst()
+            visitedDirs++
+
+            val children = runCatching { dir.listFiles() }.getOrNull() ?: continue
+            for (child in children) {
+                if (out.size >= maxMatches) break
+                val name = child.name
+                if (name.startsWith(".")) continue
+
+                if (child.isDirectory) {
+                    val lower = name.lowercase()
+                    val parentLower = child.parentFile?.name?.lowercase()
+                    if (parentLower == "android" && (lower == "data" || lower == "obb")) {
+                        continue
+                    }
+                    queue.add(child)
+                } else if (child.isFile && matchesQuery(name, query)) {
+                    val path = child.absolutePath
+                    if (out.containsKey(path)) continue
+                    val mime = guessMimeType(name)
+                    val kind = classifyKind(mime, name)
+                    val shareUri = runCatching {
+                        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", child)
+                    }.getOrNull() ?: Uri.fromFile(child)
+                    val thumb = if (kind == SearchResultKind.IMAGE && child.canRead()) {
+                        decodeFileThumbnail(child)
+                    } else null
+
+                    out.putIfAbsent(
+                        path,
+                        DeviceSearchFile(
+                            id = "fs:$path",
+                            name = name,
+                            displayPath = path,
+                            parentPath = child.parent ?: root.absolutePath,
+                            uriString = shareUri.toString(),
+                            localFilePath = path,
+                            mimeType = mime,
+                            sizeBytes = child.length(),
+                            modifiedMs = child.lastModified(),
+                            kind = kind,
+                            thumbnail = thumb
+                        )
+                    )
+                }
+            }
+        }
     }
 
     private fun searchLocalDirs(
@@ -543,6 +617,57 @@ class UniversalSearchRepository(
     }
 
     companion object {
+        fun hasAllFilesAccess(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)
+            } else {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+
+        fun hasAudioReadAccess(context: Context): Boolean {
+            if (hasAllFilesAccess(context)) return true
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_MEDIA_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+
+        fun openAllFilesAccessSettings(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val appIntent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val launchedApp = runCatching {
+                    context.startActivity(appIntent)
+                    true
+                }.getOrDefault(false)
+                if (launchedApp) return true
+
+                val generalIntent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                return runCatching {
+                    context.startActivity(generalIntent)
+                    true
+                }.getOrDefault(false)
+            }
+            return false
+        }
+
         fun formatSize(bytes: Long): String {
             if (bytes <= 0L) return ""
             return when {

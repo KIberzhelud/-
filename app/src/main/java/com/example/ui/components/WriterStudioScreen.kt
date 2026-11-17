@@ -92,6 +92,9 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TileBrightAzure
 import com.example.ui.theme.TileDeepCobalt
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 import com.example.viewmodel.WriterUiState
 import com.example.viewmodel.WriterViewModel
 import kotlinx.coroutines.delay
@@ -151,9 +154,7 @@ fun WriterStudioScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(NavySurfaceElevated)
-                        .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+                        .vistaAeroButton()
                         .clickable(onClick = onClose)
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("writer_close_button")
@@ -198,9 +199,7 @@ fun WriterStudioScreen(
                     val activeBook = state.activeBook!!
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(TileBrightAzure)
-                            .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .vistaAeroButton(isPrimary = true)
                             .clickable {
                                 val fileName = "${DocxExporter.sanitizeFilename(activeBook.title)}.docx"
                                 saveDocxLauncher.launch(fileName)
@@ -218,7 +217,7 @@ fun WriterStudioScreen(
                             Text(
                                 text = ".DOCX",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = TextPrimary
+                                color = Color.White
                             )
                         }
                     }
@@ -227,9 +226,7 @@ fun WriterStudioScreen(
 
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(NavySurfaceElevated)
-                            .border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                            .vistaAeroButton()
                             .clickable {
                                 writerViewModel.prepareShareDocx { uri, fileName ->
                                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -256,9 +253,7 @@ fun WriterStudioScreen(
                 } else if (state.subTab == WriterSubTab.NOTES && state.filteredNotes.isNotEmpty()) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(TileBrightAzure)
-                            .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
+                            .vistaAeroButton(isPrimary = true)
                             .clickable {
                                 saveNotesLauncher.launch("KeyDeck_Заметки.txt")
                             }
@@ -275,7 +270,7 @@ fun WriterStudioScreen(
                             Text(
                                 text = ".TXT",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = TextPrimary
+                                color = Color.White
                             )
                         }
                     }
@@ -284,9 +279,7 @@ fun WriterStudioScreen(
 
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(NavySurfaceElevated)
-                            .border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                            .vistaAeroButton()
                             .clickable {
                                 writerViewModel.prepareShareNotes { uri, fileName ->
                                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -430,17 +423,15 @@ private fun BooksWorkspace(
         ) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(TileDeepCobalt)
-                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+                    .vistaAeroButton(isPrimary = true)
                     .clickable(onClick = onOpenCreateBook)
                     .padding(horizontal = 9.dp, vertical = 5.dp)
                     .testTag("writer_new_book_button")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(3.dp))
-                    Text("Книга", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    Text("Книга", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
                 }
             }
 
@@ -511,13 +502,12 @@ private fun BooksWorkspace(
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(14.dp))
-                    Button(
+                    VistaButton(
+                        text = "Создать первую книгу",
+                        isPrimary = true,
                         onClick = onOpenCreateBook,
-                        colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure),
                         modifier = Modifier.testTag("writer_create_first_book")
-                    ) {
-                        Text("Создать первую книгу")
-                    }
+                    )
                 }
             }
             return
@@ -718,9 +708,7 @@ private fun BookPlanPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(NavySurface)
-                .border(1.dp, NavyDivider, RoundedCornerShape(6.dp))
+                .vistaInsetBox()
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp)
         ) {
@@ -957,9 +945,7 @@ private fun ChapterTextEditorPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(NavySurface)
-                .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                .vistaInsetBox()
                 .verticalScroll(rememberScrollState())
                 .padding(14.dp)
         ) {
@@ -997,13 +983,7 @@ private fun WriterModeTabChip(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(if (selected) TileBrightAzure.copy(alpha = 0.35f) else Color.Transparent)
-            .border(
-                1.dp,
-                if (selected) ElectricCyan else NavyDivider,
-                RoundedCornerShape(4.dp)
-            )
+            .vistaAeroButton(isPrimary = selected, isActive = selected)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1019,7 +999,7 @@ private fun WriterModeTabChip(
             style = MaterialTheme.typography.labelMedium.copy(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
             ),
-            color = if (selected) FocusBorderCyan else TextSecondary,
+            color = if (selected) Color.White else TextSecondary,
             maxLines = 1
         )
     }
@@ -1034,13 +1014,7 @@ private fun SectionPill(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(if (selected) TileBrightAzure else NavySurface)
-            .border(
-                1.dp,
-                if (selected) ElectricCyan else NavyDivider,
-                RoundedCornerShape(4.dp)
-            )
+            .vistaAeroButton(isPrimary = selected, isActive = selected)
             .clickable(onClick = onClick)
             .padding(vertical = 6.dp),
         contentAlignment = Alignment.Center
@@ -1050,7 +1024,7 @@ private fun SectionPill(
             style = MaterialTheme.typography.labelMedium.copy(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
             ),
-            color = if (selected) TextPrimary else TextSecondary,
+            color = if (selected) Color.White else TextSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )

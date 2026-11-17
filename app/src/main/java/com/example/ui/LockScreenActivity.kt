@@ -38,8 +38,6 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,9 +82,10 @@ import com.example.ui.theme.SymbianBevelHighlight
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
 import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaWindowFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -358,17 +357,34 @@ private fun SymbianLockScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = onSkipPrevious) {
+                IconButton(
+                    onClick = onSkipPrevious,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .vistaAeroButton()
+                ) {
                     Icon(Icons.Rounded.SkipPrevious, contentDescription = "Назад", tint = TextPrimary)
                 }
-                IconButton(onClick = onTogglePlayPause) {
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = onTogglePlayPause,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .vistaAeroButton(isPrimary = true)
+                ) {
                     Icon(
                         imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (active?.isPlaying == true) "Пауза" else "Играть",
-                        tint = ElectricCyan
+                        tint = TextPrimary
                     )
                 }
-                IconButton(onClick = onSkipNext) {
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = onSkipNext,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .vistaAeroButton()
+                ) {
                     Icon(Icons.Rounded.SkipNext, contentDescription = "Вперёд", tint = TextPrimary)
                 }
             }
@@ -414,9 +430,7 @@ private fun SymbianLockScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(NavySurface.copy(alpha = 0.7f))
-                                .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
+                                .vistaWindowFrame()
                                 .padding(18.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -432,9 +446,7 @@ private fun SymbianLockScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(NavySurfaceElevated)
-                                .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
+                                .vistaWindowFrame()
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -492,15 +504,15 @@ private fun SymbianLockScreen(
                 color = MusicSourceAmber
             )
             Spacer(Modifier.height(6.dp))
-            Button(
-                onClick = onUnlock,
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure),
-                shape = RoundedCornerShape(4.dp),
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
-                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
-                    .testTag("lock_unlock_button")
+                    .vistaAeroButton(isPrimary = true)
+                    .clickable(onClick = onUnlock)
+                    .testTag("lock_unlock_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
                 Icon(
                     imageVector = Icons.Rounded.LockOpen,
@@ -527,10 +539,7 @@ private fun LockCounterChip(
 ) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(NavySurfaceElevated)
-            .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
-            .clickable(enabled = false) {}
+            .vistaWindowFrame()
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center

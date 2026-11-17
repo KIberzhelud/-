@@ -22,20 +22,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,30 +42,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.R
 import com.example.model.HubNotificationItem
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
 import com.example.model.ShizukuState
-import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
-import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
-import com.example.ui.theme.SymbianBevelHighlight
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
-import com.example.ui.theme.TileDeepCobalt
 import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 
 @Composable
 fun HubView(
@@ -95,13 +91,17 @@ fun HubView(
     onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
     onPreviewLockScreen: () -> Unit,
+    onOpenAppearanceSettings: () -> Unit,
+    onOpenAutoKillSettings: () -> Unit,
     onOpenDefaultLauncherSettings: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
+    onOpenAllFilesAccess: () -> Unit,
     onOpenMusicSheet: () -> Unit,
     onOpenShortcuts: () -> Unit,
     onOpenSystemSettings: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     val chatCount = notifications.count { it.subTab == HubSubTab.CHATS }
     val newsCount = notifications.count { it.subTab == HubSubTab.NEWS }
     val otherCount = notifications.count { it.subTab == HubSubTab.OTHER }
@@ -117,8 +117,8 @@ fun HubView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .symbianMetallicBar()
-                    .padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 HubTabItem(
                     selected = subTab == HubSubTab.CHATS,
@@ -148,26 +148,26 @@ fun HubView(
                         .testTag("hub_subtab_other")
                 )
             }
-            HorizontalDivider(color = NavyDivider, thickness = 1.dp)
+            HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
         }
 
         // Hub status & refresh bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(NavySurface.copy(alpha = 0.85f))
+                .background(theme.surface.copy(alpha = 0.92f))
                 .padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
                 text = when (subTab) {
-                    HubSubTab.CHATS -> "BLACKBERRY ХАБ • ЧАТЫ И ПОЧТА"
+                    HubSubTab.CHATS -> "BLACKBERRY ХАБ • TG/WA → ЧАТЫ → ПОЧТА/VK"
                     HubSubTab.NEWS -> "ЛЕНТА НОВОСТЕЙ И СТАТЕЙ"
-                    HubSubTab.OTHER -> "ПРОЧИЕ УВЕДОМЛЕНИЯ И SHIZUKU"
+                    HubSubTab.OTHER -> "ОФОРМЛЕНИЕ, ОДНОРАЗОВЫЕ И SHIZUKU"
                 },
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = ElectricCyan,
+                color = theme.accent,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -176,8 +176,7 @@ fun HubView(
                 if (subTab == HubSubTab.NEWS) {
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(TileBrightAzure)
+                            .vistaAeroButton(isPrimary = true)
                             .clickable(onClick = onShowAddLinkDialog)
                             .padding(horizontal = 7.dp, vertical = 4.dp)
                             .testTag("hub_add_link_button")
@@ -190,17 +189,23 @@ fun HubView(
                     }
                     Spacer(Modifier.width(6.dp))
                 }
-                IconButton(onClick = onRefreshNotifications, modifier = Modifier.size(28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .vistaAeroButton()
+                        .clickable(onClick = onRefreshNotifications),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.Refresh,
                         contentDescription = "Обновить уведомления",
-                        tint = ElectricCyan,
-                        modifier = Modifier.size(17.dp)
+                        tint = theme.accent,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
             }
         }
-        HorizontalDivider(color = NavyDivider)
+        HorizontalDivider(color = theme.divider)
 
         // Banner if Android Notification Listener access hasn't been granted yet
         if (!shizukuState.isNotificationListenerGranted) {
@@ -221,7 +226,7 @@ fun HubView(
                     HubEmptyNotificationsState(
                         iconRes = R.drawable.ic_symbian_messaging,
                         title = "Входящих сообщений нет",
-                        subtitle = "Уведомления из Telegram, WhatsApp, SMS и почты появятся здесь — можно отвечать и прикреплять файлы прямо из Хаба."
+                        subtitle = "Уведомления из Telegram, WhatsApp и мессенджеров отображаются выше почты и VK — можно отвечать прямо из Хаба."
                     )
                 } else {
                     LazyColumn(
@@ -319,13 +324,16 @@ fun HubView(
 
             HubSubTab.OTHER -> {
                 val actions = listOf(
+                    HubOtherAction("Обои, стекло и цвет темы", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
+                    HubOtherAction("Одноразовые приложения (автозакрытие)", R.drawable.ic_symbian_tools, onOpenAutoKillSettings),
                     HubOtherAction("Лаунчер по умолчанию", R.drawable.ic_symbian_home, onOpenDefaultLauncherSettings),
                     HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
                     HubOtherAction("Панель музыки (Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
                     HubOtherAction("Горячие клавиши (F1)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
                     HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
                     HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
-                    HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) }
+                    HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
+                    HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
                 )
 
                 LazyColumn(
@@ -374,7 +382,7 @@ fun HubView(
                         Text(
                             text = "ИНСТРУМЕНТЫ СИСТЕМЫ",
                             style = MaterialTheme.typography.labelSmall,
-                            color = ElectricCyan,
+                            color = theme.accent,
                             modifier = Modifier.padding(top = 4.dp, start = 4.dp)
                         )
                     }
@@ -392,9 +400,7 @@ fun HubView(
                             Box(
                                 modifier = Modifier
                                     .size(28.dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(NavySurface.copy(alpha = 0.72f))
-                                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.35f), RoundedCornerShape(4.dp)),
+                                    .vistaInsetBox(),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Image(
@@ -430,20 +436,19 @@ private fun NotificationPermissionBanner(
     onOpenSettings: () -> Unit,
     onGrantViaShizuku: () -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(TileDeepCobalt.copy(alpha = 0.6f))
-            .border(1.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(6.dp))
+            .vistaWindowFrame(RoundedCornerShape(4.dp))
             .padding(10.dp)
             .testTag("hub_notification_permission_banner")
     ) {
         Text(
             text = "Включите доступ к уведомлениям для BlackBerry Хаба",
             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-            color = TextPrimary
+            color = theme.focusBorder
         )
         Spacer(Modifier.height(3.dp))
         Text(
@@ -453,30 +458,16 @@ private fun NotificationPermissionBanner(
         )
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(TileBrightAzure)
-                    .clickable(onClick = onOpenSettings)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Text("Открыть настройки", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
-            }
+            VistaButton(
+                text = "Открыть настройки",
+                isPrimary = true,
+                onClick = onOpenSettings
+            )
             if (shizukuReady) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(NavySurfaceElevated)
-                        .border(1.dp, ElectricCyan, RoundedCornerShape(4.dp))
-                        .clickable(onClick = onGrantViaShizuku)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = if (shizukuGranted) "Выдать через Shizuku" else "Подключить Shizuku",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ElectricCyan
-                    )
-                }
+                VistaButton(
+                    text = if (shizukuGranted) "Выдать через Shizuku" else "Подключить Shizuku",
+                    onClick = onGrantViaShizuku
+                )
             }
         }
     }
@@ -526,38 +517,29 @@ private fun HubTabItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
+    Row(
         modifier = modifier
             .minimumInteractiveComponentSize()
-            .clickable(onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .vistaAeroButton(isPrimary = selected, isActive = selected)
+            .clickable(onClick = onClick)
+            .padding(vertical = 7.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier.padding(vertical = 7.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Image(
-                painter = painterResource(iconRes),
-                contentDescription = label,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(5.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                ),
-                color = if (selected) ElectricCyan else TextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(2.dp)
-                .background(if (selected) ElectricCyan else Color.Transparent)
+        Image(
+            painter = painterResource(iconRes),
+            contentDescription = label,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            ),
+            color = if (selected) Color.White else TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -568,45 +550,90 @@ fun AddHubLinkDialog(
     onDismiss: () -> Unit,
     onConfirm: (title: String, url: String, category: HubSubTab) -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     var title by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     val category = if (initialCategory == HubSubTab.OTHER) HubSubTab.NEWS else initialCategory
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = NavySurfaceElevated,
-        title = { Text("Добавить источник (${category.title})", color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Название") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("URL (например, habr.com)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(title, url, category) },
-                enabled = title.isNotBlank() && url.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure)
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .symbianMetallicBar()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Сохранить")
+                Text(
+                    text = "Добавить источник (${category.title})",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = theme.focusBorder
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Отмена", color = TextSecondary)
+
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Название", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(horizontal = 9.dp, vertical = 8.dp)
+                ) {
+                    if (title.isEmpty()) {
+                        Text("Например, Habr", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                    }
+                    BasicTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                        cursorBrush = SolidColor(theme.accent),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Text("URL", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(horizontal = 9.dp, vertical = 8.dp)
+                ) {
+                    if (url.isEmpty()) {
+                        Text("habr.com", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                    }
+                    BasicTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                        cursorBrush = SolidColor(theme.accent),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    VistaButton(text = "Отмена", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Сохранить",
+                        isPrimary = true,
+                        enabled = title.isNotBlank() && url.isNotBlank(),
+                        onClick = { onConfirm(title, url, category) }
+                    )
+                }
             }
         }
-    )
+    }
 }

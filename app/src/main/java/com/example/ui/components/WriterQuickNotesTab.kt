@@ -67,6 +67,9 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TileBrightAzure
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -99,57 +102,59 @@ fun WriterQuickNotesTab(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Filter & Search bar
+        // Vista inset Filter & Search bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(NavySurface.copy(alpha = 0.85f))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .background(NavySurface.copy(alpha = 0.9f))
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Search,
-                contentDescription = "Поиск заметок",
-                tint = TextMuted,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(6.dp))
-            Box(modifier = Modifier.weight(1f)) {
-                if (searchQuery.isEmpty()) {
-                    Text(
-                        text = "Поиск по заметкам и #тегам…",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .vistaInsetBox()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "Поиск заметок",
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Box(modifier = Modifier.weight(1f)) {
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = "Поиск по заметкам и #тегам…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                    }
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchChange,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                        cursorBrush = SolidColor(ElectricCyan),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("notes_search_input")
                     )
                 }
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = onSearchChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                    cursorBrush = SolidColor(ElectricCyan),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("notes_search_input")
-                )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(if (pinnedOnly) MusicSourceAmber.copy(alpha = 0.25f) else NavySurfaceElevated)
-                    .border(
-                        1.dp,
-                        if (pinnedOnly) MusicSourceAmber else NavyDivider,
-                        RoundedCornerShape(3.dp)
-                    )
+                    .vistaAeroButton(isPrimary = false, isActive = pinnedOnly)
                     .clickable(onClick = onTogglePinnedOnly)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
                     .testTag("notes_pinned_filter")
             ) {
                 Text(
                     text = if (pinnedOnly) "★ Закреплённые" else "Все (${notes.size})",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                     color = if (pinnedOnly) MusicSourceAmber else TextSecondary
                 )
             }
@@ -226,10 +231,8 @@ fun WriterQuickNotesTab(
             ) {
                 Box(
                     modifier = Modifier
-                        .width(105.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(NavySurface)
-                        .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
+                        .width(100.dp)
+                        .vistaInsetBox()
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     if (draftTag.isEmpty()) {
@@ -244,18 +247,16 @@ fun WriterQuickNotesTab(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(NavySurface)
-                        .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                        .vistaInsetBox()
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
                     if (draftText.isEmpty()) {
                         Text(
-                            text = "Быстрая заметка в избранное (Enter — отправить)…",
+                            text = "Быстрая заметка (Enter — отправить)…",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )
@@ -273,13 +274,11 @@ fun WriterQuickNotesTab(
                             .testTag("quick_note_composer_input")
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (draftText.isNotBlank()) TileBrightAzure else NavySurfaceElevated)
-                        .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .vistaAeroButton(isPrimary = draftText.isNotBlank())
                         .clickable(enabled = draftText.isNotBlank(), onClick = { submitNote() })
                         .testTag("quick_note_send_button"),
                     contentAlignment = Alignment.Center
@@ -312,12 +311,10 @@ private fun QuickNoteBubbleCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (note.isPinned) NavySurfaceElevated else NavySurface)
-            .border(
-                width = 1.dp,
-                color = if (note.isPinned) MusicSourceAmber.copy(alpha = 0.7f) else NavyDivider,
-                shape = RoundedCornerShape(6.dp)
+            .vistaWindowFrame(RoundedCornerShape(4.dp))
+            .then(
+                if (note.isPinned) Modifier.border(1.dp, MusicSourceAmber.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                else Modifier
             )
             .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {

@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.CircularProgressIndicator
@@ -45,7 +46,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -59,21 +62,16 @@ import com.example.R
 import com.example.data.UniversalSearchRepository
 import com.example.model.AppEntry
 import com.example.model.DeviceSearchFile
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.FocusBorderCyan
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
-import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
-import com.example.ui.theme.SymbianBevelHighlight
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
-import com.example.ui.theme.TileBrightAzureBottom
-import com.example.ui.theme.TileBrightAzureTop
 import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
+import com.example.ui.theme.vistaWindowFrame
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -83,6 +81,7 @@ fun AppTileGrid(
     searchFiles: List<DeviceSearchFile>,
     isSearchingDevice: Boolean,
     indexedFolderCount: Int,
+    hasAllFilesAccess: Boolean,
     columns: Int,
     searchQuery: String,
     focusedIndex: Int,
@@ -100,97 +99,109 @@ fun AppTileGrid(
     onOpenSearchFile: (DeviceSearchFile) -> Unit,
     onLongPressSearchFile: (DeviceSearchFile) -> Unit,
     onConnectSearchFolder: () -> Unit,
+    onRequestAllFilesAccess: () -> Unit,
     onSearchWeb: (query: String, engine: String) -> Unit,
     onOpenShortcuts: () -> Unit,
     onOpenWriter: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     val trimmedQuery = searchQuery.trim()
     val isUniversalMode = trimmedQuery.length >= 2
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Symbian metallic search & shortcuts strip
+        // Windows Vista / Symbian metallic search & shortcuts strip
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .symbianMetallicBar()
-                .border(width = 1.dp, color = NavyDivider)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .border(width = 1.dp, color = theme.chromeBorderOuter)
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Image(
-                painter = painterResource(R.drawable.ic_symbian_search),
-                contentDescription = "Поиск",
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable(onClick = onRequestSearchFocus),
-                contentAlignment = Alignment.CenterStart
+                    .vistaInsetBox(isFocused = isSearchFocused)
+                    .clickable(onClick = onRequestSearchFocus)
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (searchQuery.isEmpty()) {
-                    Text(
-                        text = if (highlightedLetter != null) {
-                            "Буква: $highlightedLetter • Поиск по телефону и сети…"
-                        } else {
-                            "Поиск: приложения, файлы, фото, сеть…"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (highlightedLetter != null) ElectricCyan else TextMuted,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Image(
+                    painter = painterResource(R.drawable.ic_symbian_search),
+                    contentDescription = "Поиск",
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(7.dp))
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = if (highlightedLetter != null) {
+                                "Буква: $highlightedLetter • Поиск по телефону и сети…"
+                            } else {
+                                "Поиск: приложения, файлы, фото, сеть…"
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                            color = if (highlightedLetter != null) theme.accent else TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchQueryChange,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = TextPrimary,
+                            fontSize = 12.5.sp
+                        ),
+                        cursorBrush = SolidColor(theme.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(
+                            onGo = {
+                                val firstApp = apps.firstOrNull()
+                                val firstFile = searchFiles.firstOrNull()
+                                val firstImg = searchImages.firstOrNull()
+                                when {
+                                    firstApp != null -> onLaunchApp(firstApp)
+                                    firstFile != null -> onOpenSearchFile(firstFile)
+                                    firstImg != null -> onOpenSearchFile(firstImg)
+                                    trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
+                                }
+                            }
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(searchFocusRequester)
+                            .onFocusChanged { onSearchFocusChange(it.isFocused) }
+                            .testTag("apps_search_input")
                     )
                 }
-                BasicTextField(
-                    value = searchQuery,
-                    onValueChange = onSearchQueryChange,
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                    cursorBrush = SolidColor(ElectricCyan),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(
-                        onGo = {
-                            val firstApp = apps.firstOrNull()
-                            val firstFile = searchFiles.firstOrNull()
-                            val firstImg = searchImages.firstOrNull()
-                            when {
-                                firstApp != null -> onLaunchApp(firstApp)
-                                firstFile != null -> onOpenSearchFile(firstFile)
-                                firstImg != null -> onOpenSearchFile(firstImg)
-                                trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
-                            }
-                        }
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(searchFocusRequester)
-                        .onFocusChanged { onSearchFocusChange(it.isFocused) }
-                        .testTag("apps_search_input")
-                )
             }
+
+            Spacer(Modifier.width(6.dp))
 
             if (searchQuery.isNotEmpty() || highlightedLetter != null) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(NavySurfaceElevated)
-                        .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                        .vistaAeroButton()
                         .clickable(onClick = onClearSearch)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
                         .testTag("apps_search_clear")
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
                             painter = painterResource(R.drawable.ic_symbian_clear),
                             contentDescription = "Сбросить поиск",
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
                             text = "ESC",
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = TextSecondary
                         )
                     }
@@ -198,37 +209,33 @@ fun AppTileGrid(
             } else {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(NavySurfaceElevated)
-                        .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                        .vistaAeroButton()
                         .clickable(onClick = onOpenShortcuts)
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
                         .testTag("shortcuts_help_button")
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Image(
                             painter = painterResource(R.drawable.ic_symbian_keyboard),
                             contentDescription = "Горячие клавиши",
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
                             text = "F1",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ElectricCyan
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = theme.accent
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(5.dp))
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(NavySurfaceElevated)
-                    .border(1.dp, ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                    .vistaAeroButton()
                     .clickable(onClick = onOpenWriter)
-                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                    .padding(horizontal = 7.dp, vertical = 5.dp)
                     .testTag("apps_toolbar_writer_button")
             ) {
                 Image(
@@ -241,7 +248,7 @@ fun AppTileGrid(
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = ElectricCyan)
+                CircularProgressIndicator(color = theme.accent)
             }
         } else if (!isUniversalMode && apps.isEmpty()) {
             Box(
@@ -281,6 +288,48 @@ fun AppTileGrid(
                     .fillMaxSize()
                     .testTag("apps_metro_grid")
             ) {
+                if (!hasAllFilesAccess && isUniversalMode) {
+                    item(
+                        key = "all_files_permission_banner",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .vistaWindowFrame(RoundedCornerShape(3.dp))
+                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .testTag("all_files_access_banner"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.FolderOpen,
+                                    contentDescription = null,
+                                    tint = MusicSourceAmber,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(7.dp))
+                                Text(
+                                    text = "Нужен доступ ко всем файлам для полного поиска по памяти",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextPrimary
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            VistaButton(
+                                text = "Разрешить",
+                                isPrimary = true,
+                                onClick = onRequestAllFilesAccess,
+                                modifier = Modifier.testTag("grant_all_files_access_button")
+                            )
+                        }
+                    }
+                }
+
                 if (isUniversalMode) {
                     // Universal Palm Pre "Just Type" top status + SAF folder index button
                     item(
@@ -290,9 +339,7 @@ fun AppTileGrid(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(NavySurfaceElevated.copy(alpha = 0.85f))
-                                .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
+                                .vistaWindowFrame(RoundedCornerShape(3.dp))
                                 .padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -303,13 +350,13 @@ fun AppTileGrid(
                             ) {
                                 Text(
                                     text = if (isSearchingDevice) "Поиск по устройству…" else "Универсальный поиск",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ElectricCyan
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = theme.accent
                                 )
                                 if (isSearchingDevice) {
                                     Spacer(Modifier.width(8.dp))
                                     CircularProgressIndicator(
-                                        color = ElectricCyan,
+                                        color = theme.accent,
                                         strokeWidth = 2.dp,
                                         modifier = Modifier.size(13.dp)
                                     )
@@ -317,9 +364,7 @@ fun AppTileGrid(
                             }
                             Row(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(NavySurface)
-                                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                                    .vistaAeroButton()
                                     .clickable(onClick = onConnectSearchFolder)
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                                     .testTag("universal_connect_folder_button"),
@@ -334,7 +379,7 @@ fun AppTileGrid(
                                 Spacer(Modifier.width(4.dp))
                                 Text(
                                     text = if (indexedFolderCount == 0) "+ Папка" else "Папок: $indexedFolderCount",
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                     color = TextPrimary
                                 )
                             }
@@ -475,7 +520,7 @@ private fun AppGlossyTileItem(
                     contentDescription = app.label,
                     modifier = Modifier
                         .size(34.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(3.dp))
                 )
             } else {
                 Image(
@@ -485,11 +530,19 @@ private fun AppGlossyTileItem(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            val theme = LocalVistaTheme.current
             Text(
                 text = app.label,
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    shadow = if (theme.isGlassMode) {
+                        Shadow(
+                            color = Color.Black.copy(alpha = 0.85f),
+                            offset = Offset(0f, 1.5f),
+                            blurRadius = 4f
+                        )
+                    } else null
                 ),
                 color = TextPrimary,
                 maxLines = 2,
@@ -516,6 +569,7 @@ private fun UniversalSectionHeader(
     title: String,
     iconRes: Int
 ) {
+    val theme = LocalVistaTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -531,7 +585,7 @@ private fun UniversalSectionHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            color = FocusBorderCyan
+            color = theme.focusBorder
         )
     }
 }
@@ -543,12 +597,11 @@ private fun SearchImageCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .background(NavySurfaceElevated)
-            .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+            .vistaWindowFrame(RoundedCornerShape(3.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -560,8 +613,8 @@ private fun SearchImageCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(82.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(NavySurface),
+                .vistaInsetBox()
+                .background(theme.surface),
             contentAlignment = Alignment.Center
         ) {
             if (file.thumbnail != null) {
@@ -620,9 +673,7 @@ private fun SearchFileRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .background(NavySurfaceElevated)
-            .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+            .vistaWindowFrame(RoundedCornerShape(3.dp))
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -672,22 +723,15 @@ private fun WebSearchFallbackCard(
     isProminent: Boolean,
     onSearchWeb: (String) -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 6.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(
-                if (isProminent) {
-                    Brush.verticalGradient(listOf(TileBrightAzureTop.copy(alpha = 0.35f), NavySurfaceElevated))
-                } else {
-                    Brush.verticalGradient(listOf(NavySurfaceElevated, NavySurface))
-                }
-            )
-            .border(
-                width = 1.dp,
-                color = if (isProminent) ElectricCyan.copy(alpha = 0.65f) else NavyDivider,
-                shape = RoundedCornerShape(4.dp)
+            .vistaWindowFrame(RoundedCornerShape(4.dp))
+            .then(
+                if (isProminent) Modifier.border(1.dp, theme.accent.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                else Modifier
             )
             .padding(12.dp)
     ) {
@@ -695,7 +739,7 @@ private fun WebSearchFallbackCard(
             Icon(
                 imageVector = Icons.Rounded.Public,
                 contentDescription = null,
-                tint = ElectricCyan,
+                tint = theme.accent,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(8.dp))
@@ -730,11 +774,7 @@ private fun WebEngineButton(
 ) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(3.dp))
-            .background(
-                Brush.verticalGradient(listOf(TileBrightAzureTop, TileBrightAzure, TileBrightAzureBottom))
-            )
-            .border(1.dp, ElectricCyan.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
+            .vistaAeroButton(isPrimary = true)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp)
             .testTag(tag)
@@ -742,7 +782,7 @@ private fun WebEngineButton(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-            color = FocusBorderCyan
+            color = Color.White
         )
     }
 }

@@ -57,16 +57,12 @@ import com.example.model.AlphabetMode
 import com.example.model.AppEntry
 import com.example.model.ContactEntry
 import com.example.model.MainTab
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.NavyBackground
-import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
-import com.example.ui.theme.TileDeepCobalt
+import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -88,6 +84,7 @@ fun FavoritesAndAlphabetRail(
     onCallContact: (ContactEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     val letters = remember(alphabetMode) {
         when (alphabetMode) {
             AlphabetMode.LATIN -> KeyboardSearchMatcher.latinAlphabet
@@ -102,13 +99,16 @@ fun FavoritesAndAlphabetRail(
         Row(
             modifier = Modifier
                 .fillMaxHeight()
-                .background(Color(0xFF070C13))
+                .background(
+                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.88f)
+                    else theme.background
+                )
         ) {
             Box(
                 modifier = Modifier
                     .width(1.dp)
                     .fillMaxHeight()
-                    .background(NavyDivider)
+                    .background(theme.chromeBorderOuter)
             )
 
             // Favorites Column (Apps on HOME, Starred Contacts on CALLS)
@@ -140,8 +140,7 @@ fun FavoritesAndAlphabetRail(
                                     Box(
                                         modifier = Modifier
                                             .size(34.dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(TileDeepCobalt),
+                                            .vistaInsetBox(),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Image(
@@ -219,14 +218,12 @@ fun FavoritesAndAlphabetRail(
                     .padding(vertical = 4.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // EN / RU Alphabet Toggle Pill
+                // EN / RU Alphabet Toggle Pill (Vista Aero)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 2.dp, vertical = 2.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(NavySurfaceElevated)
-                        .border(1.dp, NavyDivider, RoundedCornerShape(3.dp))
+                        .vistaAeroButton(isPrimary = false, isActive = true)
                         .clickable(onClick = onToggleAlphabetMode)
                         .padding(vertical = 3.dp)
                         .testTag("alphabet_mode_toggle"),
@@ -235,7 +232,7 @@ fun FavoritesAndAlphabetRail(
                     Text(
                         text = alphabetMode.label,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                        color = ElectricCyan,
+                        color = theme.accent,
                         maxLines = 1
                     )
                 }
@@ -305,7 +302,7 @@ fun FavoritesAndAlphabetRail(
                                     fontWeight = if (isScrubbed || isHighlighted) FontWeight.Bold else FontWeight.Medium
                                 ),
                                 color = when {
-                                    isScrubbed || isHighlighted -> ElectricCyan
+                                    isScrubbed || isHighlighted -> theme.accent
                                     hasMatches -> TextPrimary.copy(alpha = 0.85f)
                                     else -> TextMuted.copy(alpha = 0.5f)
                                 },
@@ -329,9 +326,9 @@ fun FavoritesAndAlphabetRail(
                     .align(Alignment.TopStart)
                     .offset { IntOffset(x = -120, y = yPx.coerceAtLeast(16)) }
                     .size(54.dp)
-                    .border(1.5.dp, ElectricCyan, CircleShape),
+                    .border(1.5.dp, theme.accent, CircleShape),
                 shape = CircleShape,
-                color = TileBrightAzure,
+                color = theme.primaryButtonLowerMid,
                 shadowElevation = 8.dp
             ) {
                 Box(contentAlignment = Alignment.Center) {
