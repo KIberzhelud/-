@@ -10,7 +10,80 @@ import android.os.Build
 import android.provider.MediaStore
 import com.example.model.AppEntry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.util.Collections
+import java.util.LinkedHashSet
+
+/**
+ * Shared tracker of packages visited outside KeyDeck, updated both when KeyDeck launches an app
+ * and when KeyDeckAccessibilityService observes foreground window switches (e.g. hardware camera shortcut).
+ */
+object RecentForegroundTracker {
+    private val visitedPackages = Collections.synchronizedSet(LinkedHashSet<String>())
+    private val recentHistory = Collections.synchronizedMap(LinkedHashMap<String, Long>())
+
+    @Volatile
+    var currentForegroundPackage: String? = null
+        private set
+
+    fun recordForeground(packageName: String, launcherPackage: String) {
+        if (packageName.isBlank() || packageName == launcherPackage) return
+        currentForegroundPackage = packageName
+        if (
+            packageName == "com.android.systemui" ||
+            packageName.startsWith("com.google.android.inputmethod") ||
+            packageName.contains("keyboard")
+        ) {
+            return
+        }
+        visitedPackages.add(packageName)
+        synchronized(recentHistory) {
+            recentHistory.remove(packageName)
+            recentHistory[packageName] = System.currentTimeMillis()
+            while (recentHistory.size > 18) {
+                val oldest = recentHistory.keys.firstOrNull() ?: break
+                recentHistory.remove(oldest)
+            }
+        }
+    }
+
+    fun drainVisited(): Set<String> {
+        synchronized(visitedPackages) {
+            val copy = visitedPackages.toSet()
+            visitedPackages.clear()
+            return copy
+        }
+    }
+
+    fun snapshotRecentHistory(): List<Pair<String, Long>> {
+        synchronized(recentHistory) {
+            return recentHistory.entries.map { it.key to it.value }.reversed()
+        }
+    }
+
+    fun removeFromHistory(packageName: String) {
+        synchronized(recentHistory) {
+            recentHistory.remove(packageName)
+        }
+        visitedPackages.remove(packageName)
+    }
+
+    fun clearHistoryExcept(pinned: Set<String>) {
+        synchronized(recentHistory) {
+            val it = recentHistory.keys.iterator()
+            while (it.hasNext()) {
+                if (!pinned.contains(it.next())) it.remove()
+            }
+        }
+    }
+
+    fun clearForegroundIfLauncher(launcherPackage: String) {
+        if (currentForegroundPackage != launcherPackage) {
+            currentForegroundPackage = launcherPackage
+        }
+    }
+}
 
 /**
  * Manages "one-time / transient" apps (Camera, Dialer, Calculator, Scanners, etc.):
@@ -24,19 +97,10 @@ class AutoCloseManager(
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
-    @Volatile
-    private var launchedOrVisitedPackages = mutableSetOf<String>()
-
     fun recordLaunchedPackage(packageName: String) {
-        if (packageName.isNotBlank() && packageName != context.packageName) {
-            launchedOrVisitedPackages.add(packageName)
-        }
+        RecentForegroundTracker.recordForeground(packageName, context.packageName)
     }
 
-    /**
-     * Discovers default one-time utility apps installed on the device:
-     * default Camera, default Dialer, Calculators, QR scanners, and standard OEM camera/phone packages.
-     */
     fun discoverDefaultOneTimePackages(installedApps: List<AppEntry>): Set<String> {
         val result = linkedSetOf<String>()
         val pm = context.packageManager
@@ -68,10 +132,6 @@ class AutoCloseManager(
         return result
     }
 
-    /**
-     * Filters out unsafe-to-kill states (e.g., do NOT kill Dialer while user is actively in a phone call,
-     * and do NOT kill a package actively playing media unless excluded).
-     */
     fun resolvePackagesToTerminate(
         configuredPackages: Set<String>,
         activeMediaPackages: Set<String>
@@ -97,30 +157,39 @@ class AutoCloseManager(
         configuredPackages: Set<String>,
         activeMediaPackages: Set<String>
     ): Int = withContext(Dispatchers.IO) {
-        val targets = resolvePackagesToTerminate(configuredPackages, activeMediaPackages)
-        if (targets.isEmpty()) return@withContext 0
-
-        // Prioritize packages recently launched/visited plus any configured package still lingering in memory
-        val runningPkgs = runCatching {
-            @Suppress("DEPRECATION")
-            activityManager?.runningAppProcesses?.mapNotNull { it.processName?.substringBefore(':') }?.toSet()
-        }.getOrNull().orEmpty()
-
-        val toKill = targets.filter { pkg ->
-            launchedOrVisitedPackages.contains(pkg) ||
-                runningPkgs.isEmpty() ||
-                runningPkgs.contains(pkg)
+        val safeTargets = resolvePackagesToTerminate(configuredPackages, activeMediaPackages)
+        if (safeTargets.isEmpty()) {
+            RecentForegroundTracker.drainVisited()
+            return@withContext 0
         }
-        launchedOrVisitedPackages.clear()
 
+        // Brief settle delay so exiting activity finishes moving to background before force-stop / kill
+        delay(260L)
+
+        val visited = RecentForegroundTracker.drainVisited()
+        val visitedTargets = safeTargets.filter { visited.contains(it) }.toMutableSet()
+
+        val shizuku = shizukuBridge.statusState.value
+        val privilegedActive = (shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable
+
+        if (privilegedActive) {
+            // Also detect any configured one-time app opened outside KeyDeck (e.g. power-button Camera)
+            val aliveOneTime = shizukuBridge.findRunningPackagesViaShizuku(safeTargets)
+            visitedTargets.addAll(aliveOneTime)
+        } else {
+            // Without Shizuku/Root, Android hides other apps from runningAppProcesses, so kill all safe targets
+            // if user had paused KeyDeck or visited any target.
+            visitedTargets.addAll(safeTargets)
+        }
+
+        val toKill = visitedTargets.toList()
         if (toKill.isEmpty()) return@withContext 0
 
         toKill.forEach { pkg ->
             runCatching { activityManager?.killBackgroundProcesses(pkg) }
         }
 
-        val shizuku = shizukuBridge.statusState.value
-        if (shizuku.isBinderAlive && shizuku.isPermissionGranted) {
+        if (privilegedActive) {
             shizukuBridge.forceStopPackagesViaShizuku(toKill)
         }
         toKill.size

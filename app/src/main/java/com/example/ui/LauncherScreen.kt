@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -16,6 +17,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -54,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -66,15 +70,20 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
+import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.CallsSubTab
 import com.example.model.MainTab
 import com.example.ui.components.AddHubLinkDialog
+import com.example.ui.components.AndroidOptimizationAndSpoofDialog
+import com.example.ui.components.AppAdaptationSettingsDialog
 import com.example.ui.components.AppContextDialog
 import com.example.ui.components.AppIconPickerDialog
 import com.example.ui.components.AppTileGrid
 import com.example.ui.components.AppearanceSettingsDialog
 import com.example.ui.components.AutoKillSettingsDialog
+import com.example.ui.components.BackgroundWebAudioDialog
+import com.example.ui.components.Bb10RecentsOverlay
 import com.example.ui.components.CallsContactsView
 import com.example.ui.components.FavoritesAndAlphabetRail
 import com.example.ui.components.FileContextDialog
@@ -225,6 +234,9 @@ fun LauncherScreen(
         showAllFilesPromptDialog ||
         state.showAppearanceDialog ||
         state.showAutoKillDialog ||
+        state.showOptimizationDialog ||
+        state.showAdaptationDialog ||
+        state.showBackgroundWebAudioDialog ||
         state.showShortcutsDialog ||
         state.showAddLinkDialog ||
         state.contextMenuApp != null ||
@@ -233,6 +245,7 @@ fun LauncherScreen(
         state.iconPickerTargetApp != null
 
     val shouldHandleBack = hasAnyModalOpen ||
+        state.showRecentsOverlay ||
         state.isWriterModeOpen ||
         state.appSearchQuery.isNotEmpty() ||
         state.callsSearchQuery.isNotEmpty() ||
@@ -242,6 +255,10 @@ fun LauncherScreen(
     BackHandler(enabled = shouldHandleBack) {
         when {
             showAllFilesPromptDialog -> showAllFilesPromptDialog = false
+            state.showRecentsOverlay -> viewModel.closeRecentsOverlay()
+            state.showBackgroundWebAudioDialog -> viewModel.setShowBackgroundWebAudioDialog(false)
+            state.showAdaptationDialog -> viewModel.setShowAdaptationDialog(false)
+            state.showOptimizationDialog -> viewModel.setShowOptimizationDialog(false)
             state.showAppearanceDialog -> viewModel.setShowAppearanceDialog(false)
             state.showAutoKillDialog -> viewModel.setShowAutoKillDialog(false)
             state.showMusicSheet -> viewModel.setShowMusicSheet(false)
@@ -261,11 +278,25 @@ fun LauncherScreen(
     }
 
     val theme = LocalVistaTheme.current
+    val lang = LocalAppLang.current
+    val desktopScale by animateFloatAsState(
+        targetValue = if (state.showRecentsOverlay) 0.86f else 1.0f,
+        label = "recents_desktop_scale"
+    )
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(theme.background)
+            .pointerInput(state.showRecentsOverlay, state.isWriterModeOpen, hasAnyModalOpen) {
+                if (!state.showRecentsOverlay && !state.isWriterModeOpen && !hasAnyModalOpen) {
+                    detectTransformGestures { _, _, zoom, _ ->
+                        if (zoom < 0.85f) {
+                            viewModel.openRecentsOverlay()
+                        }
+                    }
+                }
+            }
     ) {
         state.wallpaperBitmap?.let { wallBmp ->
             Image(
@@ -301,12 +332,17 @@ fun LauncherScreen(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = desktopScale
+                        scaleY = desktopScale
+                    }
                     .windowInsetsPadding(WindowInsets.safeDrawing)
             ) {
                 LandscapeSymbianSidebar(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
                     isDrawerOpen = state.showMusicSheet,
+                    coverStyle = state.playerCoverStyle,
                     activeTab = state.activeTab,
                     callsSubTab = state.callsSubTab,
                     hubSubTab = state.hubSubTab,
@@ -343,10 +379,19 @@ fun LauncherScreen(
                         hasAllFilesAccess = state.hasAllFilesAccess,
                         musicApps = state.musicApps,
                         isLandscape = true,
+                        backgroundSpoofEnabled = state.backgroundSpoofEnabled,
+                        isCurrentSessionSpoofed = state.mediaState.activeSession?.packageName?.let {
+                            state.backgroundSpoofPackages.contains(it)
+                        } ?: false,
+                        onToggleCurrentSessionSpoof = viewModel::toggleCurrentSessionBackgroundSpoof,
+                        onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
                         onSelectTab = viewModel::selectMusicDrawerTab,
                         onTrackSearchChange = viewModel::updateLocalTrackSearchQuery,
                         onSkipToQueueItem = viewModel::skipToQueueItem,
                         onInvokeCustomAction = viewModel::invokeMediaCustomAction,
+                        onLikeStreamTrack = viewModel::likeStreamTrack,
+                        onDislikeStreamTrack = viewModel::dislikeStreamTrack,
+                        onStartMyWave = viewModel::startMyWave,
                         onPlayBrowserTrack = viewModel::playBrowserTrack,
                         onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
                         onConnectBrowser = viewModel::connectBrowserForPackage,
@@ -423,12 +468,17 @@ fun LauncherScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = desktopScale
+                        scaleY = desktopScale
+                    }
                     .windowInsetsPadding(WindowInsets.statusBars)
             ) {
                 PortraitMusicHeaderBar(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
                     isDrawerOpen = state.showMusicSheet,
+                    coverStyle = state.playerCoverStyle,
                     onTogglePlayPause = viewModel::togglePlayPause,
                     onSkipPrevious = viewModel::skipPrevious,
                     onSkipNext = viewModel::skipNext,
@@ -456,10 +506,19 @@ fun LauncherScreen(
                         hasAllFilesAccess = state.hasAllFilesAccess,
                         musicApps = state.musicApps,
                         isLandscape = false,
+                        backgroundSpoofEnabled = state.backgroundSpoofEnabled,
+                        isCurrentSessionSpoofed = state.mediaState.activeSession?.packageName?.let {
+                            state.backgroundSpoofPackages.contains(it)
+                        } ?: false,
+                        onToggleCurrentSessionSpoof = viewModel::toggleCurrentSessionBackgroundSpoof,
+                        onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
                         onSelectTab = viewModel::selectMusicDrawerTab,
                         onTrackSearchChange = viewModel::updateLocalTrackSearchQuery,
                         onSkipToQueueItem = viewModel::skipToQueueItem,
                         onInvokeCustomAction = viewModel::invokeMediaCustomAction,
+                        onLikeStreamTrack = viewModel::likeStreamTrack,
+                        onDislikeStreamTrack = viewModel::dislikeStreamTrack,
+                        onStartMyWave = viewModel::startMyWave,
                         onPlayBrowserTrack = viewModel::playBrowserTrack,
                         onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
                         onConnectBrowser = viewModel::connectBrowserForPackage,
@@ -550,7 +609,7 @@ fun LauncherScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     PortraitNavButton(
-                        label = "Камера",
+                        label = L10n.camera(lang),
                         iconRes = R.drawable.ic_symbian_camera,
                         selected = false,
                         onClick = viewModel::launchCamera,
@@ -559,7 +618,7 @@ fun LauncherScreen(
                             .testTag("nav_camera_portrait")
                     )
                     PortraitNavButton(
-                        label = "Главная",
+                        label = L10n.tab(lang, MainTab.HOME),
                         iconRes = R.drawable.ic_symbian_menu,
                         selected = state.activeTab == MainTab.HOME && !state.isWriterModeOpen,
                         onClick = { viewModel.selectTab(MainTab.HOME) },
@@ -568,7 +627,7 @@ fun LauncherScreen(
                             .testTag("nav_home_portrait")
                     )
                     PortraitNavButton(
-                        label = "Звонки",
+                        label = L10n.tab(lang, MainTab.CALLS),
                         iconRes = R.drawable.ic_symbian_phone,
                         selected = state.activeTab == MainTab.CALLS && !state.isWriterModeOpen,
                         onClick = { viewModel.selectTab(MainTab.CALLS) },
@@ -577,7 +636,7 @@ fun LauncherScreen(
                             .testTag("nav_calls_portrait")
                     )
                     PortraitNavButton(
-                        label = "Хаб",
+                        label = L10n.tab(lang, MainTab.HUB),
                         iconRes = R.drawable.ic_symbian_messaging,
                         selected = state.activeTab == MainTab.HUB && !state.isWriterModeOpen,
                         onClick = { viewModel.selectTab(MainTab.HUB) },
@@ -586,7 +645,7 @@ fun LauncherScreen(
                             .testTag("nav_hub_portrait")
                     )
                     PortraitNavButton(
-                        label = "Книги",
+                        label = L10n.books(lang),
                         iconRes = R.drawable.ic_symbian_editor,
                         selected = state.isWriterModeOpen,
                         onClick = { viewModel.openWriterMode() },
@@ -596,6 +655,26 @@ fun LauncherScreen(
                     )
                 }
             }
+        }
+
+        // BlackBerry OS 10 / KEY2 Active Frames Recents System Overlay
+        AnimatedVisibility(
+            visible = state.showRecentsOverlay,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Bb10RecentsOverlay(
+                frames = state.recentFrames,
+                focusedIndex = state.focusedRecentIndex,
+                isLandscape = isLandscape,
+                onOpenFrame = viewModel::launchRecentFrame,
+                onCloseFrame = viewModel::closeRecentFrame,
+                onTogglePinFrame = { viewModel.togglePinRecentFrame(it.packageName) },
+                onOpenFrameInfo = viewModel::openRecentFrameInfo,
+                onCloseAllExceptPinned = viewModel::closeAllRecentsExceptPinned,
+                onDismiss = viewModel::closeRecentsOverlay,
+                modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+            )
         }
 
         // Full-Screen Book & Notes Writer Studio Overlay
@@ -651,10 +730,14 @@ fun LauncherScreen(
         AppContextDialog(
             app = app,
             isAutoKill = state.autoKillPackages.contains(app.packageName),
+            adaptationMode = state.appAdaptationModes[app.packageName] ?: AppAdaptationMode.DISABLED,
+            isBackgroundSpoofed = state.backgroundSpoofPackages.contains(app.packageName),
             onDismiss = { viewModel.openContextMenu(null) },
             onLaunch = { viewModel.launchApp(app) },
             onTogglePin = { viewModel.togglePinApp(app) },
             onToggleAutoKill = { viewModel.toggleAutoKillPackage(app.packageName) },
+            onCycleAdaptationMode = { viewModel.cycleAppAdaptationMode(app.packageName) },
+            onToggleBackgroundSpoof = { viewModel.toggleBackgroundSpoofPackage(app.packageName) },
             onRename = { viewModel.openRenameAppDialog(app) },
             onChooseIcon = { viewModel.openIconPickerDialog(app) },
             onShareApk = { viewModel.shareAppAsApk(app) },
@@ -674,6 +757,9 @@ fun LauncherScreen(
             hasWallpaper = state.hasWallpaper,
             wallpaperBitmap = state.wallpaperBitmap,
             wallpaperPalette = state.wallpaperPalette,
+            appLanguage = state.appLanguage,
+            uiScale = state.uiScale,
+            playerCoverStyle = state.playerCoverStyle,
             onSelectThemeColor = viewModel::setUiThemeColor,
             onPickWallpaper = {
                 wallpaperPickerLauncher.launch(
@@ -681,6 +767,9 @@ fun LauncherScreen(
                 )
             },
             onClearWallpaper = viewModel::clearWallpaper,
+            onSelectLanguage = viewModel::setAppLanguage,
+            onChangeUiScale = viewModel::setUiScale,
+            onSelectCoverStyle = viewModel::setPlayerCoverStyle,
             onDismiss = { viewModel.setShowAppearanceDialog(false) }
         )
     }
@@ -691,9 +780,49 @@ fun LauncherScreen(
             autoKillPackages = state.autoKillPackages,
             allApps = state.allApps,
             shizukuReady = state.shizukuState.isBinderAlive && state.shizukuState.isPermissionGranted,
+            isRootAvailable = state.shizukuState.isRootAvailable,
             onToggleEnabled = viewModel::toggleAutoKillEnabled,
             onTogglePackage = viewModel::toggleAutoKillPackage,
             onDismiss = { viewModel.setShowAutoKillDialog(false) }
+        )
+    }
+
+    if (state.showOptimizationDialog) {
+        AndroidOptimizationAndSpoofDialog(
+            stats = state.optimizationStats,
+            shizukuState = state.shizukuState,
+            backgroundSpoofEnabled = state.backgroundSpoofEnabled,
+            backgroundSpoofPackages = state.backgroundSpoofPackages,
+            allApps = state.allApps,
+            onOptimizeNow = viewModel::optimizeAndroidSystem,
+            onDisablePhantomKiller = viewModel::disablePhantomKillerViaShizuku,
+            onToggleBackgroundSpoofEnabled = viewModel::toggleBackgroundSpoofEnabled,
+            onToggleBackgroundSpoofPackage = viewModel::toggleBackgroundSpoofPackage,
+            onBoostPackageViaShizuku = viewModel::boostAppForBackgroundViaShizuku,
+            onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
+            onDismiss = { viewModel.setShowOptimizationDialog(false) }
+        )
+    }
+
+    if (state.showAdaptationDialog) {
+        AppAdaptationSettingsDialog(
+            enabled = state.appAdaptationEnabled,
+            adaptationModes = state.appAdaptationModes,
+            allApps = state.allApps,
+            shizukuState = state.shizukuState,
+            onToggleEnabled = viewModel::toggleAppAdaptationEnabled,
+            onSetAppMode = viewModel::setAppAdaptationMode,
+            onGrantViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
+            onToggleOemGestureBypass = viewModel::toggleOemGestureBypass,
+            onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
+            onOpenOverlaySettings = viewModel::openOverlaySettings,
+            onDismiss = { viewModel.setShowAdaptationDialog(false) }
+        )
+    }
+
+    if (state.showBackgroundWebAudioDialog) {
+        BackgroundWebAudioDialog(
+            onDismiss = { viewModel.setShowBackgroundWebAudioDialog(false) }
         )
     }
 
@@ -832,6 +961,7 @@ private fun MainTabContent(
                 apps = state.filteredApps,
                 searchImages = state.searchImages,
                 searchFiles = state.searchFiles,
+                musicSearchResults = state.musicSearchResults,
                 isSearchingDevice = state.isSearchingDevice,
                 indexedFolderCount = state.indexedFolderCount,
                 hasAllFilesAccess = state.hasAllFilesAccess,
@@ -843,6 +973,9 @@ private fun MainTabContent(
                 gridState = appGridState,
                 searchFocusRequester = appSearchFocusRequester,
                 isSearchFocused = viewModel.isAppSearchInputFocused,
+                embeddedSnapshot = state.embeddedSnapshot,
+                messengerSearchMode = state.messengerSearchMode,
+                onToggleMessengerSearchMode = viewModel::toggleMessengerSearchMode,
                 onSearchFocusChange = { viewModel.isAppSearchInputFocused = it },
                 onRequestSearchFocus = { runCatching { appSearchFocusRequester.requestFocus() } },
                 onSearchQueryChange = viewModel::updateAppSearchQuery,
@@ -851,6 +984,12 @@ private fun MainTabContent(
                 onLongPressApp = viewModel::openContextMenu,
                 onOpenSearchFile = viewModel::openSearchFile,
                 onLongPressSearchFile = viewModel::openFileContextMenu,
+                onLaunchMusicMatch = viewModel::launchMusicSearchMatch,
+                onSendFileToMessenger = viewModel::sendFileToMessenger,
+                onSendAdaptationCommand = viewModel::sendAdaptationCommand,
+                onDisableEmbeddedAdaptation = viewModel::disableEmbeddedAdaptation,
+                onRestoreEmbeddedApp = viewModel::restoreAdaptedApp,
+                onDismissEmbedded = viewModel::dismissEmbeddedSnapshot,
                 onConnectSearchFolder = onConnectSearchFolder,
                 onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
                 onSearchWeb = viewModel::searchOnWeb,
@@ -907,9 +1046,13 @@ private fun MainTabContent(
                 onGrantNotificationViaShizuku = viewModel::grantNotificationAccessViaShizuku,
                 onToggleShadeInterception = viewModel::toggleShadeInterception,
                 onToggleLockScreenInterception = viewModel::toggleLockScreenInterception,
+                onToggleOemGestureBypass = viewModel::toggleOemGestureBypass,
                 onPreviewLockScreen = viewModel::openLockScreenPreview,
                 onOpenAppearanceSettings = { viewModel.setShowAppearanceDialog(true) },
                 onOpenAutoKillSettings = { viewModel.setShowAutoKillDialog(true) },
+                onOpenOptimizationSettings = { viewModel.setShowOptimizationDialog(true) },
+                onOpenAdaptationSettings = { viewModel.setShowAdaptationDialog(true) },
+                onGrantOverlayAndAccessibilityViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
                 onOpenDefaultLauncherSettings = viewModel::openDefaultLauncherSettings,
                 onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
                 onOpenAllFilesAccess = viewModel::openAllFilesAccessSettings,

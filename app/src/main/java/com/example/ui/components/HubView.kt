@@ -90,9 +90,13 @@ fun HubView(
     onGrantNotificationViaShizuku: () -> Unit,
     onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
+    onToggleOemGestureBypass: () -> Unit = {},
     onPreviewLockScreen: () -> Unit,
     onOpenAppearanceSettings: () -> Unit,
     onOpenAutoKillSettings: () -> Unit,
+    onOpenOptimizationSettings: () -> Unit = {},
+    onOpenAdaptationSettings: () -> Unit = {},
+    onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
     onOpenDefaultLauncherSettings: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
     onOpenAllFilesAccess: () -> Unit,
@@ -102,6 +106,7 @@ fun HubView(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val lang = com.example.ui.LocalAppLang.current
     val chatCount = notifications.count { it.subTab == HubSubTab.CHATS }
     val newsCount = notifications.count { it.subTab == HubSubTab.NEWS }
     val otherCount = notifications.count { it.subTab == HubSubTab.OTHER }
@@ -117,13 +122,18 @@ fun HubView(
                 modifier = Modifier
                     .fillMaxWidth()
                     .symbianMetallicBar()
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    .padding(horizontal = 5.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                val chatsLbl = com.example.ui.L10n.hubSub(lang, HubSubTab.CHATS)
+                val newsLbl = com.example.ui.L10n.hubSub(lang, HubSubTab.NEWS)
+                val otherLbl = com.example.ui.L10n.hubSub(lang, HubSubTab.OTHER)
+                val settingsLbl = com.example.ui.L10n.hubSub(lang, HubSubTab.SETTINGS)
+
                 HubTabItem(
                     selected = subTab == HubSubTab.CHATS,
                     iconRes = R.drawable.ic_symbian_messaging,
-                    label = if (chatCount > 0) "${HubSubTab.CHATS.title} ($chatCount)" else HubSubTab.CHATS.title,
+                    label = if (chatCount > 0) "$chatsLbl ($chatCount)" else chatsLbl,
                     onClick = { onSelectSubTab(HubSubTab.CHATS) },
                     modifier = Modifier
                         .weight(1f)
@@ -132,7 +142,7 @@ fun HubView(
                 HubTabItem(
                     selected = subTab == HubSubTab.NEWS,
                     iconRes = R.drawable.ic_symbian_web_news,
-                    label = if (newsCount > 0) "${HubSubTab.NEWS.title} ($newsCount)" else HubSubTab.NEWS.title,
+                    label = if (newsCount > 0) "$newsLbl ($newsCount)" else newsLbl,
                     onClick = { onSelectSubTab(HubSubTab.NEWS) },
                     modifier = Modifier
                         .weight(1f)
@@ -141,11 +151,20 @@ fun HubView(
                 HubTabItem(
                     selected = subTab == HubSubTab.OTHER,
                     iconRes = R.drawable.ic_symbian_tools,
-                    label = if (otherCount > 0) "${HubSubTab.OTHER.title} ($otherCount)" else HubSubTab.OTHER.title,
+                    label = if (otherCount > 0) "$otherLbl ($otherCount)" else otherLbl,
                     onClick = { onSelectSubTab(HubSubTab.OTHER) },
                     modifier = Modifier
                         .weight(1f)
                         .testTag("hub_subtab_other")
+                )
+                HubTabItem(
+                    selected = subTab == HubSubTab.SETTINGS,
+                    iconRes = R.drawable.ic_symbian_settings,
+                    label = settingsLbl,
+                    onClick = { onSelectSubTab(HubSubTab.SETTINGS) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("hub_subtab_settings")
                 )
             }
             HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
@@ -163,8 +182,9 @@ fun HubView(
             Text(
                 text = when (subTab) {
                     HubSubTab.CHATS -> "BLACKBERRY ХАБ • TG/WA → ЧАТЫ → ПОЧТА/VK"
-                    HubSubTab.NEWS -> "ЛЕНТА НОВОСТЕЙ И СТАТЕЙ"
-                    HubSubTab.OTHER -> "ОФОРМЛЕНИЕ, ОДНОРАЗОВЫЕ И SHIZUKU"
+                    HubSubTab.NEWS -> "ЛЕНТА НОВОСТЕЙ И GOOGLE DISCOVER"
+                    HubSubTab.OTHER -> "ПРОЧИЕ И СИСТЕМНЫЕ УВЕДОМЛЕНИЯ"
+                    HubSubTab.SETTINGS -> "НАСТРОЙКИ KEYDECK, SHIZUKU, ROOT И ТЕМЫ"
                 },
                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                 color = theme.accent,
@@ -208,13 +228,13 @@ fun HubView(
         HorizontalDivider(color = theme.divider)
 
         // Banner if Android Notification Listener access hasn't been granted yet
-        if (!shizukuState.isNotificationListenerGranted) {
+        if (!shizukuState.isNotificationListenerGranted && subTab != HubSubTab.SETTINGS) {
             NotificationPermissionBanner(
-                shizukuReady = shizukuState.isInstalled || shizukuState.isBinderAlive,
-                shizukuGranted = shizukuState.isPermissionGranted,
+                shizukuReady = shizukuState.isInstalled || shizukuState.isBinderAlive || shizukuState.isRootAvailable,
+                shizukuGranted = shizukuState.isPermissionGranted || shizukuState.isRootAvailable,
                 onOpenSettings = onOpenNotificationAccess,
                 onGrantViaShizuku = {
-                    if (shizukuState.isPermissionGranted) onGrantNotificationViaShizuku()
+                    if (shizukuState.isPermissionGranted || shizukuState.isRootAvailable) onGrantNotificationViaShizuku()
                     else onRequestShizukuPermission()
                 }
             )
@@ -260,7 +280,7 @@ fun HubView(
                     HubEmptyNotificationsState(
                         iconRes = R.drawable.ic_symbian_web_news,
                         title = "Новостных уведомлений пока нет",
-                        subtitle = "Уведомления из новостных лент, RSS, Reddit, Habr и браузеров автоматически собираются в эту вкладку."
+                        subtitle = "Уведомления из Google Discover, Google Новостей, Habr и браузеров автоматически собираются в эту вкладку."
                     )
                 } else {
                     LazyColumn(
@@ -323,48 +343,21 @@ fun HubView(
             }
 
             HubSubTab.OTHER -> {
-                val actions = listOf(
-                    HubOtherAction("Обои, стекло и цвет темы", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
-                    HubOtherAction("Одноразовые приложения (автозакрытие)", R.drawable.ic_symbian_tools, onOpenAutoKillSettings),
-                    HubOtherAction("Лаунчер по умолчанию", R.drawable.ic_symbian_home, onOpenDefaultLauncherSettings),
-                    HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
-                    HubOtherAction("Панель музыки (Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
-                    HubOtherAction("Горячие клавиши (F1)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
-                    HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
-                    HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
-                    HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
-                    HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
-                )
-
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("hub_other_notifications_list")
-                ) {
-                    item(key = "shizuku_panel") {
-                        ShizukuControlPanelCard(
-                            shizukuState = shizukuState,
-                            onRequestShizukuPermission = onRequestShizukuPermission,
-                            onOpenShizukuApp = onOpenShizukuApp,
-                            onGrantNotificationAccessViaShizuku = onGrantNotificationViaShizuku,
-                            onToggleShadeInterception = onToggleShadeInterception,
-                            onToggleLockScreenInterception = onToggleLockScreenInterception,
-                            onPreviewLockScreen = onPreviewLockScreen
-                        )
-                    }
-
-                    if (filteredNotifications.isNotEmpty()) {
-                        item(key = "other_notifications_header") {
-                            Text(
-                                text = "СИСТЕМНЫЕ И ПРОЧИЕ УВЕДОМЛЕНИЯ (${filteredNotifications.size})",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MusicSourceAmber,
-                                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
-                            )
-                        }
+                if (filteredNotifications.isEmpty()) {
+                    HubEmptyNotificationsState(
+                        iconRes = R.drawable.ic_symbian_tools,
+                        title = "Прочих уведомлений пока нет",
+                        subtitle = "Системные уведомления, напоминания, загрузки и сервисные события отображаются здесь. Настройки вынесены во вкладку «Настройки»."
+                    )
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("hub_other_notifications_list")
+                    ) {
                         itemsIndexed(filteredNotifications, key = { _, it -> it.key }) { idx, item ->
                             HubNotificationCard(
                                 item = item,
@@ -377,24 +370,66 @@ fun HubView(
                             )
                         }
                     }
+                }
+            }
+
+            HubSubTab.SETTINGS -> {
+                val actions = listOf(
+                    HubOtherAction("Оформление, язык, масштаб и стиль плеера", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
+                    HubOtherAction("Оптимизация Android, ОЗУ и Фон YouTube", R.drawable.ic_symbian_tools, onOpenOptimizationSettings),
+                    HubOtherAction("Адаптация приложений (Мессенджер / F1–F6)", R.drawable.ic_symbian_messaging, onOpenAdaptationSettings),
+                    HubOtherAction("Одноразовые приложения (автозакрытие)", R.drawable.ic_symbian_tools, onOpenAutoKillSettings),
+                    HubOtherAction("Лаунчер по умолчанию", R.drawable.ic_symbian_home, onOpenDefaultLauncherSettings),
+                    HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
+                    HubOtherAction("Панель музыки (F5 / Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
+                    HubOtherAction("Горячие клавиши (F1–F6, Ctrl+R)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
+                    HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
+                    HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
+                    HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
+                    HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
+                )
+
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("hub_settings_list")
+                ) {
+                    item(key = "shizuku_panel") {
+                        ShizukuControlPanelCard(
+                            shizukuState = shizukuState,
+                            onRequestShizukuPermission = onRequestShizukuPermission,
+                            onOpenShizukuApp = onOpenShizukuApp,
+                            onGrantNotificationAccessViaShizuku = onGrantNotificationViaShizuku,
+                            onGrantOverlayAndAccessibilityViaShizuku = onGrantOverlayAndAccessibilityViaShizuku,
+                            onOpenOptimizationSettings = onOpenOptimizationSettings,
+                            onOpenAdaptationSettings = onOpenAdaptationSettings,
+                            onToggleShadeInterception = onToggleShadeInterception,
+                            onToggleLockScreenInterception = onToggleLockScreenInterception,
+                            onToggleOemGestureBypass = onToggleOemGestureBypass,
+                            onPreviewLockScreen = onPreviewLockScreen
+                        )
+                    }
 
                     item(key = "system_tools_header") {
                         Text(
-                            text = "ИНСТРУМЕНТЫ СИСТЕМЫ",
+                            text = "ИНСТРУМЕНТЫ И НАСТРОЙКИ KEYDECK",
                             style = MaterialTheme.typography.labelSmall,
                             color = theme.accent,
                             modifier = Modifier.padding(top = 4.dp, start = 4.dp)
                         )
                     }
 
-                    itemsIndexed(actions, key = { idx, _ -> "other_tool_$idx" }) { idx, item ->
-                        val globalIdx = filteredNotifications.size + idx
+                    itemsIndexed(actions, key = { idx, _ -> "settings_tool_$idx" }) { idx, item ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .symbianGlossyTile(bucket = idx, isFocused = globalIdx == focusedIndex)
+                                .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
                                 .clickable(onClick = item.onClick)
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                                .padding(horizontal = 12.dp, vertical = 12.dp)
+                                .testTag("hub_setting_item_$idx"),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(

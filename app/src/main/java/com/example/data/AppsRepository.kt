@@ -423,14 +423,55 @@ class AppsRepository(private val context: Context) {
         }
     }
 
-    fun uninstallApp(packageName: String) {
-        runCatching {
-            val intent = Intent(Intent.ACTION_DELETE).apply {
-                data = Uri.fromParts("package", packageName, null)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    fun canBeUninstalled(packageName: String): Boolean {
+        val ai = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getApplicationInfo(packageName, 0)
             }
-            context.startActivity(intent)
+        }.getOrNull() ?: return true
+        val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        val isUpdatedSystem = (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        return !isSystem || isUpdatedSystem
+    }
+
+    fun uninstallApp(packageName: String): Boolean {
+        val pkgUri = Uri.fromParts("package", packageName, null)
+        val deleteIntent = Intent(Intent.ACTION_DELETE, pkgUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra(Intent.EXTRA_RETURN_RESULT, true)
         }
+        val startedDelete = runCatching {
+            context.startActivity(deleteIntent)
+            true
+        }.getOrDefault(false)
+        if (startedDelete) return true
+
+        @Suppress("DEPRECATION")
+        val legacyIntent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, pkgUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val startedLegacy = runCatching {
+            context.startActivity(legacyIntent)
+            true
+        }.getOrDefault(false)
+        if (startedLegacy) return true
+
+        openAppInfo(packageName)
+        return false
+    }
+
+    suspend fun uninstallPackagePrivileged(
+        packageName: String,
+        shizukuBridge: ShizukuBridge
+    ): Result<String> {
+        val safePkg = packageName.trim()
+        if (!safePkg.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$"""))) {
+            return Result.failure(IllegalArgumentException("Некорректный пакет"))
+        }
+        return shizukuBridge.runPrivilegedOrRootShell("pm uninstall --user 0 $safePkg")
     }
 
     fun launchCamera(): Boolean {

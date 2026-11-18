@@ -42,13 +42,9 @@ import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -78,19 +74,11 @@ import com.example.model.BookSectionTab
 import com.example.model.WriterSubTab
 import com.example.ui.theme.CallIncomingGreen
 import com.example.ui.theme.CallMissedRed
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.FocusBorderCyan
-import com.example.ui.theme.MusicSourceAmber
-import com.example.ui.theme.NavyBackground
-import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
-import com.example.ui.theme.SymbianBevelHighlight
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
-import com.example.ui.theme.TileDeepCobalt
+import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
@@ -108,6 +96,7 @@ fun WriterStudioScreen(
 ) {
     val state by writerViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val theme = LocalVistaTheme.current
 
     var showCreateBookDialog by remember { mutableStateOf(false) }
     var showEditBookDialog by remember { mutableStateOf(false) }
@@ -138,13 +127,16 @@ fun WriterStudioScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(NavyBackground)
+            .background(
+                if (theme.isGlassMode) theme.background.copy(alpha = 0.28f)
+                else theme.background
+            )
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .imePadding()
             .testTag("writer_studio_screen")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Symbian Writer Bar
+            // Top Symbian / Vista Writer Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -163,7 +155,7 @@ fun WriterStudioScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = "Вернуться в лаунчер",
-                            tint = ElectricCyan,
+                            tint = theme.accent,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.width(4.dp))
@@ -246,7 +238,7 @@ fun WriterStudioScreen(
                         Icon(
                             imageVector = Icons.Rounded.Share,
                             contentDescription = "Поделиться .docx",
-                            tint = ElectricCyan,
+                            tint = theme.accent,
                             modifier = Modifier.size(15.dp)
                         )
                     }
@@ -299,13 +291,13 @@ fun WriterStudioScreen(
                         Icon(
                             imageVector = Icons.Rounded.Share,
                             contentDescription = "Поделиться заметками",
-                            tint = ElectricCyan,
+                            tint = theme.accent,
                             modifier = Modifier.size(15.dp)
                         )
                     }
                 }
             }
-            HorizontalDivider(color = NavyDivider)
+            HorizontalDivider(color = theme.divider)
 
             when (state.subTab) {
                 WriterSubTab.BOOKS -> {
@@ -346,16 +338,15 @@ fun WriterStudioScreen(
                 .padding(bottom = 72.dp, start = 16.dp, end = 16.dp)
         ) {
             state.statusMessage?.let { msg ->
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = NavySurfaceElevated,
-                    modifier = Modifier.border(1.dp, ElectricCyan, RoundedCornerShape(6.dp))
+                Box(
+                    modifier = Modifier
+                        .vistaWindowFrame(RoundedCornerShape(5.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Text(
                         text = msg,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextPrimary,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = TextPrimary
                     )
                 }
             }
@@ -410,12 +401,16 @@ private fun BooksWorkspace(
     onOpenEditBook: () -> Unit,
     onOpenAddChapter: () -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     Column(modifier = Modifier.fillMaxSize()) {
         // Book shelf bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(NavySurface.copy(alpha = 0.9f))
+                .background(
+                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.72f)
+                    else theme.surface.copy(alpha = 0.94f)
+                )
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -435,16 +430,14 @@ private fun BooksWorkspace(
                 }
             }
 
-            state.books.forEach { book ->
+            state.books.forEachIndexed { idx, book ->
                 val selected = book.id == state.activeBook?.id
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (selected) TileBrightAzure.copy(alpha = 0.35f) else NavySurfaceElevated)
-                        .border(
-                            1.dp,
-                            if (selected) FocusBorderCyan else NavyDivider,
-                            RoundedCornerShape(4.dp)
+                        .symbianGlossyTile(
+                            bucket = idx,
+                            isFocused = selected,
+                            shape = RoundedCornerShape(4.dp)
                         )
                         .clickable { writerViewModel.selectBook(book.id) }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
@@ -454,7 +447,7 @@ private fun BooksWorkspace(
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
                         ),
-                        color = if (selected) ElectricCyan else TextPrimary,
+                        color = if (selected) theme.focusBorder else TextPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -462,17 +455,23 @@ private fun BooksWorkspace(
             }
 
             if (state.activeBook != null) {
-                IconButton(onClick = onOpenEditBook, modifier = Modifier.size(28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .vistaAeroButton()
+                        .clickable(onClick = onOpenEditBook),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.Edit,
                         contentDescription = "Параметры книги",
-                        tint = TextSecondary,
+                        tint = theme.accent,
                         modifier = Modifier.size(15.dp)
                     )
                 }
             }
         }
-        HorizontalDivider(color = NavyDivider)
+        HorizontalDivider(color = theme.divider)
 
         val activeBook = state.activeBook
         if (activeBook == null) {
@@ -520,7 +519,10 @@ private fun BooksWorkspace(
                     modifier = Modifier
                         .width(245.dp)
                         .fillMaxHeight()
-                        .background(NavySurface.copy(alpha = 0.65f))
+                        .background(
+                            if (theme.isGlassMode) theme.surface.copy(alpha = 0.52f)
+                            else theme.surface.copy(alpha = 0.85f)
+                        )
                 ) {
                     Row(
                         modifier = Modifier
@@ -541,7 +543,7 @@ private fun BooksWorkspace(
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    HorizontalDivider(color = NavyDivider)
+                    HorizontalDivider(color = theme.divider)
 
                     if (state.bookSectionTab == BookSectionTab.PLAN) {
                         BookPlanPane(
@@ -563,7 +565,7 @@ private fun BooksWorkspace(
                     }
                 }
 
-                VerticalDivider(color = NavyDivider)
+                VerticalDivider(color = theme.divider)
 
                 ChapterTextEditorPane(
                     chapter = state.activeChapter,
@@ -579,7 +581,10 @@ private fun BooksWorkspace(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(NavySurfaceElevated)
+                    .background(
+                        if (theme.isGlassMode) theme.surfaceElevated.copy(alpha = 0.72f)
+                        else theme.surfaceElevated
+                    )
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -602,7 +607,7 @@ private fun BooksWorkspace(
                     modifier = Modifier.weight(1f).testTag("book_section_editor")
                 )
             }
-            HorizontalDivider(color = NavyDivider)
+            HorizontalDivider(color = theme.divider)
 
             when (state.bookSectionTab) {
                 BookSectionTab.PLAN -> {
@@ -648,6 +653,7 @@ private fun BookPlanPane(
     onGenerateChapters: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     var draftPlan by remember(book.id) { mutableStateOf(book.outlinePlan) }
 
     LaunchedEffect(book.id, book.outlinePlan) {
@@ -676,13 +682,11 @@ private fun BookPlanPane(
             Text(
                 text = "План книги",
                 style = MaterialTheme.typography.titleSmall,
-                color = ElectricCyan
+                color = theme.accent
             )
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(TileBrightAzure)
-                    .border(1.dp, SymbianBevelHighlight.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                    .vistaAeroButton(isPrimary = true)
                     .clickable {
                         onOutlineChange(draftPlan)
                         onGenerateChapters()
@@ -691,9 +695,9 @@ private fun BookPlanPane(
                     .testTag("generate_chapters_from_plan")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Создать главы", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    Text("Создать главы", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
                 }
             }
         }
@@ -726,7 +730,7 @@ private fun BookPlanPane(
                     color = TextPrimary,
                     lineHeight = 22.sp
                 ),
-                cursorBrush = SolidColor(ElectricCyan),
+                cursorBrush = SolidColor(theme.accent),
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("book_outline_input")
@@ -745,6 +749,7 @@ private fun ChaptersListPane(
     onDeleteChapter: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -756,24 +761,23 @@ private fun ChaptersListPane(
             Text(
                 text = "Главы книги",
                 style = MaterialTheme.typography.titleSmall,
-                color = ElectricCyan
+                color = theme.accent
             )
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(TileBrightAzure)
+                    .vistaAeroButton(isPrimary = true)
                     .clickable(onClick = onAddChapter)
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("add_chapter_button")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(3.dp))
-                    Text("Глава", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    Text("Глава", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
                 }
             }
         }
-        HorizontalDivider(color = NavyDivider)
+        HorizontalDivider(color = theme.divider)
 
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -788,43 +792,60 @@ private fun ChaptersListPane(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(if (isSelected) TileBrightAzure.copy(alpha = 0.25f) else NavySurfaceElevated)
-                        .border(
-                            1.dp,
-                            if (isSelected) FocusBorderCyan else NavyDivider,
-                            RoundedCornerShape(5.dp)
+                        .symbianGlossyTile(
+                            bucket = idx,
+                            isFocused = isSelected,
+                            shape = RoundedCornerShape(5.dp)
                         )
                         .clickable { onSelectChapter(chapter.id) }
                         .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "${idx + 1}. ${chapter.title}",
                             style = MaterialTheme.typography.titleSmall,
-                            color = if (isSelected) FocusBorderCyan else TextPrimary,
+                            color = if (isSelected) theme.focusBorder else TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "Слов: $words • Симв.: ${chapter.content.length}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
+                            color = if (isSelected) TextPrimary.copy(alpha = 0.78f) else TextMuted
                         )
                     }
                     if (idx > 0) {
-                        IconButton(onClick = { onMoveChapter(chapter.id, -1) }, modifier = Modifier.size(26.dp)) {
-                            Icon(Icons.Rounded.ArrowUpward, contentDescription = "Выше", tint = TextSecondary, modifier = Modifier.size(15.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .vistaAeroButton()
+                                .clickable { onMoveChapter(chapter.id, -1) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Rounded.ArrowUpward, contentDescription = "Выше", tint = TextSecondary, modifier = Modifier.size(14.dp))
                         }
                     }
                     if (idx < chapters.lastIndex) {
-                        IconButton(onClick = { onMoveChapter(chapter.id, +1) }, modifier = Modifier.size(26.dp)) {
-                            Icon(Icons.Rounded.ArrowDownward, contentDescription = "Ниже", tint = TextSecondary, modifier = Modifier.size(15.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .vistaAeroButton()
+                                .clickable { onMoveChapter(chapter.id, +1) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Rounded.ArrowDownward, contentDescription = "Ниже", tint = TextSecondary, modifier = Modifier.size(14.dp))
                         }
                     }
-                    IconButton(onClick = { onDeleteChapter(chapter.id) }, modifier = Modifier.size(26.dp)) {
-                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить главу", tint = CallMissedRed, modifier = Modifier.size(15.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .vistaAeroButton()
+                            .clickable { onDeleteChapter(chapter.id) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить главу", tint = CallMissedRed, modifier = Modifier.size(14.dp))
                     }
                 }
             }
@@ -839,6 +860,7 @@ private fun ChapterTextEditorPane(
     onAddChapter: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     if (chapter == null) {
         Box(
             modifier = modifier
@@ -849,12 +871,11 @@ private fun ChapterTextEditorPane(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Нет выбранной главы", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = onAddChapter,
-                    colors = ButtonDefaults.buttonColors(containerColor = TileBrightAzure)
-                ) {
-                    Text("Добавить главу")
-                }
+                VistaButton(
+                    text = "Добавить главу",
+                    isPrimary = true,
+                    onClick = onAddChapter
+                )
             }
         }
         return
@@ -883,9 +904,7 @@ private fun ChapterTextEditorPane(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(4.dp))
-                .background(NavySurfaceElevated)
-                .border(1.dp, NavyDivider, RoundedCornerShape(4.dp))
+                .vistaWindowFrame(RoundedCornerShape(4.dp))
                 .padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -894,10 +913,10 @@ private fun ChapterTextEditorPane(
                 onValueChange = { draftTitle = it },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.titleMedium.copy(
-                    color = ElectricCyan,
+                    color = theme.accent,
                     fontWeight = FontWeight.Bold
                 ),
-                cursorBrush = SolidColor(ElectricCyan),
+                cursorBrush = SolidColor(theme.accent),
                 modifier = Modifier
                     .weight(1f)
                     .testTag("chapter_title_input")
@@ -921,13 +940,11 @@ private fun ChapterTextEditorPane(
             listOf("— " to "Тире", "«»" to "Кавычки", "\n***\n" to "Разрыв", "…" to "Многоточие").forEach { (insert, label) ->
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(NavySurface)
-                        .border(1.dp, NavyDivider, RoundedCornerShape(3.dp))
+                        .vistaAeroButton()
                         .clickable { draftContent += insert }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = TextPrimary)
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -964,7 +981,7 @@ private fun ChapterTextEditorPane(
                     fontSize = 15.5.sp,
                     lineHeight = 23.sp
                 ),
-                cursorBrush = SolidColor(ElectricCyan),
+                cursorBrush = SolidColor(theme.accent),
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("chapter_content_input")

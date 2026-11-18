@@ -1,31 +1,44 @@
 package com.example.viewmodel
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AdaptationCommand
+import com.example.data.AndroidOptimizerManager
+import com.example.data.AppAdaptationRuntime
 import com.example.data.AppsRepository
 import com.example.data.AutoCloseManager
+import com.example.data.BackgroundMediaGuardService
 import com.example.data.CallsContactsRepository
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.LauncherPreferencesRepository
 import com.example.data.MediaControlBus
 import com.example.data.MediaControlRepository
+import com.example.data.MediaGuardRuntime
 import com.example.data.NotificationHubRepository
+import com.example.data.RecentForegroundTracker
 import com.example.data.ShizukuBridge
 import com.example.data.UniversalSearchRepository
 import com.example.data.WallpaperThemeHelper
+import com.example.model.AdaptedAppSnapshot
 import com.example.model.AlphabetMode
+import com.example.model.AndroidOptimizationStats
+import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
 import com.example.model.AppIconOverride
+import com.example.model.AppLanguage
 import com.example.model.CallLogEntry
 import com.example.model.CallsSubTab
 import com.example.model.ContactEntry
 import com.example.model.DeviceSearchFile
+import com.example.model.GlobalSearchMode
 import com.example.model.HubCategory
 import com.example.model.HubNotificationItem
 import com.example.model.HubQuickLink
@@ -35,6 +48,9 @@ import com.example.model.MainTab
 import com.example.model.MediaBrowserTrack
 import com.example.model.MediaPlayerState
 import com.example.model.MusicDrawerTab
+import com.example.model.MusicStreamMatch
+import com.example.model.PlayerCoverStyle
+import com.example.model.RecentAppFrame
 import com.example.model.SearchResultKind
 import com.example.model.ShizukuState
 import com.example.model.UiThemeColor
@@ -96,18 +112,36 @@ data class LauncherUiState(
     val livePositionMs: Long = 0L,
     val localAudioTracks: List<LocalAudioTrack> = emptyList(),
     val localTrackSearchQuery: String = "",
-    val musicDrawerTab: MusicDrawerTab = MusicDrawerTab.QUEUE,
+    val musicDrawerTab: MusicDrawerTab = MusicDrawerTab.STREAMING,
     val showMusicSheet: Boolean = false,
     val showShortcutsDialog: Boolean = false,
     val showAddLinkDialog: Boolean = false,
     val showAppearanceDialog: Boolean = false,
     val showAutoKillDialog: Boolean = false,
+    val showOptimizationDialog: Boolean = false,
+    val showAdaptationDialog: Boolean = false,
+    val showBackgroundWebAudioDialog: Boolean = false,
     val uiThemeColor: UiThemeColor = UiThemeColor.BLUE,
     val wallpaperBitmap: ImageBitmap? = null,
     val wallpaperPalette: WallpaperPaletteData? = null,
     val hasWallpaper: Boolean = false,
     val autoKillEnabled: Boolean = true,
     val autoKillPackages: Set<String> = emptySet(),
+    val optimizationStats: AndroidOptimizationStats = AndroidOptimizationStats(),
+    val backgroundSpoofEnabled: Boolean = false,
+    val backgroundSpoofPackages: Set<String> = emptySet(),
+    val appAdaptationEnabled: Boolean = false,
+    val appAdaptationModes: Map<String, AppAdaptationMode> = emptyMap(),
+    val appLanguage: AppLanguage = AppLanguage.RU,
+    val uiScale: Float = 1.0f,
+    val playerCoverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
+    val showRecentsOverlay: Boolean = false,
+    val recentFrames: List<RecentAppFrame> = emptyList(),
+    val focusedRecentIndex: Int = 0,
+    val pinnedRecentPackages: Set<String> = emptySet(),
+    val embeddedSnapshot: AdaptedAppSnapshot? = null,
+    val messengerSearchMode: GlobalSearchMode = GlobalSearchMode.APPS_AND_FILES,
+    val musicSearchResults: List<MusicStreamMatch> = emptyList(),
     val contextMenuApp: AppEntry? = null,
     val contextMenuFile: DeviceSearchFile? = null,
     val renameTargetApp: AppEntry? = null,
@@ -123,6 +157,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val mediaRepo = MediaControlRepository(application)
     private val shizukuBridge = ShizukuBridge(application)
     private val autoCloseManager = AutoCloseManager(application, shizukuBridge)
+    private val optimizerManager = AndroidOptimizerManager(application, shizukuBridge)
     private val universalSearchRepo = UniversalSearchRepository(application, shizukuBridge)
 
     private val _allApps = MutableStateFlow<List<AppEntry>>(emptyList())
@@ -143,11 +178,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _permissionsState = MutableStateFlow(Triple(false, false, false))
     private val _livePositionMs = MutableStateFlow(0L)
     private val _showMusicSheet = MutableStateFlow(false)
-    private val _musicDrawerTab = MutableStateFlow(MusicDrawerTab.QUEUE)
+    private val _musicDrawerTab = MutableStateFlow(MusicDrawerTab.STREAMING)
     private val _showShortcutsDialog = MutableStateFlow(false)
     private val _showAddLinkDialog = MutableStateFlow(false)
     private val _showAppearanceDialog = MutableStateFlow(false)
     private val _showAutoKillDialog = MutableStateFlow(false)
+    private val _showOptimizationDialog = MutableStateFlow(false)
+    private val _showAdaptationDialog = MutableStateFlow(false)
+    private val _showBackgroundWebAudioDialog = MutableStateFlow(false)
+    private val _optimizationStats = MutableStateFlow(AndroidOptimizationStats())
     private val _wallpaperState = MutableStateFlow<Pair<ImageBitmap?, WallpaperPaletteData?>>(null to null)
     private val _contextMenuApp = MutableStateFlow<AppEntry?>(null)
     private val _contextMenuFile = MutableStateFlow<DeviceSearchFile?>(null)
@@ -160,6 +199,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isSearchingDevice = MutableStateFlow(false)
     private val _storageAccessState = MutableStateFlow(false to false)
     private val _localTrackSearchQuery = MutableStateFlow("")
+    private val _showRecentsOverlay = MutableStateFlow(false)
+    private val _recentFrames = MutableStateFlow<List<RecentAppFrame>>(emptyList())
+    private val _focusedRecentIndex = MutableStateFlow(0)
+    private val _messengerSearchMode = MutableStateFlow(GlobalSearchMode.APPS_AND_FILES)
+    private val _musicSearchResults = MutableStateFlow<List<MusicStreamMatch>>(emptyList())
 
     @Volatile
     private var wasPausedSinceResume: Boolean = false
@@ -192,8 +236,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         prefsRepo.pinnedAppIds,
         prefsRepo.customAppLabels,
         prefsRepo.appIconOverrides,
-        _appSearchQuery
-    ) { apps, pinnedIds, customLabels, iconOverrides, query ->
+        combine(_appSearchQuery, _highlightedLetter) { q, l -> q to l }
+    ) { apps, pinnedIds, customLabels, iconOverrides, queryAndLetter ->
+        val (query, letterFilter) = queryAndLetter
         val updatedApps = apps
             .map { app ->
                 appsRepo.applyCustomization(
@@ -204,10 +249,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
-        val filtered = if (query.isBlank()) {
-            updatedApps
-        } else {
-            updatedApps
+        val filtered = when {
+            query.isNotBlank() -> updatedApps
                 .filter {
                     KeyboardSearchMatcher.matches(it.label, query) ||
                         KeyboardSearchMatcher.matches(it.originalLabel, query) ||
@@ -219,6 +262,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         KeyboardSearchMatcher.matchScore(it.originalLabel, query)
                     )
                 }
+            letterFilter != null -> updatedApps.filter { it.initialChar == letterFilter }
+            else -> updatedApps
         }
         Triple(updatedApps, filtered, updatedApps.filter { it.isPinned })
     }
@@ -227,8 +272,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _callLogs,
         _contacts,
         _callsSearchQuery,
-        _permissionsState
-    ) { logs, contacts, query, perms ->
+        _permissionsState,
+        _highlightedLetter
+    ) { logs, contacts, query, perms, letterFilter ->
         val filteredLogs = if (query.isBlank()) {
             logs
         } else {
@@ -237,13 +283,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     it.number.contains(query.trim(), ignoreCase = true)
             }
         }
-        val filteredContacts = if (query.isBlank()) {
-            contacts
-        } else {
-            contacts.filter {
+        val filteredContacts = when {
+            query.isNotBlank() -> contacts.filter {
                 KeyboardSearchMatcher.matches(it.name, query) ||
                     it.number.contains(query.trim(), ignoreCase = true)
             }
+            letterFilter != null -> contacts.filter { it.initialChar == letterFilter }
+            else -> contacts
         }
         val starred = contacts.filter { it.isStarred }.distinctBy { it.id }
         CallsBundle(filteredLogs, filteredContacts, starred, perms)
@@ -447,6 +493,95 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val musicDrawerTab: MusicDrawerTab
     )
 
+    private data class SystemFeatureBundle(
+        val optimizationStats: AndroidOptimizationStats,
+        val showOptimizationDialog: Boolean,
+        val showAdaptationDialog: Boolean,
+        val showBackgroundWebAudioDialog: Boolean,
+        val backgroundSpoofEnabled: Boolean,
+        val backgroundSpoofPackages: Set<String>,
+        val appAdaptationEnabled: Boolean,
+        val appAdaptationModes: Map<String, AppAdaptationMode>
+    )
+
+    private val systemFeatureFlow = combine(
+        prefsRepo.backgroundSpoofEnabled,
+        prefsRepo.backgroundSpoofPackages,
+        prefsRepo.appAdaptationEnabled,
+        prefsRepo.appAdaptationModes,
+        combine(
+            _optimizationStats,
+            _showOptimizationDialog,
+            _showAdaptationDialog,
+            _showBackgroundWebAudioDialog
+        ) { stats, optDlg, adaptDlg, webDlg ->
+            arrayOf<Any?>(stats, optDlg, adaptDlg, webDlg)
+        }
+    ) { bgEnabled, bgPkgs, adaptEnabled, adaptModes, uiArr ->
+        SystemFeatureBundle(
+            optimizationStats = uiArr[0] as AndroidOptimizationStats,
+            showOptimizationDialog = uiArr[1] as Boolean,
+            showAdaptationDialog = uiArr[2] as Boolean,
+            showBackgroundWebAudioDialog = uiArr[3] as Boolean,
+            backgroundSpoofEnabled = bgEnabled,
+            backgroundSpoofPackages = bgPkgs,
+            appAdaptationEnabled = adaptEnabled,
+            appAdaptationModes = adaptModes
+        )
+    }
+
+    private data class RecentsAndUiPrefsBundle(
+        val appLanguage: AppLanguage,
+        val uiScale: Float,
+        val playerCoverStyle: PlayerCoverStyle,
+        val showRecentsOverlay: Boolean,
+        val recentFrames: List<RecentAppFrame>,
+        val focusedRecentIndex: Int,
+        val pinnedRecentPackages: Set<String>,
+        val embeddedSnapshot: AdaptedAppSnapshot?,
+        val messengerSearchMode: GlobalSearchMode,
+        val musicSearchResults: List<MusicStreamMatch>
+    )
+
+    private val recentsAndUiPrefsFlow = combine(
+        combine(
+            prefsRepo.appLanguage,
+            prefsRepo.uiScale,
+            prefsRepo.playerCoverStyle,
+            prefsRepo.pinnedRecentPackages
+        ) { lang, scale, coverStyle, pinnedRecents ->
+            arrayOf<Any?>(lang, scale, coverStyle, pinnedRecents)
+        },
+        combine(
+            _showRecentsOverlay,
+            _recentFrames,
+            _focusedRecentIndex
+        ) { showRec, frames, recIdx ->
+            Triple(showRec, frames, recIdx)
+        },
+        combine(
+            AppAdaptationRuntime.embeddedSnapshot,
+            _messengerSearchMode,
+            _musicSearchResults
+        ) { emb, msgMode, musicRes ->
+            Triple(emb, msgMode, musicRes)
+        }
+    ) { prefsArr, recTriple, adaptTriple ->
+        @Suppress("UNCHECKED_CAST")
+        RecentsAndUiPrefsBundle(
+            appLanguage = prefsArr[0] as AppLanguage,
+            uiScale = prefsArr[1] as Float,
+            playerCoverStyle = prefsArr[2] as PlayerCoverStyle,
+            pinnedRecentPackages = prefsArr[3] as Set<String>,
+            showRecentsOverlay = recTriple.first,
+            recentFrames = recTriple.second,
+            focusedRecentIndex = recTriple.third,
+            embeddedSnapshot = adaptTriple.first,
+            messengerSearchMode = adaptTriple.second,
+            musicSearchResults = adaptTriple.third
+        )
+    }
+
     val uiState: StateFlow<LauncherUiState> = combine(
         baseAppsFlow,
         callsFlow,
@@ -454,16 +589,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         uiOverlaysFlow,
         combine(
             combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> Pair(m, hw) },
-            customizationPrefsFlow
-        ) { mh, cust -> mh to cust }
+            combine(customizationPrefsFlow, systemFeatureFlow, recentsAndUiPrefsFlow) { cust, sys, rec ->
+                Triple(cust, sys, rec)
+            }
+        ) { mh, csr -> mh to csr }
     ) { appsTriple, calls, nav, overlays, rightTriple ->
         val mediaBundle = rightTriple.first.first
         val hw = rightTriple.first.second
-        val cust = rightTriple.second
+        val cust = rightTriple.second.first
+        val sys = rightTriple.second.second
+        val rec = rightTriple.second.third
         val (updatedAll, filtered, pinned) = appsTriple
         val coercedAppFocus = if (filtered.isEmpty()) 0 else overlays.focus.appIdx.coerceIn(0, filtered.lastIndex)
         val coercedLogFocus = if (calls.logs.isEmpty()) 0 else overlays.focus.callIdx.coerceIn(0, calls.logs.lastIndex)
         val coercedContactFocus = if (calls.contacts.isEmpty()) 0 else overlays.focus.contactIdx.coerceIn(0, calls.contacts.lastIndex)
+        val coercedRecentFocus = if (rec.recentFrames.isEmpty()) 0 else rec.focusedRecentIndex.coerceIn(0, rec.recentFrames.lastIndex)
 
         val images = hw.searchBundle.results.filter { it.kind == SearchResultKind.IMAGE }
         val files = hw.searchBundle.results.filter { it.kind == SearchResultKind.FILE }
@@ -515,12 +655,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             showAddLinkDialog = mediaBundle.addLink,
             showAppearanceDialog = cust.showAppearanceDialog,
             showAutoKillDialog = cust.showAutoKillDialog,
+            showOptimizationDialog = sys.showOptimizationDialog,
+            showAdaptationDialog = sys.showAdaptationDialog,
+            showBackgroundWebAudioDialog = sys.showBackgroundWebAudioDialog,
             uiThemeColor = cust.themeColor,
             wallpaperBitmap = cust.wallpaperBitmap,
             wallpaperPalette = cust.wallpaperPalette,
             hasWallpaper = cust.wallpaperBitmap != null,
             autoKillEnabled = cust.autoKillEnabled,
             autoKillPackages = cust.autoKillPackages,
+            optimizationStats = sys.optimizationStats,
+            backgroundSpoofEnabled = sys.backgroundSpoofEnabled,
+            backgroundSpoofPackages = sys.backgroundSpoofPackages,
+            appAdaptationEnabled = sys.appAdaptationEnabled,
+            appAdaptationModes = sys.appAdaptationModes,
+            appLanguage = rec.appLanguage,
+            uiScale = rec.uiScale,
+            playerCoverStyle = rec.playerCoverStyle,
+            showRecentsOverlay = rec.showRecentsOverlay,
+            recentFrames = rec.recentFrames,
+            focusedRecentIndex = coercedRecentFocus,
+            pinnedRecentPackages = rec.pinnedRecentPackages,
+            embeddedSnapshot = rec.embeddedSnapshot,
+            messengerSearchMode = rec.messengerSearchMode,
+            musicSearchResults = rec.musicSearchResults,
             contextMenuApp = mediaBundle.ctxApp,
             contextMenuFile = hw.searchBundle.contextMenuFile,
             renameTargetApp = hw.searchBundle.renameTargetApp,
@@ -544,6 +702,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         refreshInstalledApps()
         refreshCallsAndContacts()
         refreshStorageAndAudioAccess()
+        refreshOptimizationStats()
         mediaRepo.startObserving()
         shizukuBridge.startObserving()
 
@@ -555,10 +714,39 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             combine(
+                prefsRepo.backgroundSpoofEnabled,
+                prefsRepo.backgroundSpoofPackages
+            ) { enabled, pkgs -> enabled to pkgs }.collect { (enabled, pkgs) ->
+                MediaGuardRuntime.isGuardEnabled = enabled
+                MediaGuardRuntime.guardedPackages = pkgs
+                BackgroundMediaGuardService.syncServiceState(getApplication(), enabled)
+            }
+        }
+
+        viewModelScope.launch {
+            combine(
+                prefsRepo.appAdaptationEnabled,
+                prefsRepo.appAdaptationModes,
+                _allApps
+            ) { enabled, modes, apps -> Triple(enabled, modes, apps) }
+                .collect { (enabled, modes, apps) ->
+                    AppAdaptationRuntime.isAdaptationEnabled = enabled
+                    val labels = apps.associate { it.packageName to it.label }
+                    AppAdaptationRuntime.updateModes(modes, labels)
+                }
+        }
+
+        AppAdaptationRuntime.onDisablePackageCallback = { pkg ->
+            setAppAdaptationMode(pkg, AppAdaptationMode.DISABLED)
+        }
+
+        viewModelScope.launch {
+            combine(
                 prefsRepo.interceptShadeEnabled,
-                prefsRepo.interceptLockScreenEnabled
-            ) { shade, lock -> shade to lock }.collect { (shade, lock) ->
-                shizukuBridge.updateInterceptFlags(shade, lock)
+                prefsRepo.interceptLockScreenEnabled,
+                prefsRepo.oemGestureBypassEnabled
+            ) { shade, lock, oem -> Triple(shade, lock, oem) }.collect { (shade, lock, oem) ->
+                shizukuBridge.updateInterceptFlags(shade, lock, oem)
             }
         }
 
@@ -605,6 +793,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         shizukuBridge.refreshStatus()
         refreshCallsAndContacts()
         refreshStorageAndAudioAccess()
+        refreshOptimizationStats()
 
         if (wasPausedSinceResume) {
             wasPausedSinceResume = false
@@ -621,9 +810,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     )
                     if (closedCount > 0) {
                         val shizukuActive = state.shizukuState.isBinderAlive && state.shizukuState.isPermissionGranted
-                        if (shizukuActive) {
-                            showToast("Одноразовые приложения завершены ($closedCount)")
-                        }
+                        showToast(
+                            if (shizukuActive) "Одноразовые приложения завершены (Shizuku: $closedCount)"
+                            else "Одноразовые процессы очищены ($closedCount)"
+                        )
                     }
                 }
             }
@@ -655,6 +845,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             _isLoadingApps.value = false
             val defaults = autoCloseManager.discoverDefaultOneTimePackages(loaded)
             prefsRepo.initDefaultAutoKillPackagesIfNeeded(defaults)
+
+            val defaultSpoofPkgs = loaded
+                .map { it.packageName }
+                .filter { MediaGuardRuntime.isDefaultSpoilerCandidate(it) }
+                .toSet()
+            prefsRepo.initDefaultBackgroundSpoofPackagesIfNeeded(defaultSpoofPkgs)
+
+            val defaultAdaptationModes = loaded
+                .associate { it.packageName to AppAdaptationRuntime.recommendedDefaultMode(it.packageName, it.originalLabel) }
+                .filterValues { it != AppAdaptationMode.DISABLED }
+            prefsRepo.initDefaultAdaptationModesIfNeeded(defaultAdaptationModes)
         }
     }
 
@@ -676,6 +877,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun selectTab(tab: MainTab) {
         _isWriterModeOpen.value = false
+        if (_activeTab.value != tab) {
+            _highlightedLetter.value = null
+            _activeScrubLetter.value = null
+        }
         _activeTab.value = tab
     }
 
@@ -719,6 +924,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appSearchQuery.value = query
         _focusedAppIndex.value = 0
         _highlightedLetter.value = null
+        _musicSearchResults.value = mediaRepo.searchStreamingAndLocalCatalog(query, uiState.value.musicApps)
         triggerDeviceSearch(query)
     }
 
@@ -855,6 +1061,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             MainTab.HOME -> {
                 _appSearchQuery.value = ""
                 _deviceSearchResults.value = emptyList()
+                _musicSearchResults.value = emptyList()
                 _isSearchingDevice.value = false
                 _highlightedLetter.value = null
                 _activeScrubLetter.value = null
@@ -876,17 +1083,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun onAlphabetScrub(letter: Char?) {
         _activeScrubLetter.value = letter
         if (letter == null) return
-        _highlightedLetter.value = letter
 
         if (_activeTab.value == MainTab.CALLS && _callsSubTab.value == CallsSubTab.CONTACTS) {
-            val contacts = uiState.value.contacts
-            if (contacts.isNotEmpty()) {
-                val targetIdx = findBestLetterIndex(contacts.map { it.initialChar }, letter)
-                if (targetIdx >= 0) {
-                    _focusedContactIndex.value = targetIdx
-                    _scrollContactIndexEvents.tryEmit(targetIdx)
-                }
+            if (_callsSearchQuery.value.isNotEmpty()) {
+                _callsSearchQuery.value = ""
             }
+            _highlightedLetter.value = letter
+            _focusedContactIndex.value = 0
+            _scrollContactIndexEvents.tryEmit(0)
             return
         }
 
@@ -896,27 +1100,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (_appSearchQuery.value.isNotEmpty()) {
             updateAppSearchQuery("")
         }
-        val apps = uiState.value.allApps
-        if (apps.isNotEmpty()) {
-            val targetIdx = findBestLetterIndex(apps.map { it.initialChar }, letter)
-            if (targetIdx >= 0) {
-                _focusedAppIndex.value = targetIdx
-                _scrollAppIndexEvents.tryEmit(targetIdx)
-            }
-        }
+        _highlightedLetter.value = letter
+        _focusedAppIndex.value = 0
+        _scrollAppIndexEvents.tryEmit(0)
     }
 
     fun jumpToLetter(letter: Char) {
+        if (_highlightedLetter.value == letter) {
+            _highlightedLetter.value = null
+            _activeScrubLetter.value = null
+            _focusedAppIndex.value = 0
+            _focusedContactIndex.value = 0
+            return
+        }
         onAlphabetScrub(letter)
         _activeScrubLetter.value = null
-    }
-
-    private fun findBestLetterIndex(initials: List<Char>, letter: Char): Int {
-        val exact = initials.indexOfFirst { it == letter }
-        if (exact >= 0) return exact
-        if (letter == '#') return 0
-        val next = initials.indexOfFirst { it != '#' && it >= letter }
-        return if (next >= 0) next else initials.lastIndex.coerceAtLeast(0)
     }
 
     fun moveGridFocus(dx: Int, dy: Int, columns: Int) {
@@ -957,7 +1155,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val totalCount = when (state.hubSubTab) {
                     HubSubTab.CHATS -> listCount
                     HubSubTab.NEWS -> listCount + state.hubQuickLinks.count { it.category == HubSubTab.NEWS }
-                    HubSubTab.OTHER -> listCount + 10
+                    HubSubTab.OTHER -> listCount
+                    HubSubTab.SETTINGS -> 12
                 }
                 if (totalCount <= 0) return
                 val step = if (dy != 0) dy else dx
@@ -1014,30 +1213,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             MainTab.HUB -> {
                 val items = state.hubNotifications.filter { it.subTab == state.hubSubTab }
                 val idx = state.focusedHubIndex
-                if (idx in items.indices) {
+                if (state.hubSubTab != HubSubTab.SETTINGS && idx in items.indices) {
                     openHubNotification(items[idx].key)
                     return
                 }
-                val remIdx = idx - items.size
+                val remIdx = if (state.hubSubTab == HubSubTab.SETTINGS) idx else idx - items.size
                 when (state.hubSubTab) {
                     HubSubTab.NEWS -> {
                         val links = state.hubQuickLinks.filter { it.category == HubSubTab.NEWS }
                         links.getOrNull(remIdx)?.let { openUrl(it.url) }
                     }
-                    HubSubTab.OTHER -> {
+                    HubSubTab.SETTINGS -> {
                         when (remIdx) {
                             0 -> setShowAppearanceDialog(true)
-                            1 -> setShowAutoKillDialog(true)
-                            2 -> openDefaultLauncherSettings()
-                            3 -> openNotificationListenerSettings()
-                            4 -> setShowMusicSheet(true)
-                            5 -> setShowShortcutsDialog(true)
-                            6 -> openSystemSettings(Settings.ACTION_WIFI_SETTINGS)
-                            7 -> openSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
-                            8 -> openSystemSettings(Settings.ACTION_SETTINGS)
-                            9 -> openAllFilesAccessSettings()
+                            1 -> setShowOptimizationDialog(true)
+                            2 -> setShowAdaptationDialog(true)
+                            3 -> setShowAutoKillDialog(true)
+                            4 -> openDefaultLauncherSettings()
+                            5 -> openNotificationListenerSettings()
+                            6 -> setShowMusicSheet(true)
+                            7 -> setShowShortcutsDialog(true)
+                            8 -> openSystemSettings(Settings.ACTION_WIFI_SETTINGS)
+                            9 -> openSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
+                            10 -> openSystemSettings(Settings.ACTION_SETTINGS)
+                            11 -> openAllFilesAccessSettings()
                         }
                     }
+                    HubSubTab.OTHER -> Unit
                     HubSubTab.CHATS -> Unit
                 }
             }
@@ -1288,7 +1490,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun uninstallApp(app: AppEntry) {
         _contextMenuApp.value = null
-        appsRepo.uninstallApp(app.packageName)
+        if (appsRepo.canBeUninstalled(app.packageName)) {
+            if (!appsRepo.uninstallApp(app.packageName)) {
+                showToast("Не удалось открыть системное окно удаления")
+            }
+            return
+        }
+        val state = uiState.value.shizukuState
+        val hasPrivileged = (state.isBinderAlive && state.isPermissionGranted) || state.isRootAvailable
+        if (hasPrivileged) {
+            viewModelScope.launch {
+                val res = appsRepo.uninstallPackagePrivileged(app.packageName, shizukuBridge)
+                res.onSuccess {
+                    showToast("Удалено через Shizuku/Root: ${app.label}")
+                    refreshInstalledApps()
+                }.onFailure {
+                    appsRepo.openAppInfo(app.packageName)
+                    showToast("Системное приложение — открыта информация")
+                }
+            }
+        } else {
+            appsRepo.openAppInfo(app.packageName)
+            showToast("Системное приложение — открыта карточка приложения")
+        }
     }
 
     fun launchCamera() {
@@ -1565,6 +1789,445 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             showToast(
                 if (existed) "Убрано из автозавершения"
                 else "Добавлено в одноразовые (будет закрываться при выходе)"
+            )
+        }
+    }
+
+    // Android Optimization, Background Playback Spoofing & App UI Adaptation
+    fun setShowOptimizationDialog(show: Boolean) {
+        _showOptimizationDialog.value = show
+        if (show) {
+            refreshOptimizationStats()
+            shizukuBridge.refreshStatus()
+        }
+    }
+
+    fun setShowAdaptationDialog(show: Boolean) {
+        _showAdaptationDialog.value = show
+        if (show) {
+            shizukuBridge.refreshStatus()
+        }
+    }
+
+    fun setShowBackgroundWebAudioDialog(show: Boolean) {
+        _showBackgroundWebAudioDialog.value = show
+        if (show) {
+            BackgroundMediaGuardService.syncServiceState(getApplication(), true)
+        } else if (!uiState.value.backgroundSpoofEnabled) {
+            BackgroundMediaGuardService.syncServiceState(getApplication(), false)
+        }
+    }
+
+    fun refreshOptimizationStats() {
+        val prev = _optimizationStats.value
+        _optimizationStats.value = optimizerManager.readRamStats(
+            phantomPatched = prev.phantomKillerPatched,
+            lastSummary = prev.lastCleanupSummary
+        )
+    }
+
+    fun optimizeAndroidSystem() {
+        viewModelScope.launch {
+            val state = uiState.value
+            val protected = buildSet {
+                addAll(state.backgroundSpoofPackages)
+                addAll(state.mediaState.sessions.filter { it.isPlaying }.map { it.packageName })
+            }
+            val updated = optimizerManager.optimizeMemoryAndProcesses(
+                allApps = state.allApps,
+                protectedPackages = protected
+            )
+            _optimizationStats.value = updated
+            showToast(updated.lastCleanupSummary ?: "Система оптимизирована")
+        }
+    }
+
+    fun disablePhantomKillerViaShizuku() {
+        viewModelScope.launch {
+            val res = optimizerManager.disablePhantomProcessKillerViaShizuku()
+            res.onSuccess {
+                _optimizationStats.value = _optimizationStats.value.copy(
+                    phantomKillerPatched = true,
+                    lastCleanupSummary = "Phantom Process Killer отключён через Shizuku"
+                )
+                showToast("Phantom Process Killer отключён")
+            }.onFailure { err ->
+                showToast(err.message ?: "Нужно разрешение Shizuku")
+            }
+        }
+    }
+
+    fun boostAppForBackgroundViaShizuku(packageName: String) {
+        viewModelScope.launch {
+            val res = optimizerManager.boostAppAndProtectFromDoze(packageName)
+            res.onSuccess {
+                showToast("Фоновый звук и Doze-защита выданы для $packageName")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось применить через Shizuku")
+            }
+        }
+    }
+
+    fun toggleBackgroundSpoofEnabled() {
+        val next = !uiState.value.backgroundSpoofEnabled
+        viewModelScope.launch {
+            prefsRepo.setBackgroundSpoofEnabled(next)
+            showToast(
+                if (next) "Фоновый обход паузы включён"
+                else "Фоновый обход паузы отключён"
+            )
+        }
+    }
+
+    fun toggleBackgroundSpoofPackage(packageName: String) {
+        viewModelScope.launch {
+            val existed = uiState.value.backgroundSpoofPackages.contains(packageName)
+            prefsRepo.toggleBackgroundSpoofPackage(packageName)
+            if (!existed && !uiState.value.backgroundSpoofEnabled) {
+                prefsRepo.setBackgroundSpoofEnabled(true)
+            }
+            showToast(
+                if (existed) "Убрано из фонового обхода"
+                else "Добавлено в фоновый обход паузы"
+            )
+        }
+    }
+
+    fun toggleCurrentSessionBackgroundSpoof() {
+        val pkg = uiState.value.mediaState.activeSession?.packageName
+        if (pkg.isNullOrBlank() || pkg == getApplication<Application>().packageName) {
+            toggleBackgroundSpoofEnabled()
+            return
+        }
+        toggleBackgroundSpoofPackage(pkg)
+    }
+
+    fun toggleAppAdaptationEnabled() {
+        val next = !uiState.value.appAdaptationEnabled
+        viewModelScope.launch {
+            prefsRepo.setAppAdaptationEnabled(next)
+            showToast(
+                if (next) "Адаптация интерфейса приложений включена"
+                else "Адаптация интерфейса приложений выключена"
+            )
+        }
+    }
+
+    fun setAppAdaptationMode(packageName: String, mode: AppAdaptationMode) {
+        viewModelScope.launch {
+            prefsRepo.setAppAdaptationMode(packageName, mode)
+            if (mode != AppAdaptationMode.DISABLED && !uiState.value.appAdaptationEnabled) {
+                prefsRepo.setAppAdaptationEnabled(true)
+            }
+            showToast("Адаптация: ${mode.title}")
+        }
+    }
+
+    fun cycleAppAdaptationMode(packageName: String) {
+        val cur = uiState.value.appAdaptationModes[packageName] ?: AppAdaptationMode.DISABLED
+        val next = when (cur) {
+            AppAdaptationMode.DISABLED -> AppAdaptationMode.STANDARD
+            AppAdaptationMode.STANDARD -> AppAdaptationMode.MESSENGER
+            AppAdaptationMode.MESSENGER -> AppAdaptationMode.DISABLED
+        }
+        setAppAdaptationMode(packageName, next)
+    }
+
+    fun grantOverlayAndAccessibilityViaShizuku() {
+        viewModelScope.launch {
+            val res = shizukuBridge.grantOverlayAndAccessibilityViaShizuku()
+            res.onSuccess {
+                showToast("Спец. возможности и Поверх окон включены через Shizuku")
+            }.onFailure { err ->
+                showToast(err.message ?: "Запустите Shizuku и повторите")
+            }
+        }
+    }
+
+    fun openAccessibilitySettings() {
+        runCatching {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            getApplication<Application>().startActivity(intent)
+        }
+    }
+
+    fun openOverlaySettings() {
+        val ctx = getApplication<Application>()
+        runCatching {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${ctx.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(intent)
+        }
+    }
+
+    // Streaming quick controls (Like, Dislike, My Wave)
+    fun likeStreamTrack() {
+        val pkg = uiState.value.mediaState.activeSession?.packageName
+        val ok = mediaRepo.triggerStreamingLike(pkg)
+        showToast(
+            if (ok) "Отметка «Нравится» отправлена"
+            else "Действие «Нравится» не поддерживается текущей сессией"
+        )
+    }
+
+    fun dislikeStreamTrack() {
+        val pkg = uiState.value.mediaState.activeSession?.packageName
+        val ok = mediaRepo.triggerStreamingDislike(pkg)
+        showToast(
+            if (ok) "Отметка «Не нравится» отправлена"
+            else "Действие «Не нравится» не поддерживается текущей сессией"
+        )
+    }
+
+    fun startMyWave() {
+        val pkg = uiState.value.mediaState.activeSession?.packageName
+        val ok = mediaRepo.triggerMyWave(pkg)
+        showToast(
+            if (ok) "Запуск «Моя Волна»…"
+            else "Откройте стриминг (Яндекс Музыка / YT Music) для «Моей Волны»"
+        )
+    }
+
+    // Language, UI Scale, Player Cover Style & OEM Gesture Bypass
+    fun setAppLanguage(language: AppLanguage) {
+        viewModelScope.launch {
+            prefsRepo.setAppLanguage(language)
+        }
+    }
+
+    fun setUiScale(scale: Float) {
+        viewModelScope.launch {
+            prefsRepo.setUiScale(scale)
+        }
+    }
+
+    fun setPlayerCoverStyle(style: PlayerCoverStyle) {
+        viewModelScope.launch {
+            prefsRepo.setPlayerCoverStyle(style)
+        }
+    }
+
+    fun toggleOemGestureBypass() {
+        val target = !uiState.value.shizukuState.oemGestureBypassEnabled
+        viewModelScope.launch {
+            prefsRepo.setOemGestureBypassEnabled(target)
+            shizukuBridge.applyOemGestureBypass(target)
+            showToast(
+                if (target) "Обход блокировки жестов OEM включён"
+                else "Обход блокировки жестов OEM выключен"
+            )
+        }
+    }
+
+    // Embedded Adaptation & Messenger Dual-Search
+    fun toggleMessengerSearchMode() {
+        val next = if (_messengerSearchMode.value == GlobalSearchMode.APPS_AND_FILES) {
+            GlobalSearchMode.MESSENGER_SEARCH
+        } else {
+            GlobalSearchMode.APPS_AND_FILES
+        }
+        _messengerSearchMode.value = next
+    }
+
+    fun sendFileToMessenger(file: DeviceSearchFile, targetPackage: String) {
+        if (!universalSearchRepo.sendFileToPackage(file, targetPackage)) {
+            showToast("Не удалось отправить ${file.name}")
+        }
+    }
+
+    fun launchMusicSearchMatch(match: MusicStreamMatch) {
+        if (match.isLocalTrack && match.localTrack != null) {
+            playLocalAudioTrack(match.localTrack)
+            return
+        }
+        if (match.queueItemId != null) {
+            val targetSession = uiState.value.mediaState.sessions.firstOrNull { it.packageName == match.packageName }
+            if (targetSession != null) {
+                mediaRepo.selectSession(targetSession.id)
+                mediaRepo.skipToQueueItem(match.queueItemId)
+                return
+            }
+        }
+        if (match.mediaId != null) {
+            playBrowserTrack(
+                MediaBrowserTrack(
+                    mediaId = match.mediaId,
+                    packageName = match.packageName,
+                    appLabel = match.appLabel,
+                    title = match.title,
+                    subtitle = match.subtitle
+                )
+            )
+            return
+        }
+        searchAndPlayInActiveStream(_appSearchQuery.value, match.packageName)
+    }
+
+    fun sendAdaptationCommand(cmd: AdaptationCommand) {
+        AppAdaptationRuntime.sendCommand(cmd)
+    }
+
+    fun disableEmbeddedAdaptation(packageName: String) {
+        AppAdaptationRuntime.sendCommand(AdaptationCommand.DisablePackage(packageName))
+        showToast("Перерисовка отключена для $packageName")
+    }
+
+    fun restoreAdaptedApp(packageName: String) {
+        launchPackage(packageName)
+    }
+
+    fun dismissEmbeddedSnapshot() {
+        AppAdaptationRuntime.updateEmbeddedSnapshot(null)
+    }
+
+    // BlackBerry OS 10 / KEY2 Active Frames Recents System
+    fun openRecentsOverlay() {
+        _focusedRecentIndex.value = 0
+        _showRecentsOverlay.value = true
+        refreshRecentFrames()
+    }
+
+    fun closeRecentsOverlay() {
+        _showRecentsOverlay.value = false
+    }
+
+    fun toggleRecentsOverlay() {
+        if (_showRecentsOverlay.value) {
+            closeRecentsOverlay()
+        } else {
+            openRecentsOverlay()
+        }
+    }
+
+    fun moveRecentsFocus(dx: Int, dy: Int, columns: Int) {
+        val list = _recentFrames.value
+        if (list.isEmpty()) return
+        val cols = columns.coerceAtLeast(1)
+        val cur = _focusedRecentIndex.value.coerceIn(0, list.lastIndex)
+        _focusedRecentIndex.value = (cur + dx + dy * cols).coerceIn(0, list.lastIndex)
+    }
+
+    fun activateFocusedRecentFrame() {
+        val frame = _recentFrames.value.getOrNull(_focusedRecentIndex.value) ?: return
+        launchRecentFrame(frame)
+    }
+
+    fun refreshRecentFrames() {
+        viewModelScope.launch {
+            val state = uiState.value
+            val pinned = state.pinnedRecentPackages
+            val history = RecentForegroundTracker.snapshotRecentHistory()
+            val historyMap = history.toMap()
+            val privilegedPkgs = shizukuBridge.queryRecentPackagesViaPrivilegedOrRoot()
+
+            val orderedPkgs = linkedSetOf<String>()
+            pinned.forEach { orderedPkgs.add(it) }
+            history.forEach { (pkg, _) -> orderedPkgs.add(pkg) }
+            privilegedPkgs.forEach { orderedPkgs.add(it) }
+            state.mediaState.sessions
+                .map { it.packageName }
+                .filter { it.isNotBlank() && it != getApplication<Application>().packageName }
+                .forEach { orderedPkgs.add(it) }
+
+            val appsByPkg = state.allApps.associateBy { it.packageName }
+            val frames = orderedPkgs.mapNotNull { pkg ->
+                if (pkg == getApplication<Application>().packageName) return@mapNotNull null
+                val app = appsByPkg[pkg]
+                val session = state.mediaState.sessions.firstOrNull { it.packageName == pkg }
+                val notif = state.hubNotifications.firstOrNull { it.packageName == pkg }
+                val label = app?.label ?: session?.appLabel ?: notif?.appName ?: return@mapNotNull null
+                val previewTitle = when {
+                    session != null -> session.title
+                    notif != null -> notif.title.ifBlank { label }
+                    else -> label
+                }
+                val previewSub = when {
+                    session != null -> session.artist.ifBlank { session.appLabel }
+                    notif != null -> notif.text
+                    else -> app?.packageName ?: pkg
+                }
+                RecentAppFrame(
+                    packageName = pkg,
+                    activityName = app?.activityName,
+                    appLabel = label,
+                    icon = app?.icon,
+                    lastActiveMs = historyMap[pkg] ?: notif?.postTime ?: 0L,
+                    previewTitle = previewTitle,
+                    previewSubtitle = previewSub,
+                    badgeText = if (session?.isPlaying == true) "▶" else "",
+                    isPinned = pinned.contains(pkg),
+                    isPlayingMedia = session?.isPlaying == true
+                )
+            }.sortedWith(
+                compareByDescending<RecentAppFrame> { it.isPinned }
+                    .thenByDescending { it.isPlayingMedia }
+                    .thenByDescending { it.lastActiveMs }
+            )
+            _recentFrames.value = frames
+            if (frames.isEmpty()) {
+                _focusedRecentIndex.value = 0
+            } else {
+                _focusedRecentIndex.value = _focusedRecentIndex.value.coerceIn(0, frames.lastIndex)
+            }
+        }
+    }
+
+    fun togglePinRecentFrame(packageName: String) {
+        viewModelScope.launch {
+            prefsRepo.togglePinRecentPackage(packageName)
+            delay(60L)
+            refreshRecentFrames()
+        }
+    }
+
+    fun launchRecentFrame(frame: RecentAppFrame) {
+        _showRecentsOverlay.value = false
+        launchPackage(frame.packageName)
+    }
+
+    fun openRecentFrameInfo(frame: RecentAppFrame) {
+        _showRecentsOverlay.value = false
+        appsRepo.openAppInfo(frame.packageName)
+    }
+
+    fun closeRecentFrame(frame: RecentAppFrame) {
+        viewModelScope.launch {
+            RecentForegroundTracker.removeFromHistory(frame.packageName)
+            val am = getApplication<Application>().getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            runCatching { am?.killBackgroundProcesses(frame.packageName) }
+            val shizuku = uiState.value.shizukuState
+            if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
+                shizukuBridge.forceStopPackagesViaShizuku(listOf(frame.packageName))
+            }
+            if (uiState.value.embeddedSnapshot?.packageName == frame.packageName) {
+                AppAdaptationRuntime.updateEmbeddedSnapshot(null)
+            }
+            _recentFrames.value = _recentFrames.value.filterNot { it.packageName == frame.packageName }
+            showToast("Закрыто: ${frame.appLabel}")
+        }
+    }
+
+    fun closeAllRecentsExceptPinned() {
+        viewModelScope.launch {
+            val pinned = uiState.value.pinnedRecentPackages
+            val targets = _recentFrames.value.map { it.packageName }.filterNot { pinned.contains(it) }
+            RecentForegroundTracker.clearHistoryExcept(pinned)
+            val am = getApplication<Application>().getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            targets.forEach { pkg -> runCatching { am?.killBackgroundProcesses(pkg) } }
+            val shizuku = uiState.value.shizukuState
+            if (targets.isNotEmpty() && ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable)) {
+                shizukuBridge.forceStopPackagesViaShizuku(targets)
+            }
+            refreshRecentFrames()
+            showToast(
+                if (pinned.isNotEmpty()) "Очищено (закреплённые сохранены: ${pinned.size})"
+                else "Недавние приложения очищены"
             )
         }
     }

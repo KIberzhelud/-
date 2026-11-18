@@ -22,15 +22,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Wallpaper
+import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,8 +59,13 @@ import androidx.compose.ui.window.Dialog
 import com.example.data.AutoCloseManager
 import com.example.data.KeyboardSearchMatcher
 import com.example.model.AppEntry
+import com.example.model.AppLanguage
+import com.example.model.PlayerCoverStyle
 import com.example.model.UiThemeColor
 import com.example.model.WallpaperPaletteData
+import com.example.ui.L10n
+import com.example.ui.LocalAppLang
+import kotlin.math.roundToInt
 import com.example.ui.theme.CallIncomingGreen
 import com.example.ui.theme.CallMissedRed
 import com.example.ui.theme.LocalVistaTheme
@@ -76,18 +84,25 @@ fun AppearanceSettingsDialog(
     hasWallpaper: Boolean,
     wallpaperBitmap: ImageBitmap?,
     wallpaperPalette: WallpaperPaletteData?,
+    appLanguage: AppLanguage = AppLanguage.RU,
+    uiScale: Float = 1.0f,
+    playerCoverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
     onSelectThemeColor: (UiThemeColor) -> Unit,
     onPickWallpaper: () -> Unit,
     onClearWallpaper: () -> Unit,
+    onSelectLanguage: (AppLanguage) -> Unit = {},
+    onChangeUiScale: (Float) -> Unit = {},
+    onSelectCoverStyle: (PlayerCoverStyle) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
+    val lang = LocalAppLang.current
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 560.dp)
+                .heightIn(max = 600.dp)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("appearance_settings_dialog")
         ) {
@@ -99,7 +114,7 @@ fun AppearanceSettingsDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Icon(
                         imageVector = Icons.Rounded.Palette,
                         contentDescription = null,
@@ -108,9 +123,11 @@ fun AppearanceSettingsDialog(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "ОБОИ, СТЕКЛО И ЦВЕТ ТЕМЫ",
+                        text = L10n.appearanceTitle(lang).uppercase(),
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = theme.focusBorder
+                        color = theme.focusBorder,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Box(
@@ -249,7 +266,7 @@ fun AppearanceSettingsDialog(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         ThemeColorChoiceCard(
-                            title = "Синий",
+                            title = if (lang == AppLanguage.RU) "Синий" else "Blue",
                             subtitle = "Vista Aero",
                             swatchTop = Color(0xFF2777C7),
                             swatchBottom = Color(0xFF0A2444),
@@ -260,7 +277,7 @@ fun AppearanceSettingsDialog(
                                 .testTag("theme_color_blue")
                         )
                         ThemeColorChoiceCard(
-                            title = "Серый",
+                            title = if (lang == AppLanguage.RU) "Серый" else "Gray",
                             subtitle = "Graphite",
                             swatchTop = Color(0xFF5D6572),
                             swatchBottom = Color(0xFF1A1D22),
@@ -270,6 +287,212 @@ fun AppearanceSettingsDialog(
                                 .weight(1f)
                                 .testTag("theme_color_gray")
                         )
+                    }
+                }
+
+                // 3. Language (RU / EN)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Language,
+                            contentDescription = null,
+                            tint = theme.accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = L10n.languageLabel(lang).uppercase(),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = theme.focusBorder
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AppLanguage.entries.forEach { option ->
+                            val selected = appLanguage == option
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .vistaAeroButton(isPrimary = selected, isActive = selected)
+                                    .clickable { onSelectLanguage(option) }
+                                    .padding(vertical = 8.dp, horizontal = 8.dp)
+                                    .testTag("lang_option_${option.code}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = option.title,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    ),
+                                    color = if (selected) Color.White else TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 4. UI Scale Slider (80% - 130%)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.ZoomIn,
+                                contentDescription = null,
+                                tint = theme.accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "${L10n.scaleLabel(lang).uppercase()} (${(uiScale * 100f).roundToInt()}%)",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = theme.focusBorder
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton()
+                                .clickable { onChangeUiScale(1.0f) }
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                                .testTag("ui_scale_reset_button")
+                        ) {
+                            Text(
+                                text = "100%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                    val clampedScale = uiScale.coerceIn(0.80f, 1.30f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 32.dp, height = 28.dp)
+                                .vistaAeroButton()
+                                .clickable {
+                                    val next = (((clampedScale - 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    onChangeUiScale(next)
+                                }
+                                .testTag("ui_scale_minus_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "−",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = TextPrimary
+                            )
+                        }
+                        VistaSlider(
+                            value = clampedScale,
+                            onValueChange = { raw ->
+                                val stepped = ((raw * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                onChangeUiScale(stepped)
+                            },
+                            valueRange = 0.80f..1.30f,
+                            tickCount = 11,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("ui_scale_slider")
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(width = 32.dp, height = 28.dp)
+                                .vistaAeroButton()
+                                .clickable {
+                                    val next = (((clampedScale + 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    onChangeUiScale(next)
+                                }
+                                .testTag("ui_scale_plus_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "+",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = TextPrimary
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 38.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("80%", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = TextMuted)
+                        Text("100%", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = theme.accent)
+                        Text("130%", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = TextMuted)
+                    }
+                }
+
+                // 5. Player Cover Style (Cover vs Spinning Disc)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Album,
+                            contentDescription = null,
+                            tint = theme.accent,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = L10n.playerStyleLabel(lang).uppercase(),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = theme.focusBorder
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PlayerCoverStyle.entries.forEach { style ->
+                            val selected = playerCoverStyle == style
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .vistaAeroButton(isPrimary = selected, isActive = selected)
+                                    .clickable { onSelectCoverStyle(style) }
+                                    .padding(vertical = 8.dp, horizontal = 8.dp)
+                                    .testTag("cover_style_${style.name.lowercase()}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = L10n.coverStyle(lang, style),
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    ),
+                                    color = if (selected) Color.White else TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -341,6 +564,7 @@ fun AutoKillSettingsDialog(
     autoKillPackages: Set<String>,
     allApps: List<AppEntry>,
     shizukuReady: Boolean,
+    isRootAvailable: Boolean = false,
     onToggleEnabled: () -> Unit,
     onTogglePackage: (String) -> Unit,
     onDismiss: () -> Unit
@@ -430,14 +654,16 @@ fun AutoKillSettingsDialog(
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                             color = TextPrimary
                         )
+                        val privilegedReady = shizukuReady || isRootAvailable
                         Text(
-                            text = if (shizukuReady) {
-                                "Shizuku активен: выполняется полный force-stop без зависания в ОЗУ."
-                            } else {
-                                "Очищает фоновые процессы при возврате в лаунчер (с Shizuku — полный force-stop)."
+                            text = when {
+                                shizukuReady && isRootAvailable -> "Shizuku + Root активны: выполняется полный force-stop без зависания в ОЗУ."
+                                shizukuReady -> "Shizuku активен: выполняется полный force-stop без зависания в ОЗУ."
+                                isRootAvailable -> "Root активен: выполняется полный su am force-stop без зависания в ОЗУ."
+                                else -> "Очищает фоновые процессы при возврате в лаунчер (с Shizuku или Root — полный force-stop)."
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (shizukuReady) CallIncomingGreen else TextMuted
+                            color = if (privilegedReady) CallIncomingGreen else TextMuted
                         )
                     }
                     Spacer(Modifier.width(8.dp))

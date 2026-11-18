@@ -26,9 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.data.writer.BookEntity
-import com.example.ui.theme.CallMissedRed
-import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.FocusBorderCyan
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -41,6 +39,7 @@ fun CreateBookDialog(
     onDismiss: () -> Unit,
     onCreate: (title: String, author: String, genre: String) -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     var title by remember { mutableStateOf("") }
     var author by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf("") }
@@ -61,7 +60,7 @@ fun CreateBookDialog(
                 Text(
                     text = "НОВАЯ КНИГА",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = FocusBorderCyan
+                    color = theme.focusBorder
                 )
             }
             Column(
@@ -114,6 +113,7 @@ fun EditBookMetaDialog(
     onSave: (title: String, author: String, genre: String) -> Unit,
     onDeleteBook: () -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     var title by remember(book.id) { mutableStateOf(book.title) }
     var author by remember(book.id) { mutableStateOf(book.author) }
     var genre by remember(book.id) { mutableStateOf(book.genre) }
@@ -134,7 +134,7 @@ fun EditBookMetaDialog(
                 Text(
                     text = "ПАРАМЕТРЫ КНИГИ",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = FocusBorderCyan
+                    color = theme.focusBorder
                 )
             }
             Column(
@@ -187,6 +187,7 @@ fun AddChapterDialog(
     onDismiss: () -> Unit,
     onCreate: (title: String) -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     var title by remember { mutableStateOf("Глава $suggestedNumber") }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -205,7 +206,7 @@ fun AddChapterDialog(
                 Text(
                     text = "НОВАЯ ГЛАВА",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = FocusBorderCyan
+                    color = theme.focusBorder
                 )
             }
             Column(
@@ -247,6 +248,7 @@ private fun VistaLabeledInput(
     placeholder: String,
     inputModifier: Modifier = Modifier
 ) {
+    val theme = LocalVistaTheme.current
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = TextSecondary)
         Box(
@@ -263,7 +265,7 @@ private fun VistaLabeledInput(
                 onValueChange = onValueChange,
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                cursorBrush = SolidColor(ElectricCyan),
+                cursorBrush = SolidColor(theme.accent),
                 modifier = inputModifier.fillMaxWidth()
             )
         }

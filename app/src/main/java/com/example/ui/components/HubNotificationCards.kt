@@ -378,29 +378,37 @@ fun HubNotificationCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ShizukuControlPanelCard(
     shizukuState: ShizukuState,
     onRequestShizukuPermission: () -> Unit,
     onOpenShizukuApp: () -> Unit,
     onGrantNotificationAccessViaShizuku: () -> Unit,
+    onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
+    onOpenOptimizationSettings: () -> Unit = {},
+    onOpenAdaptationSettings: () -> Unit = {},
     onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
+    onToggleOemGestureBypass: () -> Unit = {},
     onPreviewLockScreen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val verText = if (shizukuState.shizukuVersion > 0) " v${shizukuState.shizukuVersion}" else ""
     val statusText = when {
-        shizukuState.isBinderAlive && shizukuState.isPermissionGranted -> "Активен и разрешён"
-        shizukuState.isBinderAlive -> "Сервис запущен (нужно разрешение)"
-        shizukuState.isInstalled -> "Установлен, сервис не запущен"
-        else -> "Приложение Shizuku не установлено"
+        shizukuState.isBinderAlive && shizukuState.isPermissionGranted -> "Shizuku активен$verText и разрешён"
+        shizukuState.isRootAvailable -> "Root (su) активен • Shizuku не обязателен"
+        shizukuState.isBinderAlive -> "Сервис Shizuku запущен$verText (нужно разрешение)"
+        shizukuState.isInstalled -> "Shizuku установлен, сервис не запущен"
+        else -> "Shizuku и Root не обнаружены"
     }
     val statusColor = when {
-        shizukuState.isBinderAlive && shizukuState.isPermissionGranted -> CallIncomingGreen
+        (shizukuState.isBinderAlive && shizukuState.isPermissionGranted) || shizukuState.isRootAvailable -> CallIncomingGreen
         shizukuState.isBinderAlive -> MusicSourceAmber
         else -> TextMuted
     }
+    val hasPrivileged = (shizukuState.isBinderAlive && shizukuState.isPermissionGranted) || shizukuState.isRootAvailable
 
     Column(
         modifier = modifier
@@ -416,7 +424,7 @@ fun ShizukuControlPanelCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Image(
                     painter = painterResource(R.drawable.ic_symbian_shizuku),
                     contentDescription = "Shizuku",
@@ -425,14 +433,16 @@ fun ShizukuControlPanelCard(
                 Spacer(Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "SHIZUKU & ПЕРЕХВАТ",
+                        text = "SHIZUKU, ROOT & ПЕРЕХВАТ",
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = theme.focusBorder
                     )
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.labelSmall,
-                        color = statusColor
+                        color = statusColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -441,7 +451,7 @@ fun ShizukuControlPanelCard(
                 VistaButton(
                     text = if (shizukuState.isBinderAlive && !shizukuState.isPermissionGranted) {
                         "Разрешить"
-                    } else if (shizukuState.isPermissionGranted) {
+                    } else if (shizukuState.isPermissionGranted || shizukuState.isRootAvailable) {
                         "Проверить"
                     } else {
                         "Запустить"
@@ -453,9 +463,9 @@ fun ShizukuControlPanelCard(
                     },
                     modifier = Modifier.testTag("shizuku_connect_button")
                 )
-                if (shizukuState.isPermissionGranted && !shizukuState.isNotificationListenerGranted) {
+                if (hasPrivileged && !shizukuState.isNotificationListenerGranted) {
                     VistaButton(
-                        text = "Доступ",
+                        text = "Уведомл.",
                         onClick = onGrantNotificationAccessViaShizuku,
                         modifier = Modifier.testTag("shizuku_grant_listener_button")
                     )
@@ -467,6 +477,88 @@ fun ShizukuControlPanelCard(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                ShizukuStatusChip(
+                    label = if (shizukuState.isRootAvailable) "Root (su): Найден" else "Root: Нет",
+                    ok = shizukuState.isRootAvailable
+                )
+                ShizukuStatusChip(
+                    label = if (shizukuState.isNotificationListenerGranted) "Уведомления: OK" else "Уведомления: Выкл",
+                    ok = shizukuState.isNotificationListenerGranted
+                )
+                ShizukuStatusChip(
+                    label = if (shizukuState.isAccessibilityEnabled) "Спец. возм.: OK" else "Спец. возм.: Выкл",
+                    ok = shizukuState.isAccessibilityEnabled
+                )
+                ShizukuStatusChip(
+                    label = if (shizukuState.hasOverlayPermission) "Поверх окон: OK" else "Поверх окон: Выкл",
+                    ok = shizukuState.hasOverlayPermission
+                )
+            }
+
+            if (hasPrivileged && (!shizukuState.isAccessibilityEnabled || !shizukuState.hasOverlayPermission)) {
+                VistaButton(
+                    text = "Выдать Спец. возм. и Поверх окон (Shizuku/Root)",
+                    isPrimary = true,
+                    onClick = onGrantOverlayAndAccessibilityViaShizuku,
+                    modifier = Modifier.testTag("shizuku_grant_a11y_overlay_button")
+                )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable(onClick = onOpenOptimizationSettings)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Оптимизация и Фон YouTube", style = MaterialTheme.typography.labelSmall, color = theme.accent)
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable(onClick = onOpenAdaptationSettings)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("Адаптация приложений", style = MaterialTheme.typography.labelSmall, color = theme.accent)
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .vistaInsetBox()
+                    .clickable(onClick = onToggleOemGestureBypass)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Обход блокировки жестов (Xiaomi/HyperOS/OEM)",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Включает жестовые края снизу/слева и force_fsg_nav_bar без системного отката",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                VistaSwitch(
+                    checked = shizukuState.oemGestureBypassEnabled,
+                    onCheckedChange = { onToggleOemGestureBypass() },
+                    modifier = Modifier.testTag("vista_switch_oem_gesture_bypass")
+                )
+            }
+
             // Vista Switch 1: Intercept notification shade
             Row(
                 modifier = Modifier
@@ -535,6 +627,27 @@ fun ShizukuControlPanelCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ShizukuStatusChip(label: String, ok: Boolean) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(3.dp))
+            .background(if (ok) CallIncomingGreen.copy(alpha = 0.16f) else MusicSourceAmber.copy(alpha = 0.14f))
+            .border(
+                1.dp,
+                if (ok) CallIncomingGreen.copy(alpha = 0.55f) else MusicSourceAmber.copy(alpha = 0.5f),
+                RoundedCornerShape(3.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+            color = if (ok) CallIncomingGreen else MusicSourceAmber
+        )
     }
 }
 

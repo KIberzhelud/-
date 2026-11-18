@@ -59,9 +59,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.material.icons.rounded.Headset
+import androidx.compose.material.icons.rounded.ViewQuilt
 import com.example.R
 import com.example.data.SymbianIconMapper
 import com.example.data.UniversalSearchRepository
+import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
 import com.example.model.DeviceSearchFile
@@ -85,10 +88,14 @@ import com.example.ui.theme.vistaWindowFrame
 fun AppContextDialog(
     app: AppEntry,
     isAutoKill: Boolean,
+    adaptationMode: AppAdaptationMode = AppAdaptationMode.DISABLED,
+    isBackgroundSpoofed: Boolean = false,
     onDismiss: () -> Unit,
     onLaunch: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleAutoKill: () -> Unit,
+    onCycleAdaptationMode: () -> Unit = {},
+    onToggleBackgroundSpoof: () -> Unit = {},
     onRename: () -> Unit,
     onChooseIcon: () -> Unit,
     onShareApk: () -> Unit,
@@ -176,6 +183,29 @@ fun AppContextDialog(
                         onDismiss()
                     },
                     modifier = Modifier.testTag("context_toggle_autokill")
+                )
+                ContextActionRow(
+                    icon = Icons.Rounded.ViewQuilt,
+                    label = "Адаптация UI: ${adaptationMode.shortTitle}",
+                    tint = if (adaptationMode != AppAdaptationMode.DISABLED) CallIncomingGreen else theme.accent,
+                    onClick = {
+                        onCycleAdaptationMode()
+                    },
+                    modifier = Modifier.testTag("context_cycle_adaptation")
+                )
+                ContextActionRow(
+                    icon = Icons.Rounded.Headset,
+                    label = if (isBackgroundSpoofed) {
+                        "Фоновый звук/обход паузы: ВКЛ ✓"
+                    } else {
+                        "Разрешить звук в фоне (обход паузы)"
+                    },
+                    tint = if (isBackgroundSpoofed) CallIncomingGreen else TextSecondary,
+                    onClick = {
+                        onToggleBackgroundSpoof()
+                        onDismiss()
+                    },
+                    modifier = Modifier.testTag("context_toggle_bg_spoof")
                 )
                 ContextActionRow(
                     icon = Icons.Rounded.Edit,
@@ -685,14 +715,19 @@ fun KeyboardShortcutsDialog(
     onDismiss: () -> Unit
 ) {
     val shortcuts = listOf(
-        "Стрелки / D-Pad" to "Навигация по плиткам приложений",
-        "Enter" to "Запуск выбранного приложения / вызов",
-        "Любая буква / цифра" to "Универсальный поиск: приложения, фото, файлы и интернет",
-        "Esc" to "Сброс поиска и возврат к списку",
+        "F1 / F2 / F3" to "Вкладки лаунчера: Главная / Звонки (+подвкладки) / Хаб (+подвкладки)",
+        "F4" to "Редактор книг (план, главы, .docx) и заметок (.txt)",
+        "F5" to "Выдвижная панель плеера и треков",
+        "F6" to "Быстрый запуск Камеры",
+        "F1–F6 (внешнее приложение)" to "Переключение вкладок в режиме адаптации приложений",
+        "Стрелки / D-Pad" to "Навигация по плиткам (и по элементам в адаптированных приложениях)",
+        "Enter / Пробел" to "Запуск выбранного приложения / контакта / элемента",
+        "Ctrl + R / Щипок внутрь/наружу" to "Недавние приложения в стиле BlackBerry OS 10 / KEY2",
+        "Буквы / *apk / .pdf" to "Универсальный поиск: приложения, файлы (*расширение), музыка, фото, сеть",
+        "Esc" to "Сброс поиска, выход из книг/недавних, закрытие окон",
         "Alt + Буква" to "Переход к букве в алфавите Niagara",
         "Alt + L" to "Переключить алфавит (A-Z / А-Я)",
-        "Ctrl + 1 / 2 / 3" to "Главная / Звонки / Хаб",
-        "Ctrl + 4" to "Быстрый запуск Камеры",
+        "Ctrl + 1 / 2 / 3 / 4" to "Главная / Звонки / Хаб / Камера",
         "Ctrl + Пробел / Media" to "Пауза / Воспроизведение музыки",
         "Ctrl + ← / →" to "Предыдущий / Следующий трек",
         "Ctrl + ↑ / ↓" to "Громкость музыки + / -",
@@ -701,8 +736,8 @@ fun KeyboardShortcutsDialog(
         "Ctrl + D" to "Закрепить / открепить выбранное приложение",
         "Ctrl + N" to "Открыть шторку уведомлений или BlackBerry Хаб",
         "Зажатие Tab / Ctrl + E" to "Редактор книг (план, главы, .docx) и заметок (.txt)",
-        "Tab (короткое)" to "Переключить вкладку в Звонках / Хабе",
-        "F1 или Ctrl + /" to "Показать эту справку"
+        "Tab (короткое)" to "Переключить подвкладку в Звонках / Хабе",
+        "Shift + F1 / F12 / Ctrl + /" to "Показать эту справку"
     )
 
     Dialog(onDismissRequest = onDismiss) {

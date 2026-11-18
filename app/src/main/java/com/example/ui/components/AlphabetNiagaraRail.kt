@@ -26,12 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.StarOutline
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -111,18 +107,22 @@ fun FavoritesAndAlphabetRail(
                     .background(theme.chromeBorderOuter)
             )
 
-            // Favorites Column (Apps on HOME, Starred Contacts on CALLS)
-            Column(
-                modifier = Modifier
-                    .width(66.dp)
-                    .fillMaxHeight()
-                    .padding(vertical = 6.dp, horizontal = 3.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (activeTab == MainTab.CALLS) {
-                    if (starredContacts.isEmpty()) {
-                        EmptyFavoritesHint(text = "Избр.\nконт.")
-                    } else {
+            val showFavoritesColumn = when (activeTab) {
+                MainTab.CALLS -> starredContacts.isNotEmpty()
+                else -> favoriteApps.isNotEmpty()
+            }
+
+            // Favorites Column (only visible when at least one favorite app/contact exists)
+            if (showFavoritesColumn) {
+                Column(
+                    modifier = Modifier
+                        .width(66.dp)
+                        .fillMaxHeight()
+                        .padding(vertical = 6.dp, horizontal = 3.dp)
+                        .testTag("favorites_panel_column"),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (activeTab == MainTab.CALLS) {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -161,10 +161,6 @@ fun FavoritesAndAlphabetRail(
                                 }
                             }
                         }
-                    }
-                } else {
-                    if (favoriteApps.isEmpty()) {
-                        EmptyFavoritesHint(text = "Удерж.\nCtrl+D")
                     } else {
                         LazyColumn(
                             modifier = Modifier
@@ -321,49 +317,31 @@ fun FavoritesAndAlphabetRail(
         if (activeScrubLetter != null && activeIdx >= 0) {
             val fraction = (activeIdx + 0.5f) / letters.size.toFloat()
             val yPx = (fraction * scrubberHeightPx).roundToInt() - 40
-            Surface(
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .offset { IntOffset(x = -120, y = yPx.coerceAtLeast(16)) }
                     .size(54.dp)
-                    .border(1.5.dp, theme.accent, CircleShape),
-                shape = CircleShape,
-                color = theme.primaryButtonLowerMid,
-                shadowElevation = 8.dp
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = activeScrubLetter.toString(),
-                        style = MaterialTheme.typography.headlineSmall.copy(fontSize = 24.sp),
-                        color = TextPrimary
+                    .clip(CircleShape)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                theme.activeButtonTop,
+                                theme.activeButtonUpperMid,
+                                theme.activeButtonLowerMid,
+                                theme.activeButtonBottom
+                            )
+                        )
                     )
-                }
+                    .border(1.5.dp, theme.focusBorder, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = activeScrubLetter.toString(),
+                    style = MaterialTheme.typography.headlineSmall.copy(fontSize = 24.sp),
+                    color = TextPrimary
+                )
             }
         }
-    }
-}
-
-@Composable
-private fun EmptyFavoritesHint(text: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.StarOutline,
-            contentDescription = null,
-            tint = TextMuted,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-            color = TextMuted,
-            textAlign = TextAlign.Center
-        )
     }
 }

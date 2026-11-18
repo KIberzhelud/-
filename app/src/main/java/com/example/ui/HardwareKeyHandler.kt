@@ -1,11 +1,14 @@
 package com.example.ui
 
 import android.view.KeyEvent as AndroidKeyEvent
+import com.example.model.BookSectionTab
 import com.example.model.CallsSubTab
 import com.example.model.HubSubTab
 import com.example.model.MainTab
+import com.example.model.WriterSubTab
 import com.example.viewmodel.LauncherUiState
 import com.example.viewmodel.LauncherViewModel
+import com.example.viewmodel.WriterViewModel
 
 object HardwareKeyHandler {
 
@@ -23,7 +26,8 @@ object HardwareKeyHandler {
         event: AndroidKeyEvent,
         viewModel: LauncherViewModel,
         onClearTextFocus: () -> Unit,
-        onFocusAppSearch: () -> Unit
+        onFocusAppSearch: () -> Unit,
+        writerViewModel: WriterViewModel? = null
     ): Boolean {
         val state: LauncherUiState = viewModel.uiState.value
 
@@ -37,16 +41,28 @@ object HardwareKeyHandler {
         val hasAnyModalOpen = state.showMusicSheet ||
             state.showShortcutsDialog ||
             state.showAddLinkDialog ||
+            state.showAppearanceDialog ||
+            state.showAutoKillDialog ||
+            state.showOptimizationDialog ||
+            state.showAdaptationDialog ||
+            state.showBackgroundWebAudioDialog ||
             state.contextMenuApp != null ||
             state.contextMenuFile != null ||
             state.renameTargetApp != null ||
             state.iconPickerTargetApp != null
 
         if (hasAnyModalOpen) {
-            if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
+            if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE ||
+                (event.keyCode == AndroidKeyEvent.KEYCODE_F5 && state.showMusicSheet)
+            ) {
                 viewModel.setShowMusicSheet(false)
                 viewModel.setShowShortcutsDialog(false)
                 viewModel.setShowAddLinkDialog(false)
+                viewModel.setShowAppearanceDialog(false)
+                viewModel.setShowAutoKillDialog(false)
+                viewModel.setShowOptimizationDialog(false)
+                viewModel.setShowAdaptationDialog(false)
+                viewModel.setShowBackgroundWebAudioDialog(false)
                 viewModel.openContextMenu(null)
                 viewModel.openFileContextMenu(null)
                 viewModel.openRenameAppDialog(null)
@@ -56,7 +72,45 @@ object HardwareKeyHandler {
             return false
         }
 
-        // Global media & help keys (always work, even inside Writer Mode)
+        if (state.showRecentsOverlay) {
+            val recCols = if (viewModel.isLandscapeLayout) 3 else 2
+            when {
+                event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE -> {
+                    viewModel.closeRecentsOverlay()
+                    return true
+                }
+                event.isCtrlPressed && event.keyCode == AndroidKeyEvent.KEYCODE_R -> {
+                    viewModel.closeRecentsOverlay()
+                    return true
+                }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                    viewModel.moveRecentsFocus(-1, 0, recCols)
+                    return true
+                }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    viewModel.moveRecentsFocus(1, 0, recCols)
+                    return true
+                }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                    viewModel.moveRecentsFocus(0, -1, recCols)
+                    return true
+                }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                    viewModel.moveRecentsFocus(0, 1, recCols)
+                    return true
+                }
+                event.keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
+                    event.keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER ||
+                    event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+                    event.keyCode == AndroidKeyEvent.KEYCODE_SPACE -> {
+                    viewModel.activateFocusedRecentFrame()
+                    return true
+                }
+            }
+            return false
+        }
+
+        // Global media, F1-F6 tab keys & help keys
         when (event.keyCode) {
             AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             AndroidKeyEvent.KEYCODE_MEDIA_PLAY,
@@ -72,8 +126,74 @@ object HardwareKeyHandler {
                 viewModel.skipPrevious()
                 return true
             }
-            AndroidKeyEvent.KEYCODE_F1 -> {
+            AndroidKeyEvent.KEYCODE_F12 -> {
                 viewModel.setShowShortcutsDialog(true)
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F1 -> {
+                if (event.isShiftPressed) {
+                    viewModel.setShowShortcutsDialog(true)
+                    return true
+                }
+                if (state.isWriterModeOpen && writerViewModel != null) {
+                    writerViewModel.selectSubTab(WriterSubTab.BOOKS)
+                } else {
+                    viewModel.selectTab(MainTab.HOME)
+                }
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F2 -> {
+                if (state.isWriterModeOpen && writerViewModel != null) {
+                    writerViewModel.selectSubTab(WriterSubTab.NOTES)
+                } else if (state.activeTab == MainTab.CALLS && !state.isWriterModeOpen) {
+                    val next = if (state.callsSubTab == CallsSubTab.LOG) {
+                        CallsSubTab.CONTACTS
+                    } else {
+                        CallsSubTab.LOG
+                    }
+                    viewModel.selectCallsSubTab(next)
+                } else {
+                    viewModel.selectTab(MainTab.CALLS)
+                }
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F3 -> {
+                if (state.isWriterModeOpen && writerViewModel != null) {
+                    val curSection = writerViewModel.uiState.value.bookSectionTab
+                    val nextSection = when (curSection) {
+                        BookSectionTab.PLAN -> BookSectionTab.CHAPTERS
+                        BookSectionTab.CHAPTERS -> BookSectionTab.EDITOR
+                        BookSectionTab.EDITOR -> BookSectionTab.PLAN
+                    }
+                    writerViewModel.selectSubTab(WriterSubTab.BOOKS)
+                    writerViewModel.selectBookSection(nextSection)
+                } else if (state.activeTab == MainTab.HUB && !state.isWriterModeOpen) {
+                    val next = when (state.hubSubTab) {
+                        HubSubTab.CHATS -> HubSubTab.NEWS
+                        HubSubTab.NEWS -> HubSubTab.OTHER
+                        HubSubTab.OTHER -> HubSubTab.SETTINGS
+                        HubSubTab.SETTINGS -> HubSubTab.CHATS
+                    }
+                    viewModel.selectHubSubTab(next)
+                } else {
+                    viewModel.selectTab(MainTab.HUB)
+                }
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F4 -> {
+                if (state.isWriterModeOpen) {
+                    viewModel.closeWriterMode()
+                } else {
+                    viewModel.openWriterMode()
+                }
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F5 -> {
+                viewModel.toggleMusicDrawer()
+                return true
+            }
+            AndroidKeyEvent.KEYCODE_F6 -> {
+                viewModel.launchCamera()
                 return true
             }
             AndroidKeyEvent.KEYCODE_MENU -> {
@@ -108,6 +228,7 @@ object HardwareKeyHandler {
                     }
                 }
                 AndroidKeyEvent.KEYCODE_N -> { viewModel.expandNotificationShade(); return true }
+                AndroidKeyEvent.KEYCODE_R -> { viewModel.toggleRecentsOverlay(); return true }
                 AndroidKeyEvent.KEYCODE_F -> {
                     if (!state.isWriterModeOpen && state.activeTab == MainTab.HOME) {
                         onFocusAppSearch()
@@ -121,8 +242,12 @@ object HardwareKeyHandler {
             }
         }
 
-        // Inside Writer Studio Mode, let normal typing, arrows, Enter, Backspace pass to text editors
+        // Inside Writer Studio Mode, let Esc exit cleanly and pass other keys to text editors
         if (state.isWriterModeOpen) {
+            if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
+                viewModel.closeWriterMode()
+                return true
+            }
             return false
         }
 
@@ -171,6 +296,19 @@ object HardwareKeyHandler {
                     return true
                 }
             }
+            AndroidKeyEvent.KEYCODE_SPACE -> {
+                if (!event.isCtrlPressed &&
+                    !event.isAltPressed &&
+                    !viewModel.isAppSearchInputFocused &&
+                    !viewModel.isCallsSearchInputFocused &&
+                    state.appSearchQuery.isEmpty() &&
+                    state.callsSearchQuery.isEmpty() &&
+                    (state.activeTab != MainTab.HUB || state.hubSubTab != HubSubTab.CHATS)
+                ) {
+                    viewModel.activateFocusedItem()
+                    return true
+                }
+            }
             AndroidKeyEvent.KEYCODE_ESCAPE -> {
                 if (state.appSearchQuery.isNotEmpty() || state.callsSearchQuery.isNotEmpty() || state.highlightedLetter != null) {
                     viewModel.clearAllSearchOrHighlights()
@@ -201,7 +339,7 @@ object HardwareKeyHandler {
                             onFocusAppSearch()
                             return true
                         }
-                        if (ch.isLetterOrDigit() || ch == ' ') {
+                        if (ch.isLetterOrDigit() || ch == ' ' || ch == '*' || ch == '.') {
                             viewModel.appendAppSearchChar(ch)
                             return true
                         }
@@ -287,7 +425,8 @@ object HardwareKeyHandler {
                             val next = when (state.hubSubTab) {
                                 HubSubTab.CHATS -> HubSubTab.NEWS
                                 HubSubTab.NEWS -> HubSubTab.OTHER
-                                HubSubTab.OTHER -> HubSubTab.CHATS
+                                HubSubTab.OTHER -> HubSubTab.SETTINGS
+                                HubSubTab.SETTINGS -> HubSubTab.CHATS
                             }
                             viewModel.selectHubSubTab(next)
                         }

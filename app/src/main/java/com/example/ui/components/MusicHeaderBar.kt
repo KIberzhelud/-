@@ -1,7 +1,15 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -18,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -46,8 +55,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -64,6 +75,9 @@ import com.example.model.CallsSubTab
 import com.example.model.HubSubTab
 import com.example.model.MainTab
 import com.example.model.MediaPlayerState
+import com.example.model.PlayerCoverStyle
+import com.example.ui.L10n
+import com.example.ui.LocalAppLang
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
@@ -78,6 +92,7 @@ fun PortraitMusicHeaderBar(
     mediaState: MediaPlayerState,
     livePositionMs: Long,
     isDrawerOpen: Boolean,
+    coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
     onTogglePlayPause: () -> Unit,
     onSkipPrevious: () -> Unit,
     onSkipNext: () -> Unit,
@@ -90,6 +105,7 @@ fun PortraitMusicHeaderBar(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val lang = LocalAppLang.current
     val active = mediaState.activeSession
 
     Column(
@@ -139,6 +155,8 @@ fun PortraitMusicHeaderBar(
                 AlbumArtThumb(
                     artwork = active?.artwork,
                     size = 44.dp,
+                    coverStyle = coverStyle,
+                    isPlaying = active?.isPlaying == true,
                     modifier = Modifier.pointerInput(Unit) {
                         var dragX = 0f
                         var dragY = 0f
@@ -169,31 +187,27 @@ fun PortraitMusicHeaderBar(
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = active?.title ?: if (mediaState.isListenerGranted) {
-                            "Музыка не играет"
-                        } else {
-                            "Плеер (подключить)"
-                        },
+                        text = active?.title ?: L10n.noActiveTrack(lang),
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         ),
                         color = TextPrimary,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                     )
                     val subtitle = when {
                         active != null && active.artist.isNotEmpty() -> active.artist
                         active != null -> MediaControlRepository.formatTimeMs(livePositionMs)
-                        !mediaState.isListenerGranted -> "Свайп вниз — треки и настройки"
-                        else -> "Свайп вниз — список треков"
+                        !mediaState.isListenerGranted -> L10n.chooseServiceOrTg(lang)
+                        else -> L10n.chooseServiceOrTg(lang)
                     }
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
                         color = TextSecondary,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                     )
                     if (active != null) {
                         val multiSuffix = if (mediaState.sessions.size > 1) {
@@ -366,6 +380,7 @@ fun LandscapeSymbianSidebar(
     mediaState: MediaPlayerState,
     livePositionMs: Long,
     isDrawerOpen: Boolean,
+    coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
     activeTab: MainTab,
     callsSubTab: CallsSubTab,
     hubSubTab: HubSubTab,
@@ -385,6 +400,7 @@ fun LandscapeSymbianSidebar(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val lang = LocalAppLang.current
     val active = mediaState.activeSession
 
     Column(
@@ -403,8 +419,6 @@ fun LandscapeSymbianSidebar(
             Box(
                 modifier = Modifier
                     .size(64.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.55f), RoundedCornerShape(3.dp))
                     .pointerInput(Unit) {
                         var dragX = 0f
                         var triggered = false
@@ -428,7 +442,12 @@ fun LandscapeSymbianSidebar(
                     .testTag("landscape_music_art"),
                 contentAlignment = Alignment.Center
             ) {
-                AlbumArtThumb(artwork = active?.artwork, size = 64.dp)
+                AlbumArtThumb(
+                    artwork = active?.artwork,
+                    size = 64.dp,
+                    coverStyle = coverStyle,
+                    isPlaying = active?.isPlaying == true
+                )
             }
 
             Spacer(Modifier.height(5.dp))
@@ -465,12 +484,12 @@ fun LandscapeSymbianSidebar(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = active?.title ?: if (mediaState.isListenerGranted) "Нет трека" else "Подключить",
+                    text = active?.title ?: L10n.noActiveTrack(lang),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.5.sp),
                     color = TextPrimary,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                 )
                 if (active != null && active.artist.isNotEmpty()) {
                     Text(
@@ -479,11 +498,11 @@ fun LandscapeSymbianSidebar(
                         color = TextSecondary,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                     )
                 }
                 Text(
-                    text = if (active != null) "⇆ ${active.appLabel}" else "▶ Треки вбок",
+                    text = if (active != null) "⇆ ${active.appLabel}" else "▶",
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                     color = if (active != null) MusicSourceAmber else theme.accent,
                     textAlign = TextAlign.Center,
@@ -529,19 +548,20 @@ fun LandscapeSymbianSidebar(
                 }
             }
 
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(6.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = onSkipPrevious,
+                Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(width = 36.dp, height = 32.dp)
                         .vistaAeroButton()
-                        .testTag("landscape_music_prev")
+                        .clickable(onClick = onSkipPrevious)
+                        .testTag("landscape_music_prev"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipPrevious,
@@ -550,12 +570,13 @@ fun LandscapeSymbianSidebar(
                         modifier = Modifier.size(18.dp)
                     )
                 }
-                IconButton(
-                    onClick = onTogglePlayPause,
+                Box(
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(width = 40.dp, height = 34.dp)
                         .vistaAeroButton(isPrimary = true)
-                        .testTag("landscape_music_play_pause")
+                        .clickable(onClick = onTogglePlayPause)
+                        .testTag("landscape_music_play_pause"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
@@ -564,12 +585,13 @@ fun LandscapeSymbianSidebar(
                         modifier = Modifier.size(21.dp)
                     )
                 }
-                IconButton(
-                    onClick = onSkipNext,
+                Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(width = 36.dp, height = 32.dp)
                         .vistaAeroButton()
-                        .testTag("landscape_music_next")
+                        .clickable(onClick = onSkipNext)
+                        .testTag("landscape_music_next"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
@@ -580,16 +602,20 @@ fun LandscapeSymbianSidebar(
                 }
             }
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = onToggleMute,
-                    modifier = Modifier.size(28.dp)
+                Box(
+                    modifier = Modifier
+                        .size(width = 36.dp, height = 27.dp)
+                        .vistaAeroButton(isActive = mediaState.isMuted)
+                        .clickable(onClick = onToggleMute)
+                        .testTag("landscape_music_mute"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = if (mediaState.isMuted) {
@@ -603,9 +629,13 @@ fun LandscapeSymbianSidebar(
                     )
                 }
                 if (mediaState.sessions.size > 1) {
-                    IconButton(
-                        onClick = onCyclePlayer,
-                        modifier = Modifier.size(28.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(width = 36.dp, height = 27.dp)
+                            .vistaAeroButton()
+                            .clickable(onClick = onCyclePlayer)
+                            .testTag("landscape_music_switch"),
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.SwapHoriz,
@@ -615,11 +645,13 @@ fun LandscapeSymbianSidebar(
                         )
                     }
                 }
-                IconButton(
-                    onClick = onTogglePlayerDrawer,
+                Box(
                     modifier = Modifier
-                        .size(28.dp)
-                        .then(if (isDrawerOpen) Modifier.vistaAeroButton(isActive = true) else Modifier)
+                        .size(width = 36.dp, height = 27.dp)
+                        .vistaAeroButton(isActive = isDrawerOpen)
+                        .clickable(onClick = onTogglePlayerDrawer)
+                        .testTag("landscape_music_tune"),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Tune,
@@ -643,7 +675,7 @@ fun LandscapeSymbianSidebar(
             when (activeTab) {
                 MainTab.CALLS -> {
                     SideRailTabButton(
-                        label = "Журнал",
+                        label = L10n.callsSub(lang, CallsSubTab.LOG),
                         iconRes = R.drawable.ic_symbian_log,
                         selected = callsSubTab == CallsSubTab.LOG,
                         onClick = { onSelectCallsSubTab(CallsSubTab.LOG) },
@@ -651,7 +683,7 @@ fun LandscapeSymbianSidebar(
                     )
                     HorizontalDivider(color = theme.divider, thickness = 1.dp)
                     SideRailTabButton(
-                        label = "Контакты",
+                        label = L10n.callsSub(lang, CallsSubTab.CONTACTS),
                         iconRes = R.drawable.ic_symbian_contacts,
                         selected = callsSubTab == CallsSubTab.CONTACTS,
                         onClick = { onSelectCallsSubTab(CallsSubTab.CONTACTS) },
@@ -662,7 +694,7 @@ fun LandscapeSymbianSidebar(
 
                 MainTab.HUB -> {
                     SideRailTabButton(
-                        label = "Чаты",
+                        label = L10n.hubSub(lang, HubSubTab.CHATS),
                         iconRes = R.drawable.ic_symbian_messaging,
                         selected = hubSubTab == HubSubTab.CHATS,
                         onClick = { onSelectHubSubTab(HubSubTab.CHATS) },
@@ -670,7 +702,7 @@ fun LandscapeSymbianSidebar(
                     )
                     HorizontalDivider(color = theme.divider, thickness = 1.dp)
                     SideRailTabButton(
-                        label = "Новости",
+                        label = L10n.hubSub(lang, HubSubTab.NEWS),
                         iconRes = R.drawable.ic_symbian_web_news,
                         selected = hubSubTab == HubSubTab.NEWS,
                         onClick = { onSelectHubSubTab(HubSubTab.NEWS) },
@@ -678,11 +710,19 @@ fun LandscapeSymbianSidebar(
                     )
                     HorizontalDivider(color = theme.divider, thickness = 1.dp)
                     SideRailTabButton(
-                        label = "Прочее",
+                        label = L10n.hubSub(lang, HubSubTab.OTHER),
                         iconRes = R.drawable.ic_symbian_tools,
                         selected = hubSubTab == HubSubTab.OTHER,
                         onClick = { onSelectHubSubTab(HubSubTab.OTHER) },
                         modifier = Modifier.testTag("landscape_side_hub_other")
+                    )
+                    HorizontalDivider(color = theme.divider, thickness = 1.dp)
+                    SideRailTabButton(
+                        label = L10n.hubSub(lang, HubSubTab.SETTINGS),
+                        iconRes = R.drawable.ic_symbian_settings,
+                        selected = hubSubTab == HubSubTab.SETTINGS,
+                        onClick = { onSelectHubSubTab(HubSubTab.SETTINGS) },
+                        modifier = Modifier.testTag("landscape_side_hub_settings")
                     )
                     HorizontalDivider(color = theme.accent.copy(alpha = 0.35f), thickness = 1.5.dp)
                 }
@@ -691,7 +731,7 @@ fun LandscapeSymbianSidebar(
             }
 
             SideRailTabButton(
-                label = "Камера",
+                label = L10n.camera(lang),
                 iconRes = R.drawable.ic_symbian_camera,
                 selected = false,
                 onClick = onLaunchCamera,
@@ -699,7 +739,7 @@ fun LandscapeSymbianSidebar(
             )
             HorizontalDivider(color = theme.divider, thickness = 1.dp)
             SideRailTabButton(
-                label = "Главная",
+                label = L10n.tab(lang, MainTab.HOME),
                 iconRes = R.drawable.ic_symbian_menu,
                 selected = activeTab == MainTab.HOME,
                 onClick = { onSelectMainTab(MainTab.HOME) },
@@ -707,7 +747,7 @@ fun LandscapeSymbianSidebar(
             )
             HorizontalDivider(color = theme.divider, thickness = 1.dp)
             SideRailTabButton(
-                label = "Звонки",
+                label = L10n.tab(lang, MainTab.CALLS),
                 iconRes = R.drawable.ic_symbian_phone,
                 selected = activeTab == MainTab.CALLS,
                 onClick = { onSelectMainTab(MainTab.CALLS) },
@@ -715,7 +755,7 @@ fun LandscapeSymbianSidebar(
             )
             HorizontalDivider(color = theme.divider, thickness = 1.dp)
             SideRailTabButton(
-                label = "Хаб",
+                label = L10n.tab(lang, MainTab.HUB),
                 iconRes = R.drawable.ic_symbian_messaging,
                 selected = activeTab == MainTab.HUB,
                 onClick = { onSelectMainTab(MainTab.HUB) },
@@ -723,7 +763,7 @@ fun LandscapeSymbianSidebar(
             )
             HorizontalDivider(color = theme.divider, thickness = 1.dp)
             SideRailTabButton(
-                label = "Книги",
+                label = L10n.books(lang),
                 iconRes = R.drawable.ic_symbian_editor,
                 selected = false,
                 onClick = onOpenWriter,
@@ -798,30 +838,93 @@ private fun SideRailTabButton(
 fun AlbumArtThumb(
     artwork: androidx.compose.ui.graphics.ImageBitmap?,
     size: Dp,
+    coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
+    isPlaying: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
-    Box(
-        modifier = modifier
-            .size(size)
-            .clip(RoundedCornerShape(3.dp))
-            .background(theme.surfaceElevated)
-            .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.65f), RoundedCornerShape(3.dp)),
-        contentAlignment = Alignment.Center
-    ) {
-        if (artwork != null) {
-            Image(
-                bitmap = artwork,
-                contentDescription = "Обложка трека",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.matchParentSize()
-            )
-        } else {
-            Image(
-                painter = painterResource(R.drawable.ic_symbian_music),
-                contentDescription = null,
-                modifier = Modifier.size(size * 0.58f)
-            )
+    if (coverStyle == PlayerCoverStyle.DISC) {
+        val infiniteTransition = rememberInfiniteTransition(label = "disc_spin")
+        val angle by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "disc_angle"
+        )
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+                .rotate(if (isPlaying) angle else 0f)
+                .background(
+                    Brush.radialGradient(
+                        listOf(Color(0xFF1A222E), Color(0xFF0A0F16))
+                    )
+                )
+                .border(1.5.dp, theme.chromeInnerGlow.copy(alpha = 0.8f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (artwork != null) {
+                Image(
+                    bitmap = artwork,
+                    contentDescription = "Диск трека",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(size * 0.84f)
+                        .clip(CircleShape)
+                )
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.ic_symbian_music),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(size * 0.56f)
+                        .clip(CircleShape)
+                )
+            }
+            Canvas(modifier = Modifier.matchParentSize()) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.22f),
+                    radius = this.size.minDimension * 0.38f,
+                    style = Stroke(width = 1.dp.toPx())
+                )
+                drawCircle(
+                    color = Color(0xFF0E141D),
+                    radius = this.size.minDimension * 0.14f
+                )
+                drawCircle(
+                    color = theme.chromeInnerGlow.copy(alpha = 0.85f),
+                    radius = this.size.minDimension * 0.14f,
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+            }
+        }
+    } else {
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(RoundedCornerShape(3.dp))
+                .background(theme.surfaceElevated)
+                .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.65f), RoundedCornerShape(3.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (artwork != null) {
+                Image(
+                    bitmap = artwork,
+                    contentDescription = "Обложка трека",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.ic_symbian_music),
+                    contentDescription = null,
+                    modifier = Modifier.size(size * 0.58f)
+                )
+            }
         }
     }
 }

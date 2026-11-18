@@ -65,6 +65,7 @@ fun VistaSlider(
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
+    tickCount: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
     enabled: Boolean = true,
     compact: Boolean = false,
@@ -87,7 +88,12 @@ fun VistaSlider(
         return latestRange.start + frac * ((latestRange.endInclusive - latestRange.start).coerceAtLeast(0f))
     }
 
-    val heightDp = if (compact) 24.dp else 30.dp
+    val hasTicks = tickCount > 1
+    val heightDp = when {
+        compact -> 24.dp
+        hasTicks -> 34.dp
+        else -> 30.dp
+    }
 
     Canvas(
         modifier = modifier
@@ -117,7 +123,11 @@ fun VistaSlider(
         val hPad = if (compact) 6.dp.toPx() else 10.dp.toPx()
         val trackHeight = if (compact) 5.dp.toPx() else 6.dp.toPx()
         val trackWidth = (size.width - hPad * 2f).coerceAtLeast(4f)
-        val trackTop = (size.height - trackHeight) / 2f
+        val trackTop = if (hasTicks) {
+            ((size.height - trackHeight) / 2f - 3.dp.toPx()).coerceAtLeast(4.dp.toPx())
+        } else {
+            (size.height - trackHeight) / 2f
+        }
 
         // 1. Sunken Vista groove background
         drawRoundRect(
@@ -177,9 +187,26 @@ fun VistaSlider(
             style = Stroke(width = 1f)
         )
 
+        // Classic Vista Trackbar Tick Marks underneath groove
+        if (hasTicks) {
+            val tickTop = trackTop + trackHeight + 4.dp.toPx()
+            for (i in 0 until tickCount) {
+                val frac = i.toFloat() / (tickCount - 1).toFloat()
+                val tx = hPad + trackWidth * frac
+                val isMajor = i == 0 || i == tickCount - 1 || (tickCount % 2 == 1 && i == tickCount / 2)
+                val tickLen = if (isMajor) 5.dp.toPx() else 3.dp.toPx()
+                drawLine(
+                    color = if (isMajor) theme.accent.copy(alpha = 0.85f) else theme.insetBottomRim.copy(alpha = 0.6f),
+                    start = Offset(tx, tickTop),
+                    end = Offset(tx, tickTop + tickLen),
+                    strokeWidth = if (isMajor) 1.5f else 1.1f
+                )
+            }
+        }
+
         // 3. Classic Windows Vista Pointed Trackbar Thumb
         val thumbCx = hPad + activeWidth
-        val thumbCy = size.height / 2f
+        val thumbCy = trackTop + trackHeight / 2f
         val halfW = if (compact) 5.5.dp.toPx() else 6.5.dp.toPx()
         val topY = thumbCy - (if (compact) 7.dp.toPx() else 9.dp.toPx())
         val midY = thumbCy + (if (compact) 2.5.dp.toPx() else 3.5.dp.toPx())

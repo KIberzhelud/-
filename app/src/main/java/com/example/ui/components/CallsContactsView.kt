@@ -152,9 +152,13 @@ fun CallsContactsView(
                 ) {
                     if (searchQuery.isEmpty()) {
                         Text(
-                            text = "Поиск или номер…",
+                            text = if (highlightedLetter != null) {
+                                "Буква: $highlightedLetter • Поиск или номер…"
+                            } else {
+                                "Поиск или номер…"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted,
+                            color = if (highlightedLetter != null) theme.accent else TextMuted,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -245,7 +249,14 @@ fun CallsContactsView(
                         onClick = onRequestPermissions
                     )
                 } else if (contacts.isEmpty()) {
-                    EmptyCallsState(R.drawable.ic_symbian_contacts, "Контакты не найдены")
+                    EmptyCallsState(
+                        iconRes = R.drawable.ic_symbian_contacts,
+                        message = if (highlightedLetter != null) {
+                            "Контакты на букву «$highlightedLetter» не найдены"
+                        } else {
+                            "Контакты не найдены"
+                        }
+                    )
                 } else {
                     val cols = if (isLandscape) 3 else 2
                     LazyVerticalGrid(
@@ -259,12 +270,11 @@ fun CallsContactsView(
                             .testTag("contacts_grid")
                     ) {
                         itemsIndexed(contacts, key = { _, item -> "${item.id}_${item.number}" }) { idx, contact ->
-                            val matchesLetter = highlightedLetter != null && contact.initialChar == highlightedLetter
                             ContactTile(
                                 contact = contact,
                                 bucket = if (contact.isStarred) 1 else (idx % 2) + 2,
                                 isFocused = idx == focusedContactIndex,
-                                isHighlighted = matchesLetter,
+                                isHighlighted = false,
                                 onClick = { onCallClick(contact.number) }
                             )
                         }

@@ -28,12 +28,14 @@ import android.view.KeyEvent
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.app.NotificationManagerCompat
+import com.example.model.AppEntry
 import com.example.model.LocalAudioTrack
 import com.example.model.MediaBrowserTrack
 import com.example.model.MediaCustomActionItem
 import com.example.model.MediaPlayerState
 import com.example.model.MediaQueueTrack
 import com.example.model.MediaSessionUi
+import com.example.model.MusicStreamMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +53,67 @@ object MediaControlBus {
 
     fun notifyListenerChanged() {
         _listenerEvents.tryEmit(Unit)
+    }
+}
+
+object MediaGuardRuntime {
+    @Volatile
+    var isGuardEnabled: Boolean = false
+
+    @Volatile
+    var guardedPackages: Set<String> = emptySet()
+
+    @Volatile
+    var lastUserPausedPackage: String? = null
+
+    @Volatile
+    var lastUserPausedAtMs: Long = 0L
+
+    @Volatile
+    var onUnexpectedPauseDetected: ((packageName: String) -> Unit)? = null
+
+    private val wasPlayingPackages = ConcurrentHashMap<String, Boolean>()
+
+    fun recordUserPause(packageName: String) {
+        lastUserPausedPackage = packageName
+        lastUserPausedAtMs = SystemClock.elapsedRealtime()
+        wasPlayingPackages[packageName] = false
+    }
+
+    fun recordUserPlay(packageName: String) {
+        if (lastUserPausedPackage == packageName) {
+            lastUserPausedPackage = null
+        }
+        wasPlayingPackages[packageName] = true
+    }
+
+    fun onSessionPlaybackState(packageName: String, state: Int) {
+        val playingNow = state == PlaybackState.STATE_PLAYING || state == PlaybackState.STATE_BUFFERING
+        val prevPlaying = wasPlayingPackages.put(packageName, playingNow) == true
+        if (!isGuardEnabled || !guardedPackages.contains(packageName)) return
+
+        if (prevPlaying && state == PlaybackState.STATE_PAUSED) {
+            val elapsedSinceUserPause = SystemClock.elapsedRealtime() - lastUserPausedAtMs
+            val isIntentionalUserPause = lastUserPausedPackage == packageName && elapsedSinceUserPause < 4500L
+            if (!isIntentionalUserPause) {
+                onUnexpectedPauseDetected?.invoke(packageName)
+            }
+        }
+    }
+
+    fun isDefaultSpoilerCandidate(packageName: String): Boolean {
+        val pkg = packageName.lowercase()
+        return pkg.contains("youtube") ||
+            pkg.contains("revanced") ||
+            pkg.contains("vanced") ||
+            pkg.contains("vkvideo") ||
+            pkg == "com.vkontakte.android" ||
+            pkg.contains("rutube") ||
+            pkg.contains("newpipe") ||
+            pkg.contains("twitch") ||
+            pkg.contains("chrome") ||
+            pkg.contains("yandex.browser") ||
+            pkg.contains("opera")
     }
 }
 
@@ -409,8 +472,10 @@ class MediaControlRepository(private val context: Context) {
         if (controller != null) {
             val playing = controller.playbackState?.state == PlaybackState.STATE_PLAYING
             if (playing) {
+                MediaGuardRuntime.recordUserPause(controller.packageName)
                 controller.transportControls.pause()
             } else {
+                MediaGuardRuntime.recordUserPlay(controller.packageName)
                 controller.transportControls.play()
             }
         } else {
@@ -421,6 +486,21 @@ class MediaControlRepository(private val context: Context) {
                 dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
             }
         }
+    }
+
+    fun forceResumePackagePlayback(packageName: String): Boolean {
+        var dispatched = false
+        controllers.values
+            .filter { it.packageName == packageName }
+            .forEach { ctrl ->
+                runCatching {
+                    MediaGuardRuntime.recordUserPlay(packageName)
+                    ctrl.transportControls.play()
+                    dispatched = true
+                }
+            }
+        dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+        return dispatched
     }
 
     fun skipNext() {
@@ -505,6 +585,173 @@ class MediaControlRepository(private val context: Context) {
         runCatching {
             controller.transportControls.sendCustomAction(action, null)
         }
+    }
+
+    fun triggerStreamingLike(packageName: String? = null): Boolean {
+        val ctrl = resolveControllerForPackage(packageName) ?: return false
+        val action = ctrl.playbackState?.customActions.orEmpty().firstOrNull { ca ->
+            val hay = "${ca.action.orEmpty()} ${ca.name?.toString().orEmpty()}".lowercase()
+            !hay.contains("dislike") && !hay.contains("unlike") && !hay.contains("не нрав") &&
+                (hay.contains("like") || hay.contains("heart") || hay.contains("fav") ||
+                    hay.contains("thumbs_up") || hay.contains("нравит") || hay.contains("лайк"))
+        } ?: return false
+        return runCatching {
+            ctrl.transportControls.sendCustomAction(action.action, null)
+            true
+        }.getOrDefault(false)
+    }
+
+    fun triggerStreamingDislike(packageName: String? = null): Boolean {
+        val ctrl = resolveControllerForPackage(packageName) ?: return false
+        val action = ctrl.playbackState?.customActions.orEmpty().firstOrNull { ca ->
+            val hay = "${ca.action.orEmpty()} ${ca.name?.toString().orEmpty()}".lowercase()
+            hay.contains("dislike") || hay.contains("thumbs_down") || hay.contains("ban") ||
+                hay.contains("не нрав") || hay.contains("дизлайк")
+        }
+        if (action != null) {
+            return runCatching {
+                ctrl.transportControls.sendCustomAction(action.action, null)
+                true
+            }.getOrDefault(false)
+        }
+        return false
+    }
+
+    fun triggerMyWave(packageName: String? = null): Boolean {
+        val ctrl = resolveControllerForPackage(packageName)
+        if (ctrl != null) {
+            val waveAction = ctrl.playbackState?.customActions.orEmpty().firstOrNull { ca ->
+                val hay = "${ca.action.orEmpty()} ${ca.name?.toString().orEmpty()}".lowercase()
+                hay.contains("wave") || hay.contains("vibe") || hay.contains("flow") ||
+                    hay.contains("radio") || hay.contains("волн") || hay.contains("поток")
+            }
+            if (waveAction != null) {
+                val sent = runCatching {
+                    ctrl.transportControls.sendCustomAction(waveAction.action, null)
+                    true
+                }.getOrDefault(false)
+                if (sent) return true
+            }
+            val played = runCatching {
+                ctrl.transportControls.playFromSearch("Моя волна", Bundle.EMPTY)
+                true
+            }.getOrDefault(false)
+            if (played) return true
+        }
+        return playFromSearchInStream("Моя волна", packageName)
+    }
+
+    private fun resolveControllerForPackage(packageName: String?): MediaController? {
+        if (!packageName.isNullOrBlank()) {
+            controllers.values.firstOrNull { it.packageName == packageName }?.let { return it }
+        }
+        return resolveActiveController()
+    }
+
+    fun searchStreamingAndLocalCatalog(
+        query: String,
+        installedMusicApps: List<AppEntry>
+    ): List<MusicStreamMatch> {
+        val q = query.trim()
+        if (q.length < 2) return emptyList()
+        val state = _mediaState.value
+        val out = mutableListOf<MusicStreamMatch>()
+        val seen = HashSet<String>()
+
+        fun addMatch(item: MusicStreamMatch) {
+            if (seen.add(item.id)) out.add(item)
+        }
+
+        // 1. Active queue & recent tracks across streaming sessions
+        state.sessions.forEach { sess ->
+            sess.queue.filter {
+                it.title.contains(q, ignoreCase = true) ||
+                    it.subtitle.contains(q, ignoreCase = true)
+            }.take(8).forEach { qi ->
+                addMatch(
+                    MusicStreamMatch(
+                        id = "q:${sess.packageName}:${qi.queueId}",
+                        packageName = sess.packageName,
+                        appLabel = sess.appLabel,
+                        title = qi.title,
+                        subtitle = qi.subtitle.ifBlank { sess.appLabel },
+                        queueItemId = qi.queueId
+                    )
+                )
+            }
+        }
+
+        // 2. Browsable streaming tracks
+        state.browsableTracks.filter {
+            it.isPlayable && (it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true))
+        }.take(10).forEach { bt ->
+            addMatch(
+                MusicStreamMatch(
+                    id = "mb:${bt.packageName}:${bt.mediaId}",
+                    packageName = bt.packageName,
+                    appLabel = bt.appLabel,
+                    title = bt.title,
+                    subtitle = bt.subtitle.ifBlank { bt.appLabel },
+                    mediaId = bt.mediaId
+                )
+            )
+        }
+
+        // 3. Recent streaming / TG session tracks
+        state.recentTracks.filter {
+            it.title.contains(q, ignoreCase = true) ||
+                it.subtitle.contains(q, ignoreCase = true)
+        }.take(6).forEach { rt ->
+            addMatch(
+                MusicStreamMatch(
+                    id = "rec:${rt.packageName}:${rt.title}",
+                    packageName = rt.packageName,
+                    appLabel = rt.appLabel,
+                    title = rt.title,
+                    subtitle = rt.subtitle.ifBlank { rt.appLabel }
+                )
+            )
+        }
+
+        // 4. Local + Telegram downloaded audio files
+        _localTracks.value.filter {
+            it.title.contains(q, ignoreCase = true) ||
+                it.artist.contains(q, ignoreCase = true) ||
+                it.album.contains(q, ignoreCase = true)
+        }.take(12).forEach { lt ->
+            addMatch(
+                MusicStreamMatch(
+                    id = "loc:${lt.id}",
+                    packageName = context.packageName,
+                    appLabel = if (lt.isTelegramAudio) "Telegram Audio" else "Файлы",
+                    title = lt.title,
+                    subtitle = lt.artist.ifBlank { lt.displayPath },
+                    isLocalTrack = true,
+                    localTrack = lt
+                )
+            )
+        }
+
+        // 5. Cross-streaming live search triggers for installed streaming services
+        val streamingApps = installedMusicApps
+            .filter { isStreamingPackage(it.packageName) }
+            .distinctBy { it.packageName }
+            .take(6)
+
+        streamingApps.forEach { app ->
+            addMatch(
+                MusicStreamMatch(
+                    id = "stream_search:${app.packageName}:$q",
+                    packageName = app.packageName,
+                    appLabel = app.label,
+                    title = "Найти «$q»",
+                    subtitle = app.label,
+                    isServiceSearchTrigger = true
+                )
+            )
+        }
+
+        return out
     }
 
     fun playFromSearchInStream(query: String, packageName: String? = null): Boolean {
@@ -874,6 +1121,7 @@ class MediaControlRepository(private val context: Context) {
             controllers[id] = controller
             val callback = object : MediaController.Callback() {
                 override fun onPlaybackStateChanged(state: PlaybackState?) {
+                    state?.let { MediaGuardRuntime.onSessionPlaybackState(controller.packageName, it.state) }
                     rebuildSessionsSnapshot()
                 }
 
@@ -966,11 +1214,11 @@ class MediaControlRepository(private val context: Context) {
         val recentReversed = recentTrackHistory.values.toList().reversed()
 
         _mediaState.update { state ->
-            val stillValidId = forceSelectId?.takeIf { sel -> sessions.any { it.id == sel } }
-                ?: state.selectedSessionId?.takeIf { sel -> sessions.any { it.id == sel } }
-            val nextSelected = stillValidId
-                ?: sessions.firstOrNull { it.isPlaying }?.id
-                ?: sessions.firstOrNull()?.id
+            val nextSelected = selectPreferredSessionId(
+                sessions = sessions,
+                currentSelectedId = state.selectedSessionId,
+                forceSelectId = forceSelectId
+            )
 
             state.copy(
                 isListenerGranted = isNotificationListenerGranted(),
@@ -1110,6 +1358,51 @@ class MediaControlRepository(private val context: Context) {
 
     companion object {
         const val LOCAL_SESSION_ID = "keydeck:local_player"
+
+        fun selectPreferredSessionId(
+            sessions: List<MediaSessionUi>,
+            currentSelectedId: String?,
+            forceSelectId: String? = null
+        ): String? {
+            if (sessions.isEmpty()) return null
+            if (forceSelectId != null && sessions.any { it.id == forceSelectId }) {
+                return forceSelectId
+            }
+            val current = sessions.firstOrNull { it.id == currentSelectedId }
+            val anyPlaying = sessions.any { it.isPlaying }
+            if (current != null && (current.isPlaying || !anyPlaying)) {
+                return current.id
+            }
+            return sessions.firstOrNull { it.isPlaying }?.id ?: sessions.firstOrNull()?.id
+        }
+
+        fun isStreamingPackage(packageName: String): Boolean {
+            val pkg = packageName.lowercase()
+            if (pkg.isBlank()) return false
+            val offlineLocalPlayers = listOf(
+                "aimp", "poweramp", "neutron", "foobar", "vlc", "musicolet",
+                "pulsar", "oto", "retro.music", "phonograph", "vanilla", "blackplayer"
+            )
+            if (offlineLocalPlayers.any { pkg.contains(it) }) return false
+            return pkg.contains("yandex.music") ||
+                pkg.contains("spotify") ||
+                pkg.contains("youtube") ||
+                pkg.contains("revanced") ||
+                pkg.contains("vkmusic") ||
+                pkg.contains("vkontakte") ||
+                pkg.contains("zvuk") ||
+                pkg.contains("sber") ||
+                pkg.contains("apple.android.music") ||
+                pkg.contains("soundcloud") ||
+                pkg.contains("deezer") ||
+                pkg.contains("tidal") ||
+                pkg.contains("mts") ||
+                pkg.contains("shazam") ||
+                pkg.contains("telegram") ||
+                pkg.contains("exteragram") ||
+                pkg.contains("nekogram") ||
+                pkg.contains("ayugram")
+        }
 
         fun currentEstimatedPositionMs(session: MediaSessionUi): Long {
             if (!session.isPlaying) return session.positionMs

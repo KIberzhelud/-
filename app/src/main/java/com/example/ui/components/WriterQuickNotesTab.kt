@@ -34,7 +34,6 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,7 +43,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -56,20 +54,15 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.writer.QuickNoteEntity
 import com.example.ui.theme.CallMissedRed
-import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
-import com.example.ui.theme.NavyDivider
-import com.example.ui.theme.NavySurface
-import com.example.ui.theme.NavySurfaceElevated
-import com.example.ui.theme.SymbianBevelHighlight
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TileBrightAzure
+import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
-import com.example.ui.theme.vistaWindowFrame
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -90,6 +83,7 @@ fun WriterQuickNotesTab(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val theme = LocalVistaTheme.current
     var draftText by remember { mutableStateOf("") }
     var draftTag by remember { mutableStateOf("") }
 
@@ -106,7 +100,10 @@ fun WriterQuickNotesTab(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(NavySurface.copy(alpha = 0.9f))
+                .background(
+                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.70f)
+                    else theme.surface.copy(alpha = 0.94f)
+                )
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -120,7 +117,7 @@ fun WriterQuickNotesTab(
                 Icon(
                     imageVector = Icons.Rounded.Search,
                     contentDescription = "Поиск заметок",
-                    tint = ElectricCyan,
+                    tint = theme.accent,
                     modifier = Modifier.size(15.dp)
                 )
                 Spacer(Modifier.width(6.dp))
@@ -137,7 +134,7 @@ fun WriterQuickNotesTab(
                         onValueChange = onSearchChange,
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                        cursorBrush = SolidColor(ElectricCyan),
+                        cursorBrush = SolidColor(theme.accent),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("notes_search_input")
@@ -159,7 +156,7 @@ fun WriterQuickNotesTab(
                 )
             }
         }
-        HorizontalDivider(color = NavyDivider)
+        HorizontalDivider(color = theme.divider)
 
         // Saved Messages feed
         if (notes.isEmpty()) {
@@ -216,7 +213,7 @@ fun WriterQuickNotesTab(
             }
         }
 
-        HorizontalDivider(color = NavyDivider)
+        HorizontalDivider(color = theme.divider)
 
         // Bottom Saved-Messages-style composer
         Column(
@@ -242,8 +239,8 @@ fun WriterQuickNotesTab(
                         value = draftTag,
                         onValueChange = { draftTag = it },
                         singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall.copy(color = ElectricCyan),
-                        cursorBrush = SolidColor(ElectricCyan),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = theme.accent),
+                        cursorBrush = SolidColor(theme.accent),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -266,7 +263,7 @@ fun WriterQuickNotesTab(
                         onValueChange = { draftText = it },
                         maxLines = 4,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                        cursorBrush = SolidColor(ElectricCyan),
+                        cursorBrush = SolidColor(theme.accent),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(onSend = { submitNote() }),
                         modifier = Modifier
@@ -304,6 +301,7 @@ private fun QuickNoteBubbleCard(
     onSendToPlan: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     val timeStr = remember(note.createdAt) {
         SimpleDateFormat("dd.MM HH:mm", Locale.getDefault()).format(Date(note.createdAt))
     }
@@ -311,7 +309,11 @@ private fun QuickNoteBubbleCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .vistaWindowFrame(RoundedCornerShape(4.dp))
+            .symbianGlossyTile(
+                bucket = (note.id % 4).toInt(),
+                isFocused = note.isPinned,
+                shape = RoundedCornerShape(4.dp)
+            )
             .then(
                 if (note.isPinned) Modifier.border(1.dp, MusicSourceAmber.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
                 else Modifier
@@ -334,33 +336,54 @@ private fun QuickNoteBubbleCard(
                     Text(
                         text = if (note.tag.startsWith("#")) note.tag else "#${note.tag}",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = ElectricCyan,
+                        color = theme.accent,
                         modifier = Modifier
-                            .background(ElectricCyan.copy(alpha = 0.14f), RoundedCornerShape(3.dp))
+                            .background(theme.accent.copy(alpha = 0.14f), RoundedCornerShape(3.dp))
                             .padding(horizontal = 5.dp, vertical = 1.dp)
                     )
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onTogglePin, modifier = Modifier.size(28.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .vistaAeroButton(isActive = note.isPinned)
+                        .clickable(onClick = onTogglePin),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.PushPin,
                         contentDescription = if (note.isPinned) "Открепить" else "Закрепить",
                         tint = if (note.isPinned) MusicSourceAmber else TextMuted,
-                        modifier = Modifier.size(15.dp)
+                        modifier = Modifier.size(14.dp)
                     )
                 }
                 if (hasActiveBook) {
-                    IconButton(onClick = onSendToPlan, modifier = Modifier.size(28.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .vistaAeroButton()
+                            .clickable(onClick = onSendToPlan),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
                             imageVector = Icons.Rounded.BookmarkAdd,
                             contentDescription = "В план книги",
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(16.dp)
+                            tint = theme.accent,
+                            modifier = Modifier.size(15.dp)
                         )
                     }
                 }
-                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .vistaAeroButton()
+                        .clickable(onClick = onCopy),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.ContentCopy,
                         contentDescription = "Копировать",
@@ -368,12 +391,18 @@ private fun QuickNoteBubbleCard(
                         modifier = Modifier.size(14.dp)
                     )
                 }
-                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .vistaAeroButton()
+                        .clickable(onClick = onDelete),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
                         imageVector = Icons.Rounded.DeleteOutline,
                         contentDescription = "Удалить",
                         tint = CallMissedRed.copy(alpha = 0.85f),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(15.dp)
                     )
                 }
             }

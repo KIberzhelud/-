@@ -370,8 +370,30 @@ object NotificationHubRepository {
         hasMessagingStyle: Boolean,
         title: String,
         body: String
+    ): HubSubTab = categorizeNotificationForTest(
+        packageName = packageName,
+        category = category,
+        hasReply = hasReply,
+        hasMessagingStyle = hasMessagingStyle,
+        title = title,
+        body = body
+    )
+
+    internal fun categorizeNotificationForTest(
+        packageName: String,
+        category: String?,
+        hasReply: Boolean,
+        hasMessagingStyle: Boolean,
+        title: String,
+        body: String
     ): HubSubTab {
         val pkg = packageName.lowercase()
+        val combined = "$title $body".lowercase()
+
+        val isGoogleNewsOrDiscoverPkg = pkg == "com.google.android.apps.magazines" ||
+            pkg == "com.google.android.apps.news" ||
+            pkg == "com.google.android.googlequicksearchbox"
+
         val isNewsApp = pkg.contains("news") || pkg.contains("rss") || pkg.contains("feedly") ||
             pkg.contains("inoreader") || pkg.contains("flipboard") || pkg.contains("habr") ||
             pkg.contains("bbc") || pkg.contains("cnn") || pkg.contains("rbc") ||
@@ -380,7 +402,20 @@ object NotificationHubRepository {
             pkg.contains("chrome") || pkg.contains("firefox") || pkg.contains("opera") ||
             pkg.contains("yandex.browser") || pkg.contains("vivaldi") || pkg.contains("edge")
 
-        if (isNewsApp || category == Notification.CATEGORY_RECOMMENDATION) {
+        val hasNewsContentHints = combined.contains("главные новости") ||
+            combined.contains("google новости") ||
+            combined.contains("подборка новостей") ||
+            combined.contains("новости") ||
+            combined.contains("discover") ||
+            combined.contains("breaking news") ||
+            combined.contains("news digest") ||
+            combined.contains("статья") ||
+            combined.contains("дайджест")
+
+        if (isNewsApp || category == Notification.CATEGORY_RECOMMENDATION ||
+            (isGoogleNewsOrDiscoverPkg && !hasReply && !hasMessagingStyle) ||
+            (isGoogleNewsOrDiscoverPkg && hasNewsContentHints)
+        ) {
             return HubSubTab.NEWS
         }
 
@@ -404,10 +439,7 @@ object NotificationHubRepository {
             return HubSubTab.CHATS
         }
 
-        val combined = "$title $body".lowercase()
-        if (urlRegex.containsMatchIn(combined) &&
-            (combined.contains("статья") || combined.contains("новост") || combined.contains("дайджест"))
-        ) {
+        if (hasNewsContentHints || (urlRegex.containsMatchIn(combined) && combined.contains("подборк"))) {
             return HubSubTab.NEWS
         }
 

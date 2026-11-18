@@ -58,9 +58,11 @@ class UniversalSearchRepository(
         queryMediaStoreImages(trimmed, results)
         queryMediaStoreFiles(trimmed, results)
 
-        // 5. Privileged Shizuku /sdcard search fallback when Shizuku is granted
+        // 5. Privileged Shizuku/Root /sdcard search fallback
         val shizukuStatus = shizukuBridge.statusState.value
-        if (shizukuStatus.isBinderAlive && shizukuStatus.isPermissionGranted && results.size < 45) {
+        val canUseShell = (shizukuStatus.isBinderAlive && shizukuStatus.isPermissionGranted) ||
+            shizukuStatus.isRootAvailable
+        if (canUseShell && results.size < 45) {
             searchViaShizuku(trimmed, results)
         }
 
@@ -277,8 +279,9 @@ class UniversalSearchRepository(
             projection.add(MediaStore.Images.Media.DATA)
         }
 
+        val ext = parseWildcardExtension(query)
         val selection = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
-        val selectionArgs = arrayOf("%$query%")
+        val selectionArgs = arrayOf(if (ext != null) "%.$ext" else "%$query%")
 
         runCatching {
             context.contentResolver.query(
@@ -351,8 +354,9 @@ class UniversalSearchRepository(
             projection.add(MediaStore.Files.FileColumns.RELATIVE_PATH)
         }
 
+        val ext = parseWildcardExtension(query)
         val selection = "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
-        val selectionArgs = arrayOf("%$query%")
+        val selectionArgs = arrayOf(if (ext != null) "%.$ext" else "%$query%")
 
         runCatching {
             context.contentResolver.query(
@@ -408,10 +412,12 @@ class UniversalSearchRepository(
         query: String,
         out: MutableMap<String, DeviceSearchFile>
     ) {
+        val ext = parseWildcardExtension(query)
         val safePattern = query.replace(Regex("""["'`$\\]"""), "")
-        if (safePattern.length < 2) return
-        val cmd = "find /sdcard -maxdepth 4 -type f -iname \"*$safePattern*\" 2>/dev/null | head -n 30"
-        val res = shizukuBridge.runPrivilegedShell(cmd)
+        if (ext == null && safePattern.length < 2) return
+        val findPattern = if (ext != null) "*.$ext" else "*$safePattern*"
+        val cmd = "find /sdcard -maxdepth 4 -type f -iname \"$findPattern\" 2>/dev/null | head -n 30"
+        val res = shizukuBridge.runPrivilegedOrRootShell(cmd)
         val lines = res.getOrNull()?.lines()?.filter { it.isNotBlank() }.orEmpty()
         for (path in lines) {
             if (out.containsKey(path)) continue
@@ -464,14 +470,35 @@ class UniversalSearchRepository(
                 type = item.mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, item.name)
+                clipData = ClipData.newUri(context.contentResolver, item.name, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             val chooser = Intent.createChooser(intent, "Поделиться: ${item.name}").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(chooser)
             true
         }.getOrDefault(false)
+    }
+
+    fun sendFileToPackage(item: DeviceSearchFile, targetPackage: String): Boolean {
+        val uri = resolvePlayableUri(item)
+        runCatching {
+            context.grantUriPermission(targetPackage, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val directSent = runCatching {
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                setPackage(targetPackage)
+                type = item.mimeType.ifBlank { "*/*" }
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, item.name)
+                clipData = ClipData.newUri(context.contentResolver, item.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+        return if (directSent) true else shareFile(item)
     }
 
     fun openContainingFolder(item: DeviceSearchFile): Boolean {
@@ -571,10 +598,7 @@ class UniversalSearchRepository(
         return parsed
     }
 
-    private fun matchesQuery(name: String, query: String): Boolean {
-        return name.contains(query, ignoreCase = true) ||
-            KeyboardSearchMatcher.matches(name, query)
-    }
+    private fun matchesQuery(name: String, query: String): Boolean = matchesFileName(name, query)
 
     private fun classifyKind(mime: String, name: String): SearchResultKind {
         val lower = name.lowercase()
@@ -617,6 +641,28 @@ class UniversalSearchRepository(
     }
 
     companion object {
+        fun parseWildcardExtension(rawQuery: String): String? {
+            val q = rawQuery.trim().lowercase()
+            val candidate = when {
+                q.startsWith("*.") -> q.removePrefix("*.")
+                q.startsWith("*") -> q.removePrefix("*")
+                q.startsWith(".") -> q.removePrefix(".")
+                else -> return null
+            }.trim()
+            if (candidate.isEmpty() || candidate.length > 8) return null
+            if (!candidate.all { it.isLetterOrDigit() || it == '_' || it == '-' }) return null
+            return candidate
+        }
+
+        fun matchesFileName(name: String, rawQuery: String): Boolean {
+            val ext = parseWildcardExtension(rawQuery)
+            if (ext != null) {
+                return name.lowercase().endsWith(".$ext")
+            }
+            return name.contains(rawQuery, ignoreCase = true) ||
+                KeyboardSearchMatcher.matches(name, rawQuery)
+        }
+
         fun hasAllFilesAccess(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 runCatching { Environment.isExternalStorageManager() }.getOrDefault(false)

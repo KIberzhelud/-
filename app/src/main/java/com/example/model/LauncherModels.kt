@@ -3,9 +3,9 @@ package com.example.model
 import androidx.compose.ui.graphics.ImageBitmap
 
 enum class MainTab(val title: String, val shortcutHint: String) {
-    HOME("Главная", "Ctrl+1"),
-    CALLS("Звонки", "Ctrl+2"),
-    HUB("Хаб", "Ctrl+3")
+    HOME("Главная", "F1"),
+    CALLS("Звонки", "F2"),
+    HUB("Хаб", "F3")
 }
 
 enum class CallsSubTab(val title: String) {
@@ -16,7 +16,8 @@ enum class CallsSubTab(val title: String) {
 enum class HubSubTab(val title: String) {
     CHATS("Чаты"),
     NEWS("Новости"),
-    OTHER("Прочее")
+    OTHER("Прочее"),
+    SETTINGS("Настройки")
 }
 
 enum class AlphabetMode(val label: String) {
@@ -49,11 +50,58 @@ data class WallpaperPaletteData(
     val highlightArgb: Long
 )
 
+enum class AppLanguage(val code: String, val title: String) {
+    RU("ru", "Русский"),
+    EN("en", "English")
+}
+
+enum class PlayerCoverStyle(val title: String) {
+    COVER("Обложка"),
+    DISC("Крутящийся диск")
+}
+
+enum class GlobalSearchMode {
+    APPS_AND_FILES,
+    MESSENGER_SEARCH
+}
+
+enum class SearchCategoryGroup {
+    APPS,
+    IMAGES,
+    FILES,
+    MUSIC
+}
+
 enum class MusicDrawerTab(val title: String) {
-    QUEUE("Плейлист"),
-    TELEGRAM("ТГ Музыка"),
+    STREAMING("Стриминг и ТГ"),
     LOCAL("Файлы")
 }
+
+data class RecentAppFrame(
+    val packageName: String,
+    val activityName: String?,
+    val appLabel: String,
+    val icon: ImageBitmap? = null,
+    val lastActiveMs: Long,
+    val previewTitle: String,
+    val previewSubtitle: String,
+    val badgeText: String = "",
+    val isPinned: Boolean = false,
+    val isPlayingMedia: Boolean = false
+)
+
+data class MusicStreamMatch(
+    val id: String,
+    val packageName: String,
+    val appLabel: String,
+    val title: String,
+    val subtitle: String,
+    val isLocalTrack: Boolean = false,
+    val localTrack: LocalAudioTrack? = null,
+    val queueItemId: Long? = null,
+    val mediaId: String? = null,
+    val isServiceSearchTrigger: Boolean = false
+)
 
 data class AppIconOverride(
     val mode: AppIconMode,
@@ -219,13 +267,61 @@ data class HubNotificationItem(
     val appIcon: ImageBitmap? = null
 )
 
+enum class AppAdaptationMode(val title: String, val shortTitle: String) {
+    DISABLED("Без адаптации", "Выкл"),
+    STANDARD("Стандартная перерисовка (F1–F6 + стрелки)", "Стандарт"),
+    MESSENGER("Мессенджер (чаты, быстрый ввод, F1–F6)", "Мессенджер")
+}
+
+data class AdaptedTabNode(
+    val index: Int,
+    val label: String,
+    val viewId: String? = null,
+    val isSelected: Boolean = false
+)
+
+data class AdaptedItemNode(
+    val index: Int,
+    val title: String,
+    val subtitle: String = "",
+    val badge: String = "",
+    val isClickable: Boolean = true,
+    val isEditable: Boolean = false
+)
+
+data class AdaptedAppSnapshot(
+    val packageName: String,
+    val appLabel: String,
+    val mode: AppAdaptationMode,
+    val tabs: List<AdaptedTabNode> = emptyList(),
+    val items: List<AdaptedItemNode> = emptyList(),
+    val focusedItemIndex: Int = 0,
+    val hasInputField: Boolean = false,
+    val inputHint: String = "",
+    val hasSendButton: Boolean = false,
+    val overlayCollapsed: Boolean = false
+)
+
+data class AndroidOptimizationStats(
+    val totalRamMb: Int = 0,
+    val availableRamMb: Int = 0,
+    val usedRamPercent: Int = 0,
+    val phantomKillerPatched: Boolean = false,
+    val lastCleanupSummary: String? = null
+)
+
 data class ShizukuState(
     val isInstalled: Boolean = false,
     val isBinderAlive: Boolean = false,
     val isPermissionGranted: Boolean = false,
+    val isRootAvailable: Boolean = false,
     val isNotificationListenerGranted: Boolean = false,
+    val isAccessibilityEnabled: Boolean = false,
+    val hasOverlayPermission: Boolean = false,
+    val shizukuVersion: Int = -1,
     val interceptShadeEnabled: Boolean = false,
     val interceptLockScreenEnabled: Boolean = false,
+    val oemGestureBypassEnabled: Boolean = false,
     val lastCommandStatus: String? = null
 )
 

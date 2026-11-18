@@ -6,22 +6,34 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.os.Looper
 import android.view.KeyEvent
+import android.media.session.PlaybackState
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.AndroidOptimizerManager
+import com.example.data.AppAdaptationRuntime
 import com.example.data.AutoCloseManager
 import com.example.data.MediaControlRepository
+import com.example.data.MediaGuardRuntime
 import com.example.data.NotificationHubRepository
+import com.example.data.RecentForegroundTracker
 import com.example.data.ShizukuBridge
 import com.example.data.SymbianIconMapper
 import com.example.data.UniversalSearchRepository
 import com.example.data.WallpaperThemeHelper
+import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
+import com.example.model.AppLanguage
+import com.example.model.CallsSubTab
 import com.example.model.DeviceSearchFile
 import com.example.model.HubCategory
 import com.example.model.HubNotificationItem
 import com.example.model.HubSubTab
 import com.example.model.LocalAudioTrack
+import com.example.model.MainTab
+import com.example.model.MediaPlayerState
+import com.example.model.MediaSessionUi
 import com.example.model.MusicDrawerTab
+import com.example.model.PlayerCoverStyle
 import com.example.model.SearchResultKind
 import com.example.model.UiThemeColor
 import com.example.ui.HardwareKeyHandler
@@ -426,10 +438,348 @@ class SymbianAndSearchTest {
         viewModel.toggleAutoKillPackage(customPkg)
         pumpMainUntil { !viewModel.uiState.value.autoKillPackages.contains(customPkg) }
 
-        assertEquals(MusicDrawerTab.QUEUE, viewModel.uiState.value.musicDrawerTab)
-        viewModel.selectMusicDrawerTab(MusicDrawerTab.TELEGRAM)
-        pumpMainUntil { viewModel.uiState.value.musicDrawerTab == MusicDrawerTab.TELEGRAM }
+        assertEquals(MusicDrawerTab.STREAMING, viewModel.uiState.value.musicDrawerTab)
         viewModel.selectMusicDrawerTab(MusicDrawerTab.LOCAL)
         pumpMainUntil { viewModel.uiState.value.musicDrawerTab == MusicDrawerTab.LOCAL }
+        viewModel.selectMusicDrawerTab(MusicDrawerTab.STREAMING)
+        pumpMainUntil { viewModel.uiState.value.musicDrawerTab == MusicDrawerTab.STREAMING }
+    }
+
+    @Test
+    fun `f1 to f5 switch tabs open books toggle music drawer and shift f1 opens shortcuts`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = LauncherViewModel(app)
+        pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
+
+        assertEquals(MainTab.HOME, viewModel.uiState.value.activeTab)
+
+        // F2 -> CALLS, second F2 -> toggles CallsSubTab
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F2),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.CALLS }
+        assertEquals(CallsSubTab.LOG, viewModel.uiState.value.callsSubTab)
+
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F2),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.callsSubTab == CallsSubTab.CONTACTS }
+
+        // F3 -> HUB, second F3 -> cycles HubSubTab
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HUB }
+        assertEquals(HubSubTab.CHATS, viewModel.uiState.value.hubSubTab)
+
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.hubSubTab == HubSubTab.NEWS }
+
+        // F1 -> back to HOME
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F1),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HOME }
+
+        // F4 -> opens Books/Writer mode, second F4 closes it
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F4),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.isWriterModeOpen }
+
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F4),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { !viewModel.uiState.value.isWriterModeOpen }
+
+        // F5 -> opens Music Drawer, Escape closes it
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F5),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.showMusicSheet }
+        HardwareKeyHandler.handleAndroidKeyEvent(
+            KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+            viewModel, {}, {}
+        )
+        pumpMainUntil { !viewModel.uiState.value.showMusicSheet }
+
+        // Shift+F1 -> opens shortcuts dialog
+        val shiftF1 = KeyEvent(
+            0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F1, 0, KeyEvent.META_SHIFT_ON
+        )
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(shiftF1, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showShortcutsDialog }
+    }
+
+    @Test
+    fun `background media guard optimizer adaptation and spoof toggles work correctly`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val shizuku = ShizukuBridge(app)
+        val optimizer = AndroidOptimizerManager(app, shizuku)
+
+        val ram = optimizer.readRamStats()
+        assertTrue(ram.totalRamMb > 0)
+        assertTrue(ram.usedRamPercent in 0..100)
+
+        assertTrue(AppAdaptationRuntime.isDefaultMessengerPackage("org.telegram.messenger", "Telegram"))
+        assertTrue(AppAdaptationRuntime.isDefaultMessengerPackage("com.whatsapp", "WhatsApp"))
+        assertFalse(AppAdaptationRuntime.isDefaultMessengerPackage("com.android.settings", "Settings"))
+
+        RecentForegroundTracker.recordForeground("com.oem.camera", app.packageName)
+        val recent = RecentForegroundTracker.drainVisited()
+        assertTrue(recent.contains("com.oem.camera"))
+
+        // Verify MediaGuardRuntime detects involuntary pause vs user pause
+        var detectedPkg: String? = null
+        MediaGuardRuntime.isGuardEnabled = true
+        MediaGuardRuntime.guardedPackages = setOf("com.google.android.youtube")
+        MediaGuardRuntime.onUnexpectedPauseDetected = { detectedPkg = it }
+
+        MediaGuardRuntime.recordUserPlay("com.google.android.youtube")
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PLAYING)
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PAUSED)
+        assertEquals("com.google.android.youtube", detectedPkg)
+
+        detectedPkg = null
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PLAYING)
+        MediaGuardRuntime.recordUserPause("com.google.android.youtube")
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PAUSED)
+        assertNull(detectedPkg)
+        MediaGuardRuntime.onUnexpectedPauseDetected = null
+
+        val viewModel = LauncherViewModel(app)
+        pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
+
+        viewModel.toggleBackgroundSpoofPackage("com.google.android.youtube")
+        pumpMainUntil {
+            viewModel.uiState.value.backgroundSpoofPackages.contains("com.google.android.youtube") &&
+                viewModel.uiState.value.backgroundSpoofEnabled
+        }
+
+        viewModel.setAppAdaptationMode("org.telegram.messenger", AppAdaptationMode.MESSENGER)
+        pumpMainUntil {
+            viewModel.uiState.value.appAdaptationModes["org.telegram.messenger"] == AppAdaptationMode.MESSENGER &&
+                viewModel.uiState.value.appAdaptationEnabled
+        }
+
+        viewModel.cycleAppAdaptationMode("org.telegram.messenger")
+        pumpMainUntil {
+            (viewModel.uiState.value.appAdaptationModes["org.telegram.messenger"] ?: AppAdaptationMode.DISABLED) == AppAdaptationMode.DISABLED
+        }
+
+        viewModel.optimizeAndroidSystem()
+        pumpMainUntil {
+            viewModel.uiState.value.optimizationStats.lastCleanupSummary != null
+        }
+    }
+
+    @Test
+    fun `wildcard search google news routing active media priority and adaptation defaults work`() {
+        // 1. Wildcard file matching (*apk, *.docx, .flac)
+        assertEquals("apk", UniversalSearchRepository.parseWildcardExtension("*apk"))
+        assertEquals("docx", UniversalSearchRepository.parseWildcardExtension("*.DOCX"))
+        assertEquals("flac", UniversalSearchRepository.parseWildcardExtension(".flac"))
+        assertNull(UniversalSearchRepository.parseWildcardExtension("music"))
+        assertTrue(UniversalSearchRepository.matchesFileName("KeyDeck-release.apk", "*apk"))
+        assertFalse(UniversalSearchRepository.matchesFileName("notes.txt", "*apk"))
+        assertTrue(UniversalSearchRepository.matchesFileName("chapter_01.docx", "*.docx"))
+        assertTrue(UniversalSearchRepository.matchesFileName("kino.flac", ".flac"))
+
+        // 2. Google Discover / Google News route to HubSubTab.NEWS
+        assertEquals(
+            HubSubTab.NEWS,
+            NotificationHubRepository.categorizeNotificationForTest(
+                packageName = "com.google.android.apps.magazines",
+                category = null,
+                hasReply = false,
+                hasMessagingStyle = false,
+                title = "Google Новости",
+                body = "Главные новости дня"
+            )
+        )
+        assertEquals(
+            HubSubTab.NEWS,
+            NotificationHubRepository.categorizeNotificationForTest(
+                packageName = "com.google.android.googlequicksearchbox",
+                category = null,
+                hasReply = false,
+                hasMessagingStyle = false,
+                title = "Discover",
+                body = "Подборка новостей"
+            )
+        )
+
+        // 3. Media session priority switches to playing session & distinguishes streaming vs local
+        val pausedYm = MediaSessionUi(
+            id = "s_ym", packageName = "ru.yandex.music", appLabel = "Яндекс Музыка",
+            title = "Track 1", artist = "Artist", album = "", isPlaying = false,
+            positionMs = 0L, durationMs = 1000L, playbackSpeed = 1f, lastUpdateElapsedMs = 0L
+        )
+        val playingYt = MediaSessionUi(
+            id = "s_yt", packageName = "com.google.android.apps.youtube.music", appLabel = "YT Music",
+            title = "Track 2", artist = "Band", album = "", isPlaying = true,
+            positionMs = 0L, durationMs = 2000L, playbackSpeed = 1f, lastUpdateElapsedMs = 0L
+        )
+        assertEquals(
+            "s_yt",
+            MediaControlRepository.selectPreferredSessionId(
+                sessions = listOf(pausedYm, playingYt),
+                currentSelectedId = "s_ym"
+            )
+        )
+        assertTrue(MediaControlRepository.isStreamingPackage("ru.yandex.music"))
+        assertFalse(MediaControlRepository.isStreamingPackage("com.aimp.player"))
+
+        // 4. Default adaptation recommendations (Settings -> STANDARD, Telegram -> MESSENGER)
+        assertEquals(AppAdaptationMode.STANDARD, AppAdaptationRuntime.recommendedDefaultMode("com.android.settings", "Настройки"))
+        assertEquals(AppAdaptationMode.MESSENGER, AppAdaptationRuntime.recommendedDefaultMode("org.telegram.messenger", "Telegram"))
+        assertEquals(AppAdaptationMode.DISABLED, AppAdaptationRuntime.recommendedDefaultMode("com.example.game", "Chess"))
+
+        // 5. RecentForegroundTracker snapshot & pinned retention
+        RecentForegroundTracker.clearHistoryExcept(emptySet())
+        RecentForegroundTracker.recordForeground("com.whatsapp", "com.example")
+        RecentForegroundTracker.recordForeground("com.android.settings", "com.example")
+        val snap = RecentForegroundTracker.snapshotRecentHistory().map { it.first }
+        assertTrue(snap.contains("com.whatsapp"))
+        assertTrue(snap.contains("com.android.settings"))
+        RecentForegroundTracker.clearHistoryExcept(setOf("com.whatsapp"))
+        val afterClear = RecentForegroundTracker.snapshotRecentHistory().map { it.first }
+        assertTrue(afterClear.contains("com.whatsapp"))
+        assertFalse(afterClear.contains("com.android.settings"))
+    }
+
+    @Test
+    fun `bb10 recents ctrl r escape writer space launch language scale and cover style work`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = LauncherViewModel(app)
+        pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
+
+        // Language, UI Scale & Player Cover Style settings
+        viewModel.setAppLanguage(AppLanguage.EN)
+        viewModel.setUiScale(1.15f)
+        viewModel.setPlayerCoverStyle(PlayerCoverStyle.DISC)
+        pumpMainUntil {
+            viewModel.uiState.value.appLanguage == AppLanguage.EN &&
+                viewModel.uiState.value.uiScale == 1.15f &&
+                viewModel.uiState.value.playerCoverStyle == PlayerCoverStyle.DISC
+        }
+
+        // Ctrl+R toggles BB10 Active Frames Recents, Esc closes it
+        val ctrlR = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_R, 0, KeyEvent.META_CTRL_ON)
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlR, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showRecentsOverlay }
+
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { !viewModel.uiState.value.showRecentsOverlay }
+
+        // F4 opens Writer Studio and Escape closes it
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F4),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { viewModel.uiState.value.isWriterModeOpen }
+        assertTrue(
+            HardwareKeyHandler.handleAndroidKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE),
+                viewModel, {}, {}
+            )
+        )
+        pumpMainUntil { !viewModel.uiState.value.isWriterModeOpen }
+
+        // F3 cycles all 4 Hub sub-tabs: CHATS -> NEWS -> OTHER -> SETTINGS -> CHATS
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HUB && viewModel.uiState.value.hubSubTab == HubSubTab.CHATS }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.hubSubTab == HubSubTab.NEWS }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.hubSubTab == HubSubTab.OTHER }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.hubSubTab == HubSubTab.SETTINGS }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F3), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.hubSubTab == HubSubTab.CHATS }
+    }
+
+    @Test
+    fun `niagara side rail filters to matching initial letter apps only and toggles off cleanly`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = LauncherViewModel(app)
+        pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
+
+        val field = LauncherViewModel::class.java.getDeclaredField("_allApps")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val flow = field.get(viewModel) as MutableStateFlow<List<AppEntry>>
+        flow.value = listOf(
+            AppEntry("a1/1", "AIMP", "com.aimp.player", "1", null, 'A', false, HubCategory.MUSIC, 0),
+            AppEntry("t1/1", "Telegram", "org.telegram.messenger", "1", null, 'T', false, HubCategory.CHAT, 1),
+            AppEntry("t2/2", "Termux", "com.termux", "2", null, 'T', false, HubCategory.UTILITY, 2),
+            AppEntry("y1/1", "YouTube", "com.google.android.youtube", "1", null, 'Y', false, HubCategory.NEWS, 3)
+        )
+        pumpMainUntil { viewModel.uiState.value.filteredApps.size == 4 }
+
+        // Scrubbing 'T' filters grid strictly to ONLY 'T' apps (Telegram, Termux)
+        viewModel.onAlphabetScrub('T')
+        pumpMainUntil {
+            val filtered = viewModel.uiState.value.filteredApps
+            filtered.size == 2 && filtered.all { it.initialChar == 'T' }
+        }
+
+        // Releasing finger after scrub keeps 'T' filter active so user can tap a matching app
+        viewModel.onAlphabetScrub(null)
+        pumpMainUntil {
+            viewModel.uiState.value.activeScrubLetter == null &&
+                viewModel.uiState.value.highlightedLetter == 'T' &&
+                viewModel.uiState.value.filteredApps.size == 2
+        }
+
+        // Tapping the same letter 'T' toggles filter off and restores all apps
+        viewModel.jumpToLetter('T')
+        pumpMainUntil {
+            viewModel.uiState.value.highlightedLetter == null &&
+                viewModel.uiState.value.filteredApps.size == 4
+        }
+
+        // Tapping 'A' filters only AIMP, and switching tab clears the letter filter
+        viewModel.jumpToLetter('A')
+        pumpMainUntil { viewModel.uiState.value.filteredApps.map { it.label } == listOf("AIMP") }
+
+        viewModel.selectTab(MainTab.CALLS)
+        pumpMainUntil {
+            viewModel.uiState.value.highlightedLetter == null &&
+                viewModel.uiState.value.filteredApps.size == 4
+        }
     }
 }

@@ -28,15 +28,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
-import androidx.compose.material.icons.automirrored.rounded.VolumeDown
-import androidx.compose.material.icons.automirrored.rounded.VolumeOff
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
@@ -46,11 +42,12 @@ import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.ThumbDown
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -86,6 +83,8 @@ import com.example.model.MediaBrowserTrack
 import com.example.model.MediaPlayerState
 import com.example.model.MediaQueueTrack
 import com.example.model.MusicDrawerTab
+import com.example.ui.L10n
+import com.example.ui.LocalAppLang
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
@@ -110,9 +109,10 @@ private fun isTelegramPackage(packageName: String): Boolean {
 }
 
 /**
- * Inline expandable Windows Vista / Symbian music control & deep streaming drawer.
- * - Portrait: slides down beneath the top player bar, pushing tile grid + rail down.
- * - Landscape: slides out horizontally to the side from the left sidebar.
+ * Compact-header, list-first expandable Windows Vista / Symbian music & streaming drawer.
+ * - Volume slider removed completely so the track list owns ~75-80% of the height.
+ * - Only 2 tabs: "Стриминг и ТГ" (streaming queue, catalog, cross-service search & Telegram audio) + "Файлы".
+ * - Streaming-only buttons (Like, Dislike, My Wave) appear only when an external streaming player is active.
  */
 @Composable
 fun InlineMusicControlDrawer(
@@ -126,10 +126,17 @@ fun InlineMusicControlDrawer(
     hasAllFilesAccess: Boolean,
     musicApps: List<AppEntry>,
     isLandscape: Boolean,
+    backgroundSpoofEnabled: Boolean = false,
+    isCurrentSessionSpoofed: Boolean = false,
+    onToggleCurrentSessionSpoof: () -> Unit = {},
+    onOpenBackgroundWebAudio: () -> Unit = {},
     onSelectTab: (MusicDrawerTab) -> Unit,
     onTrackSearchChange: (String) -> Unit,
     onSkipToQueueItem: (Long) -> Unit,
     onInvokeCustomAction: (String) -> Unit,
+    onLikeStreamTrack: () -> Unit = {},
+    onDislikeStreamTrack: () -> Unit = {},
+    onStartMyWave: () -> Unit = {},
     onPlayBrowserTrack: (MediaBrowserTrack) -> Unit,
     onSearchAndPlayInStream: (String, String?) -> Unit,
     onConnectBrowser: (String?) -> Unit,
@@ -153,45 +160,74 @@ fun InlineMusicControlDrawer(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val lang = LocalAppLang.current
     val active = mediaState.activeSession
+    val isActiveStreaming = active != null &&
+        active.id != MediaControlRepository.LOCAL_SESSION_ID &&
+        MediaControlRepository.isStreamingPackage(active.packageName)
 
     val drawerBody: @Composable (Modifier) -> Unit = { contentModifier ->
         Column(
             modifier = contentModifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
-            // Drawer Title / Active Stream Open / Close
+            // 1. Pinned Compact Top Header: Source + Open + YT Audio + Close
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .symbianMetallicBar()
                     .border(1.dp, theme.chromeBorderOuter, RoundedCornerShape(3.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_symbian_music),
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = if (isLandscape) "ТРЕКИ И СТРИМИНГ" else "СТРИМИНГ, ОЧЕРЕДЬ И ТГ",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = theme.focusBorder,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (mediaState.sessions.isEmpty()) {
+                        Image(
+                            painter = painterResource(R.drawable.ic_symbian_music),
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = L10n.musicTab(lang, selectedTab),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = theme.focusBorder,
+                            maxLines = 1
+                        )
+                    } else {
+                        mediaState.sessions.forEach { session ->
+                            val selected = session.id == active?.id
+                            Box(
+                                modifier = Modifier
+                                    .vistaAeroButton(isPrimary = selected, isActive = selected)
+                                    .clickable { onSelectSession(session.id) }
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = if (session.isPlaying) "▶ ${session.appLabel}" else session.appLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                    ),
+                                    color = if (selected) Color.White else TextPrimary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
                 }
+
+                Spacer(Modifier.width(4.dp))
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     if (active != null && active.id != MediaControlRepository.LOCAL_SESSION_ID) {
                         Box(
@@ -201,74 +237,85 @@ fun InlineMusicControlDrawer(
                                     onOpenActivePlayer()
                                     onClose()
                                 }
-                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
                                 .testTag("drawer_open_player_button")
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                                    contentDescription = "Открыть ${active.appLabel}",
-                                    tint = theme.accent,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(Modifier.width(3.dp))
-                                Text(
-                                    text = active.appLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextPrimary,
-                                    maxLines = 1
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
+                                contentDescription = "Открыть ${active.appLabel}",
+                                tint = theme.accent,
+                                modifier = Modifier.size(13.dp)
+                            )
                         }
                     }
+
+                    val spoofActive = backgroundSpoofEnabled && (active == null || isCurrentSessionSpoofed)
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton(isPrimary = spoofActive, isActive = spoofActive)
+                            .clickable(onClick = onOpenBackgroundWebAudio)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag("drawer_yt_web_audio_button")
+                    ) {
+                        Text(
+                            text = "BG YT",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = if (spoofActive) Color.White else MusicSourceAmber
+                        )
+                    }
+
                     Box(
                         modifier = Modifier
                             .vistaAeroButton()
                             .clickable(onClick = onClose)
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .padding(horizontal = 5.dp, vertical = 3.dp)
                             .testTag("drawer_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
                             contentDescription = "Закрыть панель плеера",
                             tint = TextSecondary,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(13.dp)
                         )
                     }
                 }
             }
 
             if (!mediaState.isListenerGranted) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .vistaInsetBox()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    Icon(
+                        imageVector = Icons.Rounded.NotificationsActive,
+                        contentDescription = null,
+                        tint = MusicSourceAmber,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (lang == com.example.model.AppLanguage.RU) {
+                            "Включите доступ к уведомлениям для очереди"
+                        } else {
+                            "Enable Notification Access for streaming queue"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.NotificationsActive,
-                            contentDescription = null,
-                            tint = MusicSourceAmber,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = "Включите доступ к уведомлениям для очереди стримингов и ТГ",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary,
-                            maxLines = 2
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
+                    )
+                    Spacer(Modifier.width(6.dp))
                     VistaButton(
-                        text = "Включить",
+                        text = if (lang == com.example.model.AppLanguage.RU) "Вкл." else "Grant",
                         isPrimary = true,
                         onClick = onOpenNotificationAccess,
                         modifier = Modifier.testTag("grant_media_listener_button")
@@ -276,45 +323,9 @@ fun InlineMusicControlDrawer(
                 }
             }
 
-            // Active Streaming & Telegram Sessions selector
-            if (mediaState.sessions.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Источник:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
-                    mediaState.sessions.forEach { session ->
-                        val selected = session.id == active?.id
-                        Box(
-                            modifier = Modifier
-                                .vistaAeroButton(isPrimary = selected, isActive = selected)
-                                .clickable { onSelectSession(session.id) }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = if (session.isPlaying) "▶ ${session.appLabel}" else session.appLabel,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                ),
-                                color = if (selected) Color.White else TextPrimary,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Seek Trackbar (Windows Vista slider)
+            // 2. Slim Transport + Seekbar + Streaming-Only Actions (Like / Dislike / My Wave)
             if (active != null && active.durationMs > 0L) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(4.dp))
                 var isDragging by remember { mutableStateOf(false) }
                 var sliderPos by remember(active.id) { mutableFloatStateOf(0f) }
                 val displayPos = if (isDragging) sliderPos.toLong() else livePositionMs
@@ -325,9 +336,9 @@ fun InlineMusicControlDrawer(
                 ) {
                     Text(
                         text = MediaControlRepository.formatTimeMs(displayPos),
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                         color = TextSecondary,
-                        modifier = Modifier.width(38.dp)
+                        modifier = Modifier.width(34.dp)
                     )
                     VistaSlider(
                         value = displayPos.toFloat().coerceIn(0f, active.durationMs.toFloat()),
@@ -340,202 +351,206 @@ fun InlineMusicControlDrawer(
                             onSeekTo(sliderPos.toLong())
                         },
                         valueRange = 0f..active.durationMs.toFloat(),
+                        compact = true,
                         modifier = Modifier
                             .weight(1f)
                             .testTag("drawer_vista_seek_slider")
                     )
                     Text(
                         text = MediaControlRepository.formatTimeMs(active.durationMs),
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                         color = TextMuted,
-                        modifier = Modifier.padding(start = 6.dp)
+                        modifier = Modifier.padding(start = 4.dp)
                     )
                 }
             }
 
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
 
-            // Transport controls row
+            // Compact Transport + Streaming-Only Buttons (No Volume Slider!)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(width = 38.dp, height = 31.dp)
-                        .vistaAeroButton()
-                        .clickable(enabled = active?.canSeek == true) { onSeekBy(-10_000L) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Replay10,
-                        contentDescription = "Назад 10 секунд",
-                        tint = if (active?.canSeek == true) TextPrimary else TextMuted,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(width = 40.dp, height = 33.dp)
-                        .vistaAeroButton()
-                        .clickable(onClick = onSkipPrevious),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SkipPrevious,
-                        contentDescription = "Предыдущий трек",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(width = 54.dp, height = 35.dp)
-                        .vistaAeroButton(isPrimary = true)
-                        .clickable(onClick = onTogglePlayPause)
-                        .testTag("drawer_play_pause_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (active?.isPlaying == true) "Пауза" else "Воспроизвести",
-                        tint = Color.White,
-                        modifier = Modifier.size(23.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(width = 40.dp, height = 33.dp)
-                        .vistaAeroButton()
-                        .clickable(onClick = onSkipNext),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SkipNext,
-                        contentDescription = "Следующий трек",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(width = 38.dp, height = 31.dp)
-                        .vistaAeroButton()
-                        .clickable(enabled = active?.canSeek == true) { onSeekBy(10_000L) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Forward10,
-                        contentDescription = "Вперёд 10 секунд",
-                        tint = if (active?.canSeek == true) TextPrimary else TextMuted,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-            }
-
-            // Custom Actions (Like, Dislike, Shuffle, Repeat exposed by Yandex Music / Spotify / YT Music)
-            if (active != null && active.customActions.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
+                // Core transport cluster
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    active.customActions.forEach { act ->
+                    Box(
+                        modifier = Modifier
+                            .size(width = 32.dp, height = 28.dp)
+                            .vistaAeroButton()
+                            .clickable(onClick = onSkipPrevious),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SkipPrevious,
+                            contentDescription = "Предыдущий трек",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(width = 40.dp, height = 28.dp)
+                            .vistaAeroButton(isPrimary = true)
+                            .clickable(onClick = onTogglePlayPause)
+                            .testTag("drawer_play_pause_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (active?.isPlaying == true) "Пауза" else "Воспроизвести",
+                            tint = Color.White,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(width = 32.dp, height = 28.dp)
+                            .vistaAeroButton()
+                            .clickable(onClick = onSkipNext),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SkipNext,
+                            contentDescription = "Следующий трек",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+
+                // Streaming-only buttons: Dislike | Like | My Wave (never shown for offline file player)
+                if (isActiveStreaming) {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
+                                .height(28.dp)
                                 .vistaAeroButton()
-                                .clickable { onInvokeCustomAction(act.action) }
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .clickable(onClick = onLikeStreamTrack)
+                                .padding(horizontal = 7.dp)
+                                .testTag("drawer_stream_like_button"),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = act.name,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = theme.accent,
-                                maxLines = 1
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ThumbUp,
+                                    contentDescription = L10n.like(lang),
+                                    tint = theme.accent,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = L10n.like(lang),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = TextPrimary,
+                                    maxLines = 1
+                                )
+                            }
                         }
+
+                        Box(
+                            modifier = Modifier
+                                .height(28.dp)
+                                .vistaAeroButton()
+                                .clickable(onClick = onDislikeStreamTrack)
+                                .padding(horizontal = 7.dp)
+                                .testTag("drawer_stream_dislike_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ThumbDown,
+                                    contentDescription = L10n.dislike(lang),
+                                    tint = TextSecondary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = L10n.dislike(lang),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = TextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .height(28.dp)
+                                .vistaAeroButton(isActive = true)
+                                .clickable(onClick = onStartMyWave)
+                                .padding(horizontal = 7.dp)
+                                .testTag("drawer_stream_wave_button"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = L10n.myWave(lang),
+                                    tint = MusicSourceAmber,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = L10n.myWave(lang),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = theme.focusBorder,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                    val spoofActive = backgroundSpoofEnabled
+                    Box(
+                        modifier = Modifier
+                            .height(28.dp)
+                            .vistaAeroButton(isPrimary = spoofActive, isActive = spoofActive)
+                            .clickable(onClick = onToggleCurrentSessionSpoof)
+                            .padding(horizontal = 8.dp)
+                            .testTag("drawer_spoof_toggle_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (spoofActive) "Фон: ВКЛ" else "Фон: ВЫКЛ",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = if (spoofActive) Color.White else theme.accent
+                        )
                     }
                 }
             }
 
-            // Vista Volume Trackbar Row
-            Spacer(Modifier.height(6.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .vistaAeroButton()
-                        .clickable(onClick = onToggleMute),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (mediaState.isMuted) {
-                            Icons.AutoMirrored.Rounded.VolumeOff
-                        } else if (mediaState.systemVolume < mediaState.maxVolume / 2) {
-                            Icons.AutoMirrored.Rounded.VolumeDown
-                        } else {
-                            Icons.AutoMirrored.Rounded.VolumeUp
-                        },
-                        contentDescription = "Громкость / Без звука",
-                        tint = theme.accent,
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
-                VistaSlider(
-                    value = mediaState.systemVolume.toFloat(),
-                    onValueChange = { onSetVolume(it.toInt()) },
-                    valueRange = 0f..mediaState.maxVolume.toFloat().coerceAtLeast(1f),
-                    accentCyan = false,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 6.dp)
-                        .testTag("drawer_vista_volume_slider")
-                )
-                Text(
-                    text = "${mediaState.systemVolume}/${mediaState.maxVolume}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
-            }
+            Spacer(Modifier.height(5.dp))
 
-            Spacer(Modifier.height(7.dp))
-            HorizontalDivider(color = theme.divider, thickness = 1.dp)
-            Spacer(Modifier.height(7.dp))
-
-            // Mode Tabs: Плейлист (Streaming Queue + Search) | ТГ Музыка | Файлы
+            // 3. Strictly 2 Tabs: "Стриминг и ТГ" | "Файлы"
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 MusicDrawerTabPill(
-                    title = MusicDrawerTab.QUEUE.title,
-                    selected = selectedTab == MusicDrawerTab.QUEUE,
-                    onClick = { onSelectTab(MusicDrawerTab.QUEUE) },
+                    title = L10n.musicTab(lang, MusicDrawerTab.STREAMING),
+                    selected = selectedTab == MusicDrawerTab.STREAMING,
+                    onClick = { onSelectTab(MusicDrawerTab.STREAMING) },
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("music_tab_queue")
+                        .testTag("music_tab_streaming")
                 )
                 MusicDrawerTabPill(
-                    title = MusicDrawerTab.TELEGRAM.title,
-                    selected = selectedTab == MusicDrawerTab.TELEGRAM,
-                    onClick = { onSelectTab(MusicDrawerTab.TELEGRAM) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("music_tab_telegram")
-                )
-                MusicDrawerTabPill(
-                    title = MusicDrawerTab.LOCAL.title,
+                    title = L10n.musicTab(lang, MusicDrawerTab.LOCAL),
                     selected = selectedTab == MusicDrawerTab.LOCAL,
                     onClick = { onSelectTab(MusicDrawerTab.LOCAL) },
                     modifier = Modifier
@@ -544,525 +559,485 @@ fun InlineMusicControlDrawer(
                 )
             }
 
-            Spacer(Modifier.height(7.dp))
+            Spacer(Modifier.height(5.dp))
 
-            // Track / Stream Search Strip
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            // 4. Lower Scrollable Zone (~75-80% of Drawer Height): Track Search + Streaming/TG + Files List
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
             ) {
+                // Search Strip
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .vistaInsetBox()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Search,
-                        contentDescription = "Поиск трека в стриминге и ТГ",
-                        tint = theme.accent,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (trackSearchQuery.isEmpty()) {
-                            Text(
-                                text = "Поиск треков в стриминге и ТГ…",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
-                                color = TextMuted,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        BasicTextField(
-                            value = trackSearchQuery,
-                            onValueChange = onTrackSearchChange,
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall.copy(
-                                color = TextPrimary,
-                                fontSize = 12.sp
-                            ),
-                            cursorBrush = SolidColor(theme.accent),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(
-                                onSearch = {
-                                    if (trackSearchQuery.isNotBlank()) {
-                                        onSearchAndPlayInStream(trackSearchQuery, active?.packageName)
-                                    }
-                                }
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("drawer_track_search_input")
-                        )
-                    }
-                    if (mediaState.isSearchingStream) {
-                        CircularProgressIndicator(
-                            color = theme.accent,
-                            strokeWidth = 1.5.dp,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                    }
-                    if (trackSearchQuery.isNotEmpty()) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Очистить поиск треков",
-                            tint = TextSecondary,
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clickable { onTrackSearchChange("") }
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .vistaAeroButton()
-                        .clickable(onClick = onRefreshTracks)
-                        .testTag("drawer_refresh_tracks_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Refresh,
-                        contentDescription = "Обновить очередь и треки",
-                        tint = theme.accent,
-                        modifier = Modifier.size(15.dp)
-                    )
-                }
-            }
-
-            // Direct Streaming Search-and-Play Button when query is entered
-            if (trackSearchQuery.isNotBlank() && selectedTab != MusicDrawerTab.LOCAL) {
-                Spacer(Modifier.height(5.dp))
-                val targetServiceName = active?.takeIf { it.id != MediaControlRepository.LOCAL_SESSION_ID }?.appLabel
-                    ?: musicApps.firstOrNull()?.label
-                    ?: "стриминге"
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .vistaAeroButton(isPrimary = true)
-                        .clickable {
-                            onSearchAndPlayInStream(
-                                trackSearchQuery,
-                                active?.takeIf { it.id != MediaControlRepository.LOCAL_SESSION_ID }?.packageName
-                                    ?: musicApps.firstOrNull()?.packageName
-                            )
-                        }
-                        .padding(horizontal = 9.dp, vertical = 6.dp)
-                        .testTag("drawer_play_from_search_button"),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        text = "Найти и играть «${trackSearchQuery.trim()}» в $targetServiceName",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(6.dp))
-
-            // TAB BODY
-            when (selectedTab) {
-                MusicDrawerTab.QUEUE -> {
-                    val queueItems = remember(active?.queue, trackSearchQuery) {
-                        val raw = active?.queue.orEmpty()
-                        if (trackSearchQuery.isBlank()) raw
-                        else raw.filter {
-                            KeyboardSearchMatcher.matches(it.title, trackSearchQuery) ||
-                                KeyboardSearchMatcher.matches(it.subtitle, trackSearchQuery)
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .vistaInsetBox()
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = "Поиск трека в стриминге и ТГ",
+                            tint = theme.accent,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (trackSearchQuery.isEmpty()) {
+                                Text(
+                                    text = if (lang == com.example.model.AppLanguage.RU) {
+                                        "Поиск треков по всем стримингам и ТГ…"
+                                    } else {
+                                        "Search tracks across streaming & TG…"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            BasicTextField(
+                                value = trackSearchQuery,
+                                onValueChange = onTrackSearchChange,
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall.copy(
+                                    color = TextPrimary,
+                                    fontSize = 12.sp
+                                ),
+                                cursorBrush = SolidColor(theme.accent),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = {
+                                        if (trackSearchQuery.isNotBlank()) {
+                                            onSearchAndPlayInStream(trackSearchQuery, active?.packageName)
+                                        }
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("drawer_track_search_input")
+                            )
+                        }
+                        if (mediaState.isSearchingStream) {
+                            CircularProgressIndicator(
+                                color = theme.accent,
+                                strokeWidth = 1.5.dp,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        if (trackSearchQuery.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "Очистить поиск треков",
+                                tint = TextSecondary,
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clickable { onTrackSearchChange("") }
+                            )
                         }
                     }
-                    val browserResults = remember(mediaState.browserSearchResults, mediaState.browsableTracks, trackSearchQuery) {
-                        if (mediaState.browserSearchResults.isNotEmpty()) {
-                            mediaState.browserSearchResults
-                        } else if (trackSearchQuery.isBlank()) {
-                            mediaState.browsableTracks
-                        } else {
-                            mediaState.browsableTracks.filter {
+
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .vistaAeroButton()
+                            .clickable(onClick = onRefreshTracks)
+                            .testTag("drawer_refresh_tracks_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "Обновить очередь и треки",
+                            tint = theme.accent,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+
+                // Instant Search-Across-Streaming Services Bar when typing
+                if (trackSearchQuery.isNotBlank() && selectedTab == MusicDrawerTab.STREAMING) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val targetServices = musicApps
+                            .filter { MediaControlRepository.isStreamingPackage(it.packageName) }
+                            .ifEmpty { musicApps }
+                            .take(5)
+                        targetServices.forEach { app ->
+                            Box(
+                                modifier = Modifier
+                                    .vistaAeroButton(isPrimary = app.packageName == active?.packageName)
+                                    .clickable {
+                                        onSearchAndPlayInStream(trackSearchQuery, app.packageName)
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = "▶ «${trackSearchQuery.trim()}» • ${app.label}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = if (app.packageName == active?.packageName) Color.White else theme.focusBorder,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(5.dp))
+
+                // Expanded Dominant Scrollable List (fills all remaining vertical space)
+                when (selectedTab) {
+                    MusicDrawerTab.STREAMING -> {
+                        val queueItems = remember(active?.queue, trackSearchQuery) {
+                            val raw = active?.queue.orEmpty()
+                            if (trackSearchQuery.isBlank()) raw
+                            else raw.filter {
                                 KeyboardSearchMatcher.matches(it.title, trackSearchQuery) ||
                                     KeyboardSearchMatcher.matches(it.subtitle, trackSearchQuery)
                             }
                         }
-                    }
-                    val filteredRecent = remember(mediaState.recentTracks, trackSearchQuery) {
-                        val raw = mediaState.recentTracks
-                        if (trackSearchQuery.isBlank()) raw
-                        else raw.filter {
-                            KeyboardSearchMatcher.matches(it.title, trackSearchQuery) ||
-                                KeyboardSearchMatcher.matches(it.subtitle, trackSearchQuery) ||
-                                KeyboardSearchMatcher.matches(it.appLabel, trackSearchQuery)
+                        val browserResults = remember(mediaState.browserSearchResults, mediaState.browsableTracks, trackSearchQuery) {
+                            if (mediaState.browserSearchResults.isNotEmpty()) {
+                                mediaState.browserSearchResults
+                            } else if (trackSearchQuery.isBlank()) {
+                                mediaState.browsableTracks
+                            } else {
+                                mediaState.browsableTracks.filter {
+                                    KeyboardSearchMatcher.matches(it.title, trackSearchQuery) ||
+                                        KeyboardSearchMatcher.matches(it.subtitle, trackSearchQuery)
+                                }
+                            }
                         }
-                    }
+                        val filteredRecent = remember(mediaState.recentTracks, trackSearchQuery) {
+                            val raw = mediaState.recentTracks
+                            if (trackSearchQuery.isBlank()) raw
+                            else raw.filter {
+                                KeyboardSearchMatcher.matches(it.title, trackSearchQuery) ||
+                                    KeyboardSearchMatcher.matches(it.subtitle, trackSearchQuery) ||
+                                    KeyboardSearchMatcher.matches(it.appLabel, trackSearchQuery)
+                            }
+                        }
+                        val tgSessions = remember(mediaState.sessions) {
+                            mediaState.sessions.filter { isTelegramPackage(it.packageName) }
+                        }
+                        val tgAudioFiles = remember(localTracks, trackSearchQuery) {
+                            localTracks.filter { track ->
+                                track.isTelegramAudio && (
+                                    trackSearchQuery.isBlank() ||
+                                        KeyboardSearchMatcher.matches(track.title, trackSearchQuery) ||
+                                        KeyboardSearchMatcher.matches(track.artist, trackSearchQuery)
+                                    )
+                            }
+                        }
+                        val tgMsgs = remember(telegramNotifications, trackSearchQuery) {
+                            telegramNotifications.filter { notif ->
+                                isTelegramPackage(notif.packageName) && (
+                                    trackSearchQuery.isBlank() ||
+                                        KeyboardSearchMatcher.matches(notif.title, trackSearchQuery) ||
+                                        KeyboardSearchMatcher.matches(notif.text, trackSearchQuery)
+                                    )
+                            }.take(8)
+                        }
 
-                    if (queueItems.isEmpty() && browserResults.isEmpty() && filteredRecent.isEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .vistaInsetBox()
-                                .padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        if (queueItems.isEmpty() && browserResults.isEmpty() && filteredRecent.isEmpty() &&
+                            tgSessions.isEmpty() && tgAudioFiles.isEmpty() && tgMsgs.isEmpty()
                         ) {
-                            Text(
-                                text = "Очередь стриминга пока пуста. Запустите трек в Яндекс Музыке / Spotify / ТГ или подключите каталог.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextMuted
-                            )
-                            VistaButton(
-                                text = "Подключить каталог (${active?.appLabel ?: "плеер"})",
-                                isPrimary = true,
-                                onClick = { onConnectBrowser(active?.packageName) }
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 120.dp, max = if (isLandscape) 240.dp else 210.dp)
-                                .vistaInsetBox()
-                                .testTag("drawer_streaming_queue_list"),
-                            contentPadding = PaddingValues(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            if (queueItems.isNotEmpty()) {
-                                item(key = "hdr_queue") {
-                                    DrawerSectionLabel("ОЧЕРЕДЬ ВОСПРОИЗВЕДЕНИЯ (${active?.appLabel ?: ""})")
-                                }
-                                items(queueItems, key = { "q_${it.queueId}_${it.title}" }) { qItem ->
-                                    QueueTrackRow(
-                                        item = qItem,
-                                        isActive = qItem.isActive,
-                                        onClick = { onSkipToQueueItem(qItem.queueId) }
-                                    )
-                                }
-                            }
-
-                            if (browserResults.isNotEmpty()) {
-                                item(key = "hdr_browser") {
-                                    DrawerSectionLabel(
-                                        if (mediaState.browserSearchResults.isNotEmpty()) "РЕЗУЛЬТАТЫ В КАТАЛОГЕ"
-                                        else "КАТАЛОГ И ПЛЕЙЛИСТЫ (${browserResults.size})"
-                                    )
-                                }
-                                items(browserResults, key = { "br_${it.mediaId}" }) { bItem ->
-                                    BrowserTrackRow(
-                                        item = bItem,
-                                        onClick = { onPlayBrowserTrack(bItem) }
-                                    )
-                                }
-                            }
-
-                            if (filteredRecent.isNotEmpty()) {
-                                item(key = "hdr_recent") {
-                                    DrawerSectionLabel("НЕДАВНИЕ ТРЕКИ (${filteredRecent.size})")
-                                }
-                                items(filteredRecent, key = { "rec_${it.packageName}_${it.title}_${it.subtitle}" }) { rItem ->
-                                    QueueTrackRow(
-                                        item = rItem,
-                                        isActive = active?.title == rItem.title && active.packageName == rItem.packageName,
-                                        onClick = {
-                                            val matchingQueue = active?.queue?.firstOrNull {
-                                                it.title.equals(rItem.title, ignoreCase = true)
-                                            }
-                                            if (matchingQueue != null) {
-                                                onSkipToQueueItem(matchingQueue.queueId)
-                                            } else {
-                                                onSearchAndPlayInStream(
-                                                    "${rItem.title} ${rItem.subtitle}".trim(),
-                                                    rItem.packageName
-                                                )
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                MusicDrawerTab.TELEGRAM -> {
-                    val tgSessions = remember(mediaState.sessions) {
-                        mediaState.sessions.filter { isTelegramPackage(it.packageName) }
-                    }
-                    val tgRecent = remember(mediaState.recentTracks, trackSearchQuery) {
-                        mediaState.recentTracks.filter { item ->
-                            isTelegramPackage(item.packageName) && (
-                                trackSearchQuery.isBlank() ||
-                                    KeyboardSearchMatcher.matches(item.title, trackSearchQuery) ||
-                                    KeyboardSearchMatcher.matches(item.subtitle, trackSearchQuery)
-                                )
-                        }
-                    }
-                    val tgAudioFiles = remember(localTracks, trackSearchQuery) {
-                        localTracks.filter { track ->
-                            track.isTelegramAudio && (
-                                trackSearchQuery.isBlank() ||
-                                    KeyboardSearchMatcher.matches(track.title, trackSearchQuery) ||
-                                    KeyboardSearchMatcher.matches(track.artist, trackSearchQuery)
-                                )
-                        }
-                    }
-                    val tgMsgs = remember(telegramNotifications, trackSearchQuery) {
-                        telegramNotifications.filter { notif ->
-                            isTelegramPackage(notif.packageName) && (
-                                trackSearchQuery.isBlank() ||
-                                    KeyboardSearchMatcher.matches(notif.title, trackSearchQuery) ||
-                                    KeyboardSearchMatcher.matches(notif.text, trackSearchQuery) ||
-                                    KeyboardSearchMatcher.matches(notif.bigText, trackSearchQuery)
-                                )
-                        }.take(12)
-                    }
-
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 120.dp, max = if (isLandscape) 240.dp else 210.dp)
-                            .vistaInsetBox()
-                            .testTag("drawer_telegram_music_list"),
-                        contentPadding = PaddingValues(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        if (tgSessions.isNotEmpty()) {
-                            item(key = "tg_sessions_hdr") {
-                                DrawerSectionLabel("АКТИВНЫЙ ТГ ПЛЕЕР")
-                            }
-                            tgSessions.forEach { sess ->
-                                item(key = "tg_sess_${sess.id}") {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .vistaAeroButton(isPrimary = true, isActive = sess.id == active?.id)
-                                            .clickable { onSelectSession(sess.id) }
-                                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Send,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(Modifier.width(7.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = sess.title,
-                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = Color.White,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = "${sess.appLabel} • ${sess.artist.ifBlank { "Telegram Аудио" }}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.White.copy(alpha = 0.8f),
-                                                maxLines = 1
-                                            )
-                                        }
-                                    }
-                                }
-                                if (sess.queue.isNotEmpty()) {
-                                    items(sess.queue, key = { "tg_q_${sess.id}_${it.queueId}" }) { qItem ->
-                                        QueueTrackRow(
-                                            item = qItem,
-                                            isActive = qItem.isActive,
-                                            onClick = {
-                                                onSelectSession(sess.id)
-                                                onSkipToQueueItem(qItem.queueId)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (tgAudioFiles.isNotEmpty()) {
-                            item(key = "tg_files_hdr") {
-                                DrawerSectionLabel("АУДИО ИЗ TELEGRAM (${tgAudioFiles.size})")
-                            }
-                            items(tgAudioFiles, key = { "tg_audio_${it.id}" }) { track ->
-                                val isCurrent = track.id == mediaState.currentLocalTrackId
-                                LocalTrackRow(
-                                    track = track,
-                                    isSelected = isCurrent,
-                                    isPlaying = isCurrent && active?.isPlaying == true,
-                                    onClick = { onPlayLocalTrack(track) }
-                                )
-                            }
-                        }
-
-                        if (tgRecent.isNotEmpty()) {
-                            item(key = "tg_rec_hdr") {
-                                DrawerSectionLabel("ИСТОРИЯ ТРЕКОВ ТГ")
-                            }
-                            items(tgRecent, key = { "tg_r_${it.title}_${it.subtitle}" }) { rItem ->
-                                QueueTrackRow(
-                                    item = rItem,
-                                    isActive = false,
-                                    onClick = {
-                                        onSearchAndPlayInStream(rItem.title, rItem.packageName)
-                                    }
-                                )
-                            }
-                        }
-
-                        if (tgMsgs.isNotEmpty()) {
-                            item(key = "tg_notif_hdr") {
-                                DrawerSectionLabel("ЧАТЫ И КАНАЛЫ TELEGRAM")
-                            }
-                            items(tgMsgs, key = { "tg_msg_${it.key}" }) { notif ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .vistaAeroButton(shape = RoundedCornerShape(2.dp))
-                                        .clickable { onOpenHubNotification(notif.key) }
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.LibraryMusic,
-                                        contentDescription = null,
-                                        tint = theme.accent,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(Modifier.width(7.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = notif.title,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = TextPrimary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = notif.bigText.ifBlank { notif.text },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = TextSecondary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (tgSessions.isEmpty() && tgAudioFiles.isEmpty() && tgRecent.isEmpty() && tgMsgs.isEmpty()) {
-                            item(key = "tg_empty") {
-                                Text(
-                                    text = "Запустите аудио в Telegram / exteraGram / AyuGram — очередь и аудиофайлы появятся прямо здесь.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextMuted,
-                                    modifier = Modifier.padding(12.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                MusicDrawerTab.LOCAL -> {
-                    if (!hasAudioReadAccess && !hasAllFilesAccess) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .vistaInsetBox()
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Разрешите доступ к аудио и файлам для поиска локальных треков",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            VistaButton(
-                                text = "Разрешить",
-                                isPrimary = true,
-                                onClick = onRequestAudioPermission,
-                                modifier = Modifier.testTag("drawer_grant_audio_button")
-                            )
-                        }
-                    } else {
-                        if (!hasAllFilesAccess) {
-                            Row(
+                            Column(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 5.dp)
-                                    .vistaInsetBox()
-                                    .clickable(onClick = onRequestAllFilesAccess)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Выдайте «Доступ ко всем файлам» для папок Telegram Audio и Music",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = MusicSourceAmber,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "Открыть",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = theme.accent
-                                )
-                            }
-                        }
-
-                        if (localTracks.isEmpty()) {
-                            Box(
-                                modifier = Modifier
+                                    .weight(1f)
                                     .fillMaxWidth()
                                     .vistaInsetBox()
-                                    .padding(vertical = 14.dp, horizontal = 10.dp),
-                                contentAlignment = Alignment.Center
+                                    .padding(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
                             ) {
                                 Text(
-                                    text = if (trackSearchQuery.isBlank()) {
-                                        "Локальные аудиофайлы не найдены"
+                                    text = if (lang == com.example.model.AppLanguage.RU) {
+                                        "Запустите трек в стриминге или Telegram — очередь, аудио и каталог появятся здесь."
                                     } else {
-                                        "По запросу «$trackSearchQuery» файлы не найдены"
+                                        "Play audio in any streaming service or Telegram — queue and tracks appear here."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                VistaButton(
+                                    text = if (lang == com.example.model.AppLanguage.RU) {
+                                        "Подключить каталог (${active?.appLabel ?: "стриминг"})"
+                                    } else {
+                                        "Connect catalog (${active?.appLabel ?: "streaming"})"
+                                    },
+                                    isPrimary = true,
+                                    onClick = { onConnectBrowser(active?.packageName) }
                                 )
                             }
                         } else {
                             LazyColumn(
                                 modifier = Modifier
+                                    .weight(1f)
                                     .fillMaxWidth()
-                                    .heightIn(min = 110.dp, max = if (isLandscape) 220.dp else 178.dp)
                                     .vistaInsetBox()
-                                    .testTag("drawer_tracks_list"),
+                                    .testTag("drawer_streaming_queue_list"),
                                 contentPadding = PaddingValues(4.dp),
                                 verticalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
-                                items(localTracks, key = { it.id }) { track ->
-                                    val isCurrent = track.id == mediaState.currentLocalTrackId
-                                    LocalTrackRow(
-                                        track = track,
-                                        isSelected = isCurrent,
-                                        isPlaying = isCurrent && active?.isPlaying == true,
-                                        onClick = { onPlayLocalTrack(track) }
+                                if (queueItems.isNotEmpty()) {
+                                    item(key = "hdr_queue") {
+                                        DrawerSectionLabel("ОЧЕРЕДЬ (${active?.appLabel ?: ""})")
+                                    }
+                                    items(queueItems, key = { "q_${it.queueId}_${it.title}" }) { qItem ->
+                                        QueueTrackRow(
+                                            item = qItem,
+                                            isActive = qItem.isActive,
+                                            onClick = { onSkipToQueueItem(qItem.queueId) }
+                                        )
+                                    }
+                                }
+
+                                if (tgSessions.isNotEmpty()) {
+                                    item(key = "tg_sessions_hdr") {
+                                        DrawerSectionLabel("TELEGRAM ПЛЕЕР")
+                                    }
+                                    tgSessions.forEach { sess ->
+                                        item(key = "tg_sess_${sess.id}") {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .vistaAeroButton(isPrimary = true, isActive = sess.id == active?.id)
+                                                    .clickable { onSelectSession(sess.id) }
+                                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Send,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = sess.title,
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = Color.White,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = "${sess.appLabel} • ${sess.artist.ifBlank { "Telegram Аудио" }}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = Color.White.copy(alpha = 0.8f),
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (browserResults.isNotEmpty()) {
+                                    item(key = "hdr_browser") {
+                                        DrawerSectionLabel(
+                                            if (mediaState.browserSearchResults.isNotEmpty()) "РЕЗУЛЬТАТЫ В КАТАЛОГЕ"
+                                            else "КАТАЛОГ И ПЛЕЙЛИСТЫ (${browserResults.size})"
+                                        )
+                                    }
+                                    items(browserResults, key = { "br_${it.packageName}_${it.mediaId}" }) { bItem ->
+                                        BrowserTrackRow(
+                                            item = bItem,
+                                            onClick = { onPlayBrowserTrack(bItem) }
+                                        )
+                                    }
+                                }
+
+                                if (tgAudioFiles.isNotEmpty()) {
+                                    item(key = "tg_files_hdr") {
+                                        DrawerSectionLabel("АУДИО ИЗ TELEGRAM (${tgAudioFiles.size})")
+                                    }
+                                    items(tgAudioFiles, key = { "tg_audio_${it.id}" }) { track ->
+                                        val isCurrent = track.id == mediaState.currentLocalTrackId
+                                        LocalTrackRow(
+                                            track = track,
+                                            isSelected = isCurrent,
+                                            isPlaying = isCurrent && active?.isPlaying == true,
+                                            onClick = { onPlayLocalTrack(track) }
+                                        )
+                                    }
+                                }
+
+                                if (filteredRecent.isNotEmpty()) {
+                                    item(key = "hdr_recent") {
+                                        DrawerSectionLabel("НЕДАВНИЕ ТРЕКИ (${filteredRecent.size})")
+                                    }
+                                    items(filteredRecent, key = { "rec_${it.packageName}_${it.title}_${it.subtitle}" }) { rItem ->
+                                        QueueTrackRow(
+                                            item = rItem,
+                                            isActive = active?.title == rItem.title && active.packageName == rItem.packageName,
+                                            onClick = {
+                                                val matchingQueue = active?.queue?.firstOrNull {
+                                                    it.title.equals(rItem.title, ignoreCase = true)
+                                                }
+                                                if (matchingQueue != null) {
+                                                    onSkipToQueueItem(matchingQueue.queueId)
+                                                } else {
+                                                    onSearchAndPlayInStream(
+                                                        "${rItem.title} ${rItem.subtitle}".trim(),
+                                                        rItem.packageName
+                                                    )
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+
+                                if (tgMsgs.isNotEmpty()) {
+                                    item(key = "tg_notif_hdr") {
+                                        DrawerSectionLabel("КАНАЛЫ И ЧАТЫ TELEGRAM")
+                                    }
+                                    items(tgMsgs, key = { "tg_msg_${it.key}" }) { notif ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .vistaAeroButton(shape = RoundedCornerShape(2.dp))
+                                                .clickable { onOpenHubNotification(notif.key) }
+                                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.LibraryMusic,
+                                                contentDescription = null,
+                                                tint = theme.accent,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = notif.title,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = TextPrimary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = notif.bigText.ifBlank { notif.text },
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = TextSecondary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    MusicDrawerTab.LOCAL -> {
+                        if (!hasAudioReadAccess && !hasAllFilesAccess) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .vistaInsetBox()
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Разрешите доступ к аудио для поиска файлов",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                VistaButton(
+                                    text = "Разрешить",
+                                    isPrimary = true,
+                                    onClick = onRequestAudioPermission,
+                                    modifier = Modifier.testTag("drawer_grant_audio_button")
+                                )
+                            }
+                        } else {
+                            if (!hasAllFilesAccess) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp)
+                                        .vistaInsetBox()
+                                        .clickable(onClick = onRequestAllFilesAccess)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Выдайте «Доступ ко всем файлам» для папок Music и Telegram Audio",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = MusicSourceAmber,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
                                     )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Открыть",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = theme.accent
+                                    )
+                                }
+                            }
+
+                            if (localTracks.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .vistaInsetBox()
+                                        .padding(vertical = 14.dp, horizontal = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (trackSearchQuery.isBlank()) {
+                                            "Локальные аудиофайлы не найдены"
+                                        } else {
+                                            "По запросу «$trackSearchQuery» файлы не найдены"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .vistaInsetBox()
+                                        .testTag("drawer_tracks_list"),
+                                    contentPadding = PaddingValues(4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    items(localTracks, key = { it.id }) { track ->
+                                        val isCurrent = track.id == mediaState.currentLocalTrackId
+                                        LocalTrackRow(
+                                            track = track,
+                                            isSelected = isCurrent,
+                                            isPlaying = isCurrent && active?.isPlaying == true,
+                                            onClick = { onPlayLocalTrack(track) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1070,21 +1045,16 @@ fun InlineMusicControlDrawer(
                 }
             }
 
-            // Streaming & Player Apps Quick Launcher Strip
+            // Compact Streaming Service Pills at Bottom
             if (musicApps.isNotEmpty()) {
-                Spacer(Modifier.height(7.dp))
+                Spacer(Modifier.height(5.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Сервисы:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
                     musicApps.forEach { app ->
                         Row(
                             modifier = Modifier
@@ -1097,20 +1067,20 @@ fun InlineMusicControlDrawer(
                                         onClose()
                                     }
                                 }
-                                .padding(horizontal = 7.dp, vertical = 4.dp),
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             app.icon?.let { bmp ->
                                 Image(
                                     bitmap = bmp,
                                     contentDescription = app.label,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
-                                Spacer(Modifier.width(5.dp))
+                                Spacer(Modifier.width(4.dp))
                             }
                             Text(
                                 text = app.label,
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                 color = TextPrimary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -1123,10 +1093,9 @@ fun InlineMusicControlDrawer(
     }
 
     if (isLandscape) {
-        // LANDSCAPE: Sideways drawer directly to the right of LandscapeSymbianSidebar, with a right-edge collapse bar!
         Row(
             modifier = modifier
-                .widthIn(min = 270.dp, max = 335.dp)
+                .widthIn(min = 285.dp, max = 345.dp)
                 .fillMaxHeight()
                 .vistaWindowFrame(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
                 .testTag("inline_music_drawer")
@@ -1139,7 +1108,7 @@ fun InlineMusicControlDrawer(
             VerticalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
             Column(
                 modifier = Modifier
-                    .width(24.dp)
+                    .width(22.dp)
                     .fillMaxHeight()
                     .symbianMetallicBar()
                     .pointerInput(Unit) {
@@ -1170,12 +1139,11 @@ fun InlineMusicControlDrawer(
                     imageVector = Icons.Rounded.KeyboardArrowLeft,
                     contentDescription = "Свернуть панель плеера влево",
                     tint = theme.accent,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                 )
             }
         }
     } else {
-        // PORTRAIT: Drawer expands downwards beneath top player bar, pushing grid/rail down
         Column(
             modifier = modifier
                 .fillMaxWidth()
@@ -1185,7 +1153,7 @@ fun InlineMusicControlDrawer(
             drawerBody(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(min = 340.dp, max = 470.dp)
             )
             Row(
                 modifier = Modifier
@@ -1211,7 +1179,7 @@ fun InlineMusicControlDrawer(
                         )
                     }
                     .clickable(onClick = onClose)
-                    .padding(vertical = 5.dp)
+                    .padding(vertical = 4.dp)
                     .testTag("drawer_collapse_handle"),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
@@ -1220,11 +1188,11 @@ fun InlineMusicControlDrawer(
                     imageVector = Icons.Rounded.KeyboardArrowUp,
                     contentDescription = "Свернуть панель плеера",
                     tint = theme.accent,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(15.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = "Свернуть панель плеера",
+                    text = if (lang == com.example.model.AppLanguage.RU) "Свернуть" else "Collapse",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp
@@ -1273,7 +1241,7 @@ private fun DrawerSectionLabel(text: String) {
             fontSize = 9.5.sp
         ),
         color = theme.accent,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp)
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     )
 }
 
