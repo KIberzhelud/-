@@ -20,9 +20,45 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 object ShizukuRuntimeFlags {
+    private const val PREFS_NAME = "keydeck_runtime_flags"
+    private const val KEY_OEM_GESTURE_BYPASS = "oem_gesture_bypass"
+    private const val KEY_INTERCEPT_SHADE = "intercept_shade"
+    private const val KEY_INTERCEPT_LOCKSCREEN = "intercept_lockscreen"
+
     val interceptShadeEnabled = AtomicBoolean(false)
     val interceptLockScreenEnabled = AtomicBoolean(false)
     val oemGestureBypassEnabled = AtomicBoolean(false)
+
+    fun loadPersistedFlags(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.contains(KEY_OEM_GESTURE_BYPASS)) {
+            oemGestureBypassEnabled.set(prefs.getBoolean(KEY_OEM_GESTURE_BYPASS, false))
+        }
+        if (prefs.contains(KEY_INTERCEPT_SHADE)) {
+            interceptShadeEnabled.set(prefs.getBoolean(KEY_INTERCEPT_SHADE, false))
+        }
+        if (prefs.contains(KEY_INTERCEPT_LOCKSCREEN)) {
+            interceptLockScreenEnabled.set(prefs.getBoolean(KEY_INTERCEPT_LOCKSCREEN, false))
+        }
+    }
+
+    fun persistOemGestureBypass(context: Context, enabled: Boolean) {
+        oemGestureBypassEnabled.set(enabled)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_OEM_GESTURE_BYPASS, enabled)
+            .apply()
+    }
+
+    fun persistInterceptFlags(context: Context, shadeEnabled: Boolean, lockEnabled: Boolean) {
+        interceptShadeEnabled.set(shadeEnabled)
+        interceptLockScreenEnabled.set(lockEnabled)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_INTERCEPT_SHADE, shadeEnabled)
+            .putBoolean(KEY_INTERCEPT_LOCKSCREEN, lockEnabled)
+            .apply()
+    }
 }
 
 class ShizukuBridge(private val context: Context) {
@@ -77,6 +113,7 @@ class ShizukuBridge(private val context: Context) {
     }
 
     fun startObserving() {
+        ShizukuRuntimeFlags.loadPersistedFlags(context)
         runCatching {
             Shizuku.addBinderReceivedListenerSticky(binderReceivedListener)
             Shizuku.addBinderDeadListener(binderDeadListener)
@@ -138,9 +175,8 @@ class ShizukuBridge(private val context: Context) {
         lockEnabled: Boolean,
         oemGestureBypass: Boolean = ShizukuRuntimeFlags.oemGestureBypassEnabled.get()
     ) {
-        ShizukuRuntimeFlags.interceptShadeEnabled.set(shadeEnabled)
-        ShizukuRuntimeFlags.interceptLockScreenEnabled.set(lockEnabled)
-        ShizukuRuntimeFlags.oemGestureBypassEnabled.set(oemGestureBypass)
+        ShizukuRuntimeFlags.persistInterceptFlags(context, shadeEnabled, lockEnabled)
+        ShizukuRuntimeFlags.persistOemGestureBypass(context, oemGestureBypass)
         refreshStatus()
     }
 
@@ -215,23 +251,28 @@ class ShizukuBridge(private val context: Context) {
     }
 
     suspend fun applyOemGestureBypass(enabled: Boolean): Result<String> {
-        ShizukuRuntimeFlags.oemGestureBypassEnabled.set(enabled)
-        val cmd = if (enabled) {
-            "settings put global force_fsg_nav_bar 1; settings put secure navigation_mode 2"
-        } else {
-            "settings put global force_fsg_nav_bar 0"
-        }
-        val res = runPrivilegedOrRootShell(cmd)
-        refreshStatus(
-            if (res.isSuccess) {
-                if (enabled) "Обход блокировки жестов OEM включён"
-                else "Обход блокировки жестов отключён"
-            } else {
-                if (enabled) "Включён жестовый слой поверх экрана (Edge Trigger)"
-                else "Жестовый слой отключён"
+        ShizukuRuntimeFlags.persistOemGestureBypass(context, enabled)
+        if (enabled) {
+            if (!isAccessibilityServiceEnabled(context) || !hasOverlayPermission(context)) {
+                grantOverlayAndAccessibilityViaShizuku()
             }
-        )
-        return res
+            val ready = isAccessibilityServiceEnabled(context) && hasOverlayPermission(context)
+            if (!ready) {
+                refreshStatus("Включите Спец. возможности и Поверх окон для работы жестов KeyDeck")
+                return Result.failure(IllegalStateException("Требуются Спец. возможности и Поверх окон"))
+            }
+            val cmd = "settings put global force_fsg_nav_bar 1; settings put secure navigation_mode 2"
+            val res = runPrivilegedOrRootShell(cmd)
+            refreshStatus(
+                if (res.isSuccess) "Жесты KeyDeck (низ + оба края) активны, кнопки скрыты"
+                else "Жестовый слой KeyDeck активен поверх экрана"
+            )
+            return res
+        } else {
+            val res = runPrivilegedOrRootShell("settings put global force_fsg_nav_bar 0; settings put secure navigation_mode 0")
+            refreshStatus("Обход блокировки жестов отключён, кнопки восстановлены")
+            return res
+        }
     }
 
     suspend fun collapseSystemShadeViaShizuku(): Result<String> {
@@ -257,6 +298,20 @@ class ShizukuBridge(private val context: Context) {
         return runPrivilegedOrRootShell(cmd)
     }
 
+    suspend fun forceStopAndRemoveTasksViaShizuku(packages: Collection<String>): Result<String> {
+        val safePkgs = packages
+            .map { it.trim() }
+            .filter { it.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$""")) }
+            .distinct()
+        if (safePkgs.isEmpty()) return Result.success("Нет пакетов")
+        val cmd = safePkgs.joinToString("; ") { pkg ->
+            "am force-stop $pkg; " +
+                "for tid in \$(dumpsys activity recents 2>/dev/null | grep -B 3 -A 1 \"$pkg\" | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | sort -u); do " +
+                "cmd activity remove-task \$tid 2>/dev/null || am stack remove \$tid 2>/dev/null; done"
+        }
+        return runPrivilegedOrRootShell(cmd)
+    }
+
     suspend fun findRunningPackagesViaShizuku(candidates: Collection<String>): Set<String> {
         val safePkgs = candidates
             .map { it.trim() }
@@ -273,19 +328,42 @@ class ShizukuBridge(private val context: Context) {
     }
 
     suspend fun queryRecentPackagesViaPrivilegedOrRoot(): List<String> {
-        val cmd = "dumpsys activity recents 2>/dev/null | grep -E 'Recent #|realActivity=' | head -n 28"
+        val cmd = "dumpsys activity recents 2>/dev/null | grep -E 'Recent #|Task\\{|realActivity=|affinity=|baseIntent=' | head -n 60"
         val res = runPrivilegedOrRootShell(cmd)
         val out = res.getOrNull().orEmpty()
         if (out.isBlank()) return emptyList()
-        val pkgRegex = Regex("""realActivity=([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)/""")
+        val pkgRegex = Regex("""(?:realActivity|affinity|cmp)=([a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)+)""")
         val found = LinkedHashSet<String>()
         pkgRegex.findAll(out).forEach { match ->
             val pkg = match.groupValues.getOrNull(1)
-            if (!pkg.isNullOrBlank() && pkg != context.packageName) {
+            if (!pkg.isNullOrBlank() && pkg != context.packageName && !pkg.contains("systemui")) {
                 found.add(pkg)
             }
         }
         return found.toList()
+    }
+
+    suspend fun launchAppInBoundsViaShizuku(
+        packageName: String,
+        activityName: String?,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int
+    ): Result<String> {
+        val safePkg = packageName.trim()
+        if (!safePkg.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$"""))) {
+            return Result.failure(IllegalArgumentException("Некорректный пакет"))
+        }
+        val component = if (!activityName.isNullOrBlank()) "$safePkg/$activityName" else null
+        val launchPart = if (component != null) {
+            "am start -n $component --windowingMode 5"
+        } else {
+            "monkey -p $safePkg -c android.intent.category.LAUNCHER 1"
+        }
+        val resizePart = "tid=\$(dumpsys activity recents 2>/dev/null | grep -B 3 \"$safePkg\" | head -n 8 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
+            "if [ -n \"\$tid\" ]; then am task resize \$tid $left $top $right $bottom 2>/dev/null; fi"
+        return runPrivilegedOrRootShell("$launchPart; sleep 0.25; $resizePart")
     }
 
     suspend fun dumpUiTreeXmlViaRoot(): String? {
@@ -314,6 +392,10 @@ class ShizukuBridge(private val context: Context) {
 
     suspend fun dispatchMediaPlayViaShizuku(): Result<String> {
         return runPrivilegedOrRootShell("cmd media_session dispatch play || input keyevent 126")
+    }
+
+    suspend fun pasteClipboardViaInputKeyEvent(): Result<String> {
+        return runPrivilegedOrRootShell("input keyevent 279")
     }
 
     suspend fun runPrivilegedOrRootShell(command: String): Result<String> {

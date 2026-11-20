@@ -22,9 +22,13 @@ import com.example.model.HubActionSummary
 import com.example.model.HubChatMessage
 import com.example.model.HubNotificationItem
 import com.example.model.HubSubTab
+import com.example.model.LockedChatThread
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import java.lang.ref.WeakReference
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -47,12 +51,33 @@ object NotificationHubRepository {
     private val actionCache = ConcurrentHashMap<String, CachedNotificationActions>()
     private val appIconCache = ConcurrentHashMap<String, ImageBitmap>()
     private val appLabelCache = ConcurrentHashMap<String, String>()
+    private val archivedThreads = LinkedHashMap<String, ArchivedChatSummary>()
+    private val archiveLock = Any()
     private val urlRegex = Regex("""https?://[^\s<>"']+""", RegexOption.IGNORE_CASE)
+
+    @Volatile
+    private var archiveLoaded = false
+
+    @Volatile
+    private var appContext: Context? = null
 
     @Volatile
     private var serviceRef: WeakReference<LauncherMediaListenerService>? = null
 
+    private data class ArchivedChatSummary(
+        val id: String,
+        val packageName: String,
+        val appName: String,
+        val contactName: String,
+        val lastMessage: String,
+        val timestampMs: Long,
+        val notificationKey: String,
+        val senderHandle: String? = null
+    )
+
     fun attachService(service: LauncherMediaListenerService) {
+        appContext = service.applicationContext
+        ensureArchiveLoaded(service.applicationContext)
         serviceRef = WeakReference(service)
         syncFromService(service)
     }
@@ -66,6 +91,8 @@ object NotificationHubRepository {
     }
 
     fun syncFromService(service: LauncherMediaListenerService) {
+        appContext = service.applicationContext
+        ensureArchiveLoaded(service.applicationContext)
         val active = runCatching { service.activeNotifications }.getOrNull() ?: return
         val selfPkg = service.packageName
         val parsed = active
@@ -93,6 +120,219 @@ object NotificationHubRepository {
         val validKeys = parsed.mapTo(HashSet()) { it.key }
         actionCache.keys.retainAll(validKeys)
         _notifications.value = parsed
+        recordChatsIntoArchive(service.applicationContext, parsed)
+    }
+
+    fun ensureArchiveLoaded(context: Context) {
+        if (archiveLoaded) return
+        synchronized(archiveLock) {
+            if (archiveLoaded) return
+            val file = File(context.filesDir, "messenger_chats_archive.json")
+            if (file.exists()) {
+                runCatching {
+                    val arr = JSONArray(file.readText())
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val id = obj.optString("id").trim()
+                        val pkg = obj.optString("packageName").trim()
+                        val contact = obj.optString("contactName").trim()
+                        if (id.isEmpty() || pkg.isEmpty() || contact.isEmpty()) continue
+                        archivedThreads[id] = ArchivedChatSummary(
+                            id = id,
+                            packageName = pkg,
+                            appName = obj.optString("appName", pkg),
+                            contactName = contact,
+                            lastMessage = obj.optString("lastMessage", ""),
+                            timestampMs = obj.optLong("timestampMs", 0L),
+                            notificationKey = obj.optString("notificationKey", id),
+                            senderHandle = obj.optString("senderHandle").takeIf { it.isNotBlank() }
+                        )
+                    }
+                }
+            }
+            archiveLoaded = true
+        }
+    }
+
+    private fun recordChatsIntoArchive(context: Context, items: List<HubNotificationItem>) {
+        val chatItems = items.filter { it.subTab == HubSubTab.CHATS && it.title.isNotBlank() }
+        if (chatItems.isEmpty()) return
+        synchronized(archiveLock) {
+            var changed = false
+            chatItems.forEach { item ->
+                val cleanTitle = item.title.trim()
+                val threadId = "archive:${item.packageName}:${cleanTitle.lowercase()}"
+                val lastText = item.messages.lastOrNull()?.text?.ifBlank { item.text } ?: item.text
+                val handle = Regex("""(@[A-Za-z0-9_]{3,}|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|\+?\d{7,15})""")
+                    .find("$cleanTitle $lastText")?.value
+                val prev = archivedThreads[threadId]
+                if (prev == null || prev.lastMessage != lastText || prev.timestampMs < item.postTime) {
+                    archivedThreads[threadId] = ArchivedChatSummary(
+                        id = threadId,
+                        packageName = item.packageName,
+                        appName = item.appName,
+                        contactName = cleanTitle,
+                        lastMessage = lastText,
+                        timestampMs = item.postTime,
+                        notificationKey = item.key,
+                        senderHandle = handle ?: prev?.senderHandle
+                    )
+                    changed = true
+                }
+            }
+            if (archivedThreads.size > 120) {
+                val sortedKeys = archivedThreads.entries
+                    .sortedBy { it.value.timestampMs }
+                    .take(archivedThreads.size - 120)
+                    .map { it.key }
+                sortedKeys.forEach { archivedThreads.remove(it) }
+                changed = true
+            }
+            if (changed) {
+                saveArchiveLocked(context)
+            }
+        }
+    }
+
+    private fun saveArchiveLocked(context: Context) {
+        runCatching {
+            val arr = JSONArray()
+            archivedThreads.values
+                .sortedByDescending { it.timestampMs }
+                .take(120)
+                .forEach { entry ->
+                    arr.put(
+                        JSONObject().apply {
+                            put("id", entry.id)
+                            put("packageName", entry.packageName)
+                            put("appName", entry.appName)
+                            put("contactName", entry.contactName)
+                            put("lastMessage", entry.lastMessage)
+                            put("timestampMs", entry.timestampMs)
+                            put("notificationKey", entry.notificationKey)
+                            entry.senderHandle?.let { put("senderHandle", it) }
+                        }
+                    )
+                }
+            File(context.filesDir, "messenger_chats_archive.json").writeText(arr.toString())
+        }
+    }
+
+    fun searchArchivedThreads(context: Context, query: String): List<LockedChatThread> {
+        ensureArchiveLoaded(context)
+        val clean = query.trim()
+        if (clean.length < 2) return emptyList()
+        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val snapshot = synchronized(archiveLock) { archivedThreads.values.toList() }
+        val activeNotifs = _notifications.value
+        return snapshot
+            .filter {
+                KeyboardSearchMatcher.matches(it.contactName, clean) ||
+                    KeyboardSearchMatcher.matches(it.appName, clean) ||
+                    KeyboardSearchMatcher.matches(it.lastMessage, clean) ||
+                    (it.senderHandle != null && it.senderHandle.contains(clean, ignoreCase = true))
+            }
+            .sortedByDescending { it.timestampMs }
+            .take(10)
+            .map { entry ->
+                val liveMatch = activeNotifs.firstOrNull { n ->
+                    n.packageName == entry.packageName &&
+                        n.title.equals(entry.contactName, ignoreCase = true)
+                }
+                val resolvedKey = liveMatch?.key ?: entry.notificationKey.ifBlank { entry.id }
+                val timeStr = if (entry.timestampMs > 0L) timeFmt.format(Date(entry.timestampMs)) else ""
+                LockedChatThread(
+                    key = resolvedKey,
+                    packageName = entry.packageName,
+                    appName = entry.appName,
+                    contactName = entry.contactName,
+                    messages = if (entry.lastMessage.isNotBlank()) {
+                        listOf(
+                            HubChatMessage(
+                                sender = entry.contactName,
+                                text = entry.lastMessage,
+                                timestamp = entry.timestampMs
+                            )
+                        )
+                    } else emptyList(),
+                    canReplyInline = liveMatch?.canReplyInline == true,
+                    supportsMediaReply = liveMatch?.supportsMediaReply == true,
+                    lastTimestamp = entry.timestampMs,
+                    timeFormatted = timeStr,
+                    fallbackPhoneNumber = entry.senderHandle,
+                    appIcon = resolveAppIcon(context, entry.packageName)
+                )
+            }
+    }
+
+    fun isSmsPackage(packageName: String): Boolean {
+        val low = packageName.lowercase()
+        return low.contains("mms") || low.contains("apps.messaging") || low.endsWith(".messaging") || low == "sms"
+    }
+
+    fun openChatThreadInMessenger(context: Context, thread: LockedChatThread, messageText: String = ""): Boolean {
+        if (thread.key.isNotBlank() &&
+            !thread.key.startsWith("archive:") &&
+            !thread.key.startsWith("contact:") &&
+            openNotification(context, thread.key)
+        ) {
+            return true
+        }
+        val pkg = thread.packageName.lowercase()
+        val handle = thread.fallbackPhoneNumber?.trim().orEmpty()
+        if (pkg.contains("telegram") || pkg.contains("exteragram") || pkg.contains("nekogram") ||
+            pkg.contains("ayugram") || pkg.contains("challegram") || pkg.contains("nagram")
+        ) {
+            if (handle.startsWith("@") && messageText.isBlank()) {
+                val tgUri = Uri.parse("tg://resolve?domain=${handle.removePrefix("@")}")
+                val tgIntent = Intent(Intent.ACTION_VIEW, tgUri).apply {
+                    if (thread.packageName.isNotBlank()) setPackage(thread.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (runCatching { context.startActivity(tgIntent); true }.getOrDefault(false)) return true
+            }
+        }
+        if (pkg.contains("whatsapp") && handle.any { it.isDigit() }) {
+            val digits = handle.filter { it.isDigit() }
+            if (digits.length >= 7) {
+                val url = if (messageText.isNotBlank()) {
+                    "https://wa.me/$digits?text=${Uri.encode(messageText)}"
+                } else {
+                    "https://wa.me/$digits"
+                }
+                val waIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    if (thread.packageName.isNotBlank()) setPackage(thread.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (runCatching { context.startActivity(waIntent); true }.getOrDefault(false)) return true
+            }
+        }
+        if ((pkg.contains("gmail") || pkg.contains("mail") || pkg.contains("outlook")) && handle.contains("@")) {
+            val mailIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$handle")).apply {
+                if (messageText.isNotBlank()) putExtra(Intent.EXTRA_TEXT, messageText)
+                if (thread.packageName.isNotBlank()) setPackage(thread.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (runCatching { context.startActivity(mailIntent); true }.getOrDefault(false)) return true
+        }
+        if (messageText.isNotBlank() && thread.packageName.isNotBlank() && !isSmsPackage(thread.packageName)) {
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                setPackage(thread.packageName)
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, messageText)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (runCatching { context.startActivity(sendIntent); true }.getOrDefault(false)) return true
+        }
+        if (thread.packageName.isNotBlank()) {
+            val launch = context.packageManager.getLaunchIntentForPackage(thread.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (launch != null && runCatching { context.startActivity(launch); true }.getOrDefault(false)) {
+                return true
+            }
+        }
+        return false
     }
 
     fun onPosted(service: LauncherMediaListenerService, sbn: StatusBarNotification?) {
@@ -134,6 +374,16 @@ object NotificationHubRepository {
             _notifications.value = _notifications.value.filterNot { it.key == key }
             true
         }.getOrDefault(false)
+    }
+
+    fun clearAllNotifications() {
+        val service = serviceRef?.get()
+        val dismissible = _notifications.value.filterNot { it.isOngoing }
+        dismissible.forEach { item ->
+            runCatching { service?.cancelNotification(item.key) }
+            actionCache.remove(item.key)
+        }
+        _notifications.value = _notifications.value.filter { it.isOngoing }
     }
 
     fun replyToNotification(

@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -9,14 +10,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.AppAdaptationRuntime
 import com.example.data.KeyDeckAccessibilityService
+import com.example.model.HubSubTab
+import com.example.model.MainTab
+import com.example.model.WallpaperPaletteData
 import com.example.ui.HardwareKeyHandler
 import com.example.ui.LauncherScreen
 import com.example.ui.LocalAppLang
@@ -38,24 +41,34 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
         handleExtraIntent(intent)
         setContent {
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             clearComposeFocusAction = { focusManager.clearFocus() }
             val state by viewModel.uiState.collectAsStateWithLifecycle()
+            val effectivePalette = state.activeCustomPalette?.let {
+                WallpaperPaletteData(
+                    dominantDarkArgb = it.dominantDarkArgb,
+                    accentArgb = it.accentArgb,
+                    highlightArgb = it.highlightArgb
+                )
+            } ?: state.wallpaperPalette
             val vistaTokens = buildVistaThemeTokens(
                 themeColor = state.uiThemeColor,
-                wallpaperPalette = state.wallpaperPalette,
+                wallpaperPalette = effectivePalette,
                 hasWallpaper = state.hasWallpaper
             )
-            LaunchedEffect(vistaTokens) {
-                AppAdaptationRuntime.currentThemeTokens = vistaTokens
-            }
             val baseDensity = LocalDensity.current
-            val scaledDensity = Density(
-                density = (baseDensity.density * state.uiScale).coerceIn(0.6f, 6.0f),
-                fontScale = (baseDensity.fontScale * state.uiScale).coerceIn(0.6f, 4.0f)
-            )
+            val scaledDensity = remember(baseDensity.density, baseDensity.fontScale, state.uiScale) {
+                Density(
+                    density = (baseDensity.density * state.uiScale).coerceIn(0.6f, 6.0f),
+                    fontScale = (baseDensity.fontScale * state.uiScale).coerceIn(0.6f, 4.0f)
+                )
+            }
             CompositionLocalProvider(
                 LocalAppLang provides state.appLanguage,
                 LocalDensity provides scaledDensity
@@ -81,6 +94,33 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra(KeyDeckAccessibilityService.EXTRA_OPEN_RECENTS, false) == true) {
             viewModel.openRecentsOverlay()
             intent.removeExtra(KeyDeckAccessibilityService.EXTRA_OPEN_RECENTS)
+        }
+        if (intent?.getBooleanExtra(KeyDeckAccessibilityService.EXTRA_OPEN_HUB, false) == true) {
+            viewModel.selectTab(MainTab.HUB)
+            viewModel.selectHubSubTab(HubSubTab.CHATS)
+            intent.removeExtra(KeyDeckAccessibilityService.EXTRA_OPEN_HUB)
+        }
+        if (intent?.getBooleanExtra(KeyDeckAccessibilityService.EXTRA_OPEN_SEARCH, false) == true) {
+            viewModel.closeWorkspaceSpace()
+            viewModel.selectTab(MainTab.HOME)
+            runCatching { appSearchFocusRequester.requestFocus() }
+            intent.removeExtra(KeyDeckAccessibilityService.EXTRA_OPEN_SEARCH)
+        }
+        when (intent?.getStringExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)) {
+            KeyDeckAccessibilityService.WS_ACTION_PREV -> {
+                viewModel.openWorkspaceSpace()
+                viewModel.navigateWorkspace(-1, 0)
+                intent.removeExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)
+            }
+            KeyDeckAccessibilityService.WS_ACTION_NEXT -> {
+                viewModel.openWorkspaceSpace()
+                viewModel.navigateWorkspace(+1, 0)
+                intent.removeExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)
+            }
+            KeyDeckAccessibilityService.WS_ACTION_HOME -> {
+                viewModel.openHomeWorkspace()
+                intent.removeExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)
+            }
         }
     }
 

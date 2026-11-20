@@ -65,6 +65,15 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -80,6 +89,9 @@ fun HubNotificationCard(
 ) {
     val theme = LocalVistaTheme.current
     val context = LocalContext.current
+    val density = LocalDensity.current
+    val dismissThresholdPx = remember(density) { with(density) { 100.dp.toPx() } }
+    var dragOffsetX by remember(item.key) { mutableFloatStateOf(0f) }
     var replyText by remember(item.key) { mutableStateOf("") }
     var attachedUri by remember(item.key) { mutableStateOf<Uri?>(null) }
     var attachedName by remember(item.key) { mutableStateOf<String?>(null) }
@@ -108,6 +120,26 @@ fun HubNotificationCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .offset { IntOffset(dragOffsetX.roundToInt(), 0) }
+            .alpha((1f - abs(dragOffsetX) / (dismissThresholdPx * 2.5f)).coerceIn(0.35f, 1f))
+            .then(
+                if (!item.isOngoing) {
+                    Modifier.pointerInput(item.key) {
+                        detectHorizontalDragGestures(
+                            onDragStart = { dragOffsetX = 0f },
+                            onHorizontalDrag = { _, dragAmount -> dragOffsetX += dragAmount },
+                            onDragEnd = {
+                                if (abs(dragOffsetX) > dismissThresholdPx) {
+                                    onDismiss()
+                                } else {
+                                    dragOffsetX = 0f
+                                }
+                            },
+                            onDragCancel = { dragOffsetX = 0f }
+                        )
+                    }
+                } else Modifier
+            )
             .vistaWindowFrame(RoundedCornerShape(4.dp))
             .then(
                 if (isFocused) Modifier.border(1.5.dp, theme.focusBorder, RoundedCornerShape(4.dp))
@@ -387,7 +419,7 @@ fun ShizukuControlPanelCard(
     onGrantNotificationAccessViaShizuku: () -> Unit,
     onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
     onOpenOptimizationSettings: () -> Unit = {},
-    onOpenAdaptationSettings: () -> Unit = {},
+    onOpenLinuxCatalog: () -> Unit = {},
     onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
     onToggleOemGestureBypass: () -> Unit = {},
@@ -523,10 +555,10 @@ fun ShizukuControlPanelCard(
                 Box(
                     modifier = Modifier
                         .vistaAeroButton()
-                        .clickable(onClick = onOpenAdaptationSettings)
+                        .clickable(onClick = onOpenLinuxCatalog)
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text("Адаптация приложений", style = MaterialTheme.typography.labelSmall, color = theme.accent)
+                    Text("Пакеты Linux (.deb / Termux)", style = MaterialTheme.typography.labelSmall, color = theme.accent)
                 }
             }
 

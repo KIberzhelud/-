@@ -35,6 +35,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -163,14 +170,25 @@ fun CallsContactsView(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    var callsTfv by remember {
+                        mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
+                    }
+                    LaunchedEffect(searchQuery) {
+                        if (searchQuery != callsTfv.text) {
+                            callsTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+                        }
+                    }
                     BasicTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChange,
+                        value = callsTfv,
+                        onValueChange = { next ->
+                            callsTfv = next
+                            onSearchQueryChange(next.text)
+                        },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
                         cursorBrush = SolidColor(ElectricCyan),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(onGo = { onCallClick(searchQuery) }),
+                        keyboardActions = KeyboardActions(onGo = { onCallClick(callsTfv.text) }),
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(callsSearchFocusRequester)

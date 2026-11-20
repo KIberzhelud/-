@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -40,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +63,7 @@ import com.example.data.AutoCloseManager
 import com.example.data.KeyboardSearchMatcher
 import com.example.model.AppEntry
 import com.example.model.AppLanguage
+import com.example.model.CustomColorPalette
 import com.example.model.PlayerCoverStyle
 import com.example.model.UiThemeColor
 import com.example.model.WallpaperPaletteData
@@ -84,15 +88,25 @@ fun AppearanceSettingsDialog(
     hasWallpaper: Boolean,
     wallpaperBitmap: ImageBitmap?,
     wallpaperPalette: WallpaperPaletteData?,
+    savedPalettes: List<CustomColorPalette> = emptyList(),
+    activeCustomPaletteId: String? = null,
     appLanguage: AppLanguage = AppLanguage.RU,
     uiScale: Float = 1.0f,
     playerCoverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
+    showWeatherInHubOther: Boolean = true,
+    showWeatherInHomeTile: Boolean = false,
     onSelectThemeColor: (UiThemeColor) -> Unit,
     onPickWallpaper: () -> Unit,
     onClearWallpaper: () -> Unit,
+    onSaveCurrentWallpaperPalette: (String) -> Unit = {},
+    onCreateAndSaveCustomPalette: (name: String, darkArgb: Long, accentArgb: Long, highlightArgb: Long) -> Unit = { _, _, _, _ -> },
+    onSelectCustomPalette: (String?) -> Unit = {},
+    onDeleteCustomPalette: (String) -> Unit = {},
     onSelectLanguage: (AppLanguage) -> Unit = {},
     onChangeUiScale: (Float) -> Unit = {},
     onSelectCoverStyle: (PlayerCoverStyle) -> Unit = {},
+    onToggleWeatherInHubOther: () -> Unit = {},
+    onToggleWeatherInHomeTile: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
@@ -241,7 +255,28 @@ fun AppearanceSettingsDialog(
                             )
                         }
                     }
+
+                    if (hasWallpaper && wallpaperPalette != null) {
+                        VistaButton(
+                            text = "Сохранить текущую палитру обоев",
+                            onClick = {
+                                onSaveCurrentWallpaperPalette("Обои #${savedPalettes.size + 1}")
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("save_wallpaper_palette_btn")
+                        )
+                    }
                 }
+
+                // 1b. Saved Palettes & Custom Palette Creator
+                CustomPalettesSection(
+                    savedPalettes = savedPalettes,
+                    activeCustomPaletteId = activeCustomPaletteId,
+                    onSelectCustomPalette = onSelectCustomPalette,
+                    onDeleteCustomPalette = onDeleteCustomPalette,
+                    onCreateAndSaveCustomPalette = onCreateAndSaveCustomPalette
+                )
 
                 // 2. Base Color (active without wallpaper, or as base preference)
                 Column(
@@ -339,7 +374,9 @@ fun AppearanceSettingsDialog(
                     }
                 }
 
-                // 4. UI Scale Slider (80% - 130%)
+                // 4. UI Scale Slider (80% - 130%) — uses local draftScale while dragging to prevent flicker
+                val clampedScale = uiScale.coerceIn(0.80f, 1.30f)
+                var draftScale by remember(clampedScale) { mutableFloatStateOf(clampedScale) }
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -361,7 +398,7 @@ fun AppearanceSettingsDialog(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "${L10n.scaleLabel(lang).uppercase()} (${(uiScale * 100f).roundToInt()}%)",
+                                text = "${L10n.scaleLabel(lang).uppercase()} (${(draftScale * 100f).roundToInt()}%)",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                 color = theme.focusBorder
                             )
@@ -369,7 +406,10 @@ fun AppearanceSettingsDialog(
                         Box(
                             modifier = Modifier
                                 .vistaAeroButton()
-                                .clickable { onChangeUiScale(1.0f) }
+                                .clickable {
+                                    draftScale = 1.0f
+                                    onChangeUiScale(1.0f)
+                                }
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                                 .testTag("ui_scale_reset_button")
                         ) {
@@ -380,7 +420,6 @@ fun AppearanceSettingsDialog(
                             )
                         }
                     }
-                    val clampedScale = uiScale.coerceIn(0.80f, 1.30f)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -391,7 +430,8 @@ fun AppearanceSettingsDialog(
                                 .size(width = 32.dp, height = 28.dp)
                                 .vistaAeroButton()
                                 .clickable {
-                                    val next = (((clampedScale - 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    val next = (((draftScale - 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    draftScale = next
                                     onChangeUiScale(next)
                                 }
                                 .testTag("ui_scale_minus_button"),
@@ -404,10 +444,12 @@ fun AppearanceSettingsDialog(
                             )
                         }
                         VistaSlider(
-                            value = clampedScale,
+                            value = draftScale,
                             onValueChange = { raw ->
-                                val stepped = ((raw * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
-                                onChangeUiScale(stepped)
+                                draftScale = ((raw * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                            },
+                            onValueChangeFinished = {
+                                onChangeUiScale(draftScale)
                             },
                             valueRange = 0.80f..1.30f,
                             tickCount = 11,
@@ -420,7 +462,8 @@ fun AppearanceSettingsDialog(
                                 .size(width = 32.dp, height = 28.dp)
                                 .vistaAeroButton()
                                 .clickable {
-                                    val next = (((clampedScale + 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    val next = (((draftScale + 0.05f) * 20f).roundToInt() / 20f).coerceIn(0.80f, 1.30f)
+                                    draftScale = next
                                     onChangeUiScale(next)
                                 }
                                 .testTag("ui_scale_plus_button"),
@@ -495,6 +538,64 @@ fun AppearanceSettingsDialog(
                         }
                     }
                 }
+
+                // 6. Weather Widget Placement
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Text(
+                        text = "ВИДЖЕТ ПОГОДЫ",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = theme.focusBorder
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .vistaAeroButton(isPrimary = showWeatherInHubOther, isActive = showWeatherInHubOther)
+                                .clickable(onClick = onToggleWeatherInHubOther)
+                                .padding(vertical = 8.dp, horizontal = 8.dp)
+                                .testTag("weather_toggle_hub_other"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (showWeatherInHubOther) "✓ В Хаб → Прочее" else "В Хаб → Прочее",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (showWeatherInHubOther) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (showWeatherInHubOther) Color.White else TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .vistaAeroButton(isPrimary = showWeatherInHomeTile, isActive = showWeatherInHomeTile)
+                                .clickable(onClick = onToggleWeatherInHomeTile)
+                                .padding(vertical = 8.dp, horizontal = 8.dp)
+                                .testTag("weather_toggle_home_tile"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (showWeatherInHomeTile) "✓ Плитка Домой" else "Плитка Домой",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (showWeatherInHomeTile) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (showWeatherInHomeTile) Color.White else TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -559,6 +660,208 @@ private fun ThemeColorChoiceCard(
 }
 
 @Composable
+private fun CustomPalettesSection(
+    savedPalettes: List<CustomColorPalette>,
+    activeCustomPaletteId: String?,
+    onSelectCustomPalette: (String?) -> Unit,
+    onDeleteCustomPalette: (String) -> Unit,
+    onCreateAndSaveCustomPalette: (name: String, darkArgb: Long, accentArgb: Long, highlightArgb: Long) -> Unit
+) {
+    val theme = LocalVistaTheme.current
+    var showCreator by remember { mutableStateOf(false) }
+    var customName by remember { mutableStateOf("") }
+    var darkHue by remember { mutableFloatStateOf(215f) }
+    var accentHue by remember { mutableFloatStateOf(205f) }
+    var highlightHue by remember { mutableFloatStateOf(190f) }
+
+    val previewDark = Color.hsv(darkHue, 0.55f, 0.24f)
+    val previewAccent = Color.hsv(accentHue, 0.78f, 0.64f)
+    val previewHighlight = Color.hsv(highlightHue, 0.62f, 0.92f)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .vistaInsetBox()
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "ПОЛЬЗОВАТЕЛЬСКИЕ ПАЛИТРЫ",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = theme.focusBorder
+            )
+            Box(
+                modifier = Modifier
+                    .vistaAeroButton(isPrimary = showCreator)
+                    .clickable { showCreator = !showCreator }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("toggle_palette_creator_btn")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        text = if (showCreator) "Скрыть" else "Создать",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color.White
+                    )
+                }
+            }
+        }
+
+        if (savedPalettes.isEmpty()) {
+            Text(
+                text = "Сохраняйте палитру из обоев или создавайте собственную схему для всей системы и экрана блокировки.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        } else {
+            if (activeCustomPaletteId != null) {
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable { onSelectCustomPalette(null) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("reset_custom_palette_btn")
+                ) {
+                    Text(
+                        text = "Сбросить палитру (авто / базовая)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.accent
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                savedPalettes.forEach { pal ->
+                    val isSelected = pal.id == activeCustomPaletteId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .vistaAeroButton(isPrimary = isSelected, isActive = isSelected, shape = RoundedCornerShape(3.dp))
+                            .clickable { onSelectCustomPalette(if (isSelected) null else pal.id) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("saved_palette_row_${pal.id}"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ColorSwatchBox(Color(pal.dominantDarkArgb.toInt()))
+                        Spacer(Modifier.width(4.dp))
+                        ColorSwatchBox(Color(pal.accentArgb.toInt()))
+                        Spacer(Modifier.width(4.dp))
+                        ColorSwatchBox(Color(pal.highlightArgb.toInt()))
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = pal.name,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (isSelected) Color.White else TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (isSelected) "Активна" else if (pal.isFromWallpaper) "Из обоев" else "Пользовательская",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                color = if (isSelected) theme.focusBorder else TextMuted
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .vistaAeroButton()
+                                .clickable { onDeleteCustomPalette(pal.id) }
+                                .testTag("delete_palette_${pal.id}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteOutline,
+                                contentDescription = "Удалить палитру",
+                                tint = CallMissedRed,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showCreator) {
+            HorizontalDivider(color = theme.divider.copy(alpha = 0.6f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ColorSwatchBox(previewDark)
+                ColorSwatchBox(previewAccent)
+                ColorSwatchBox(previewHighlight)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .vistaInsetBox(isFocused = true)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    if (customName.isEmpty()) {
+                        Text("Название палитры…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                    }
+                    BasicTextField(
+                        value = customName,
+                        onValueChange = { customName = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                        cursorBrush = SolidColor(theme.accent),
+                        modifier = Modifier.fillMaxWidth().testTag("custom_palette_name_input")
+                    )
+                }
+            }
+            Text("Фон (Dark): ${darkHue.roundToInt()}°", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            VistaSlider(
+                value = darkHue,
+                onValueChange = { darkHue = it },
+                valueRange = 0f..360f,
+                compact = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("Акцент (Accent): ${accentHue.roundToInt()}°", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            VistaSlider(
+                value = accentHue,
+                onValueChange = { accentHue = it },
+                valueRange = 0f..360f,
+                compact = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("Подсветка (Highlight): ${highlightHue.roundToInt()}°", style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            VistaSlider(
+                value = highlightHue,
+                onValueChange = { highlightHue = it },
+                valueRange = 0f..360f,
+                compact = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            VistaButton(
+                text = "Сохранить и применить",
+                isPrimary = true,
+                onClick = {
+                    val label = customName.trim().ifBlank { "Палитра ${savedPalettes.size + 1}" }
+                    onCreateAndSaveCustomPalette(
+                        label,
+                        previewDark.toArgb().toLong() and 0xFFFFFFFFL,
+                        previewAccent.toArgb().toLong() and 0xFFFFFFFFL,
+                        previewHighlight.toArgb().toLong() and 0xFFFFFFFFL
+                    )
+                    customName = ""
+                    showCreator = false
+                },
+                modifier = Modifier.fillMaxWidth().testTag("save_custom_palette_btn")
+            )
+        }
+    }
+}
+
+@Composable
 fun AutoKillSettingsDialog(
     enabled: Boolean,
     autoKillPackages: Set<String>,
@@ -571,8 +874,9 @@ fun AutoKillSettingsDialog(
 ) {
     val theme = LocalVistaTheme.current
     var searchQuery by remember { mutableStateOf("") }
+    val initialSelected = remember(allApps) { autoKillPackages }
 
-    val sortedApps = remember(allApps, autoKillPackages, searchQuery) {
+    val sortedApps = remember(allApps, initialSelected, searchQuery) {
         val filtered = if (searchQuery.isBlank()) {
             allApps
         } else {
@@ -584,7 +888,7 @@ fun AutoKillSettingsDialog(
         filtered
             .distinctBy { it.packageName }
             .sortedWith(
-                compareByDescending<AppEntry> { autoKillPackages.contains(it.packageName) }
+                compareByDescending<AppEntry> { initialSelected.contains(it.packageName) }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
             )
     }

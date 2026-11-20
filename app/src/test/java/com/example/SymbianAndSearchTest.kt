@@ -7,10 +7,13 @@ import android.graphics.Color as AndroidColor
 import android.os.Looper
 import android.view.KeyEvent
 import android.media.session.PlaybackState
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.AndroidOptimizerManager
-import com.example.data.AppAdaptationRuntime
+import com.example.data.AppPreviewCache
 import com.example.data.AutoCloseManager
+import com.example.data.KeyboardSearchMatcher
+import com.example.data.LinuxPackagesRepository
 import com.example.data.MediaControlRepository
 import com.example.data.MediaGuardRuntime
 import com.example.data.NotificationHubRepository
@@ -19,7 +22,7 @@ import com.example.data.ShizukuBridge
 import com.example.data.SymbianIconMapper
 import com.example.data.UniversalSearchRepository
 import com.example.data.WallpaperThemeHelper
-import com.example.model.AppAdaptationMode
+import com.example.data.WeatherRepository
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
 import com.example.model.AppLanguage
@@ -28,7 +31,9 @@ import com.example.model.DeviceSearchFile
 import com.example.model.HubCategory
 import com.example.model.HubNotificationItem
 import com.example.model.HubSubTab
+import com.example.model.LinuxPackageKind
 import com.example.model.LocalAudioTrack
+import com.example.model.LockedChatThread
 import com.example.model.MainTab
 import com.example.model.MediaPlayerState
 import com.example.model.MediaSessionUi
@@ -36,13 +41,17 @@ import com.example.model.MusicDrawerTab
 import com.example.model.PlayerCoverStyle
 import com.example.model.SearchResultKind
 import com.example.model.UiThemeColor
+import com.example.model.WallpaperPaletteData
 import com.example.ui.HardwareKeyHandler
 import com.example.ui.theme.BlueVistaTokens
 import com.example.ui.theme.GrayVistaTokens
 import com.example.ui.theme.buildVistaThemeTokens
 import com.example.viewmodel.LauncherViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -60,7 +69,24 @@ import java.io.File
 @Config(sdk = [36])
 class SymbianAndSearchTest {
 
-    private fun pumpMainUntil(timeoutMs: Long = 5000L, predicate: () -> Boolean) {
+    private val trackedViewModels = mutableListOf<LauncherViewModel>()
+
+    private fun createViewModel(app: Application): LauncherViewModel =
+        LauncherViewModel(app).also { trackedViewModels.add(it) }
+
+    @After
+    fun tearDownViewModels() {
+        val onClearedMethod = runCatching {
+            LauncherViewModel::class.java.getDeclaredMethod("onCleared").apply { isAccessible = true }
+        }.getOrNull()
+        trackedViewModels.forEach { vm ->
+            runCatching { onClearedMethod?.invoke(vm) }
+            runCatching { vm.viewModelScope.cancel() }
+        }
+        trackedViewModels.clear()
+    }
+
+    private fun pumpMainUntil(timeoutMs: Long = 8000L, predicate: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
@@ -112,7 +138,7 @@ class SymbianAndSearchTest {
     @Test
     fun `swipe music source cycles installed music apps and escape closes file context menu`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         val field = LauncherViewModel::class.java.getDeclaredField("_allApps")
@@ -158,7 +184,7 @@ class SymbianAndSearchTest {
     @Test
     fun `rename app and switch between original android and symbian icon catalog work end to end`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         assertTrue(SymbianIconMapper.catalog.isNotEmpty())
@@ -325,7 +351,7 @@ class SymbianAndSearchTest {
     @Test
     fun `inline music drawer toggles cleanly and local track search filters catalog`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         assertFalse(viewModel.uiState.value.showMusicSheet)
@@ -421,7 +447,7 @@ class SymbianAndSearchTest {
     @Test
     fun `viewmodel switches blue gray theme toggles autokill packages and changes music tabs`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         assertEquals(UiThemeColor.BLUE, viewModel.uiState.value.uiThemeColor)
@@ -448,7 +474,7 @@ class SymbianAndSearchTest {
     @Test
     fun `f1 to f5 switch tabs open books toggle music drawer and shift f1 opens shortcuts`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         assertEquals(MainTab.HOME, viewModel.uiState.value.activeTab)
@@ -538,7 +564,7 @@ class SymbianAndSearchTest {
     }
 
     @Test
-    fun `background media guard optimizer adaptation and spoof toggles work correctly`() {
+    fun `background media guard optimizer pip window detection and custom palette without wallpaper work`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val shizuku = ShizukuBridge(app)
         val optimizer = AndroidOptimizerManager(app, shizuku)
@@ -547,24 +573,40 @@ class SymbianAndSearchTest {
         assertTrue(ram.totalRamMb > 0)
         assertTrue(ram.usedRamPercent in 0..100)
 
-        assertTrue(AppAdaptationRuntime.isDefaultMessengerPackage("org.telegram.messenger", "Telegram"))
-        assertTrue(AppAdaptationRuntime.isDefaultMessengerPackage("com.whatsapp", "WhatsApp"))
-        assertFalse(AppAdaptationRuntime.isDefaultMessengerPackage("com.android.settings", "Settings"))
+        // Custom palette applies theme colors even when hasWallpaper is false
+        val customPal = WallpaperPaletteData(
+            dominantDarkArgb = 0xFF2B123F,
+            accentArgb = 0xFFE070FF,
+            highlightArgb = 0xFFF2AAFF
+        )
+        val themedNoWall = buildVistaThemeTokens(UiThemeColor.BLUE, customPal, hasWallpaper = false)
+        assertFalse(themedNoWall.isGlassMode)
+        assertNotEquals(BlueVistaTokens.surface, themedNoWall.surface)
+        assertNotEquals(BlueVistaTokens.accent, themedNoWall.accent)
 
         RecentForegroundTracker.recordForeground("com.oem.camera", app.packageName)
         val recent = RecentForegroundTracker.drainVisited()
         assertTrue(recent.contains("com.oem.camera"))
 
-        // Verify MediaGuardRuntime detects involuntary pause vs user pause
+        // Verify MediaGuardRuntime detects involuntary background pause vs PiP visible window pause vs user pause
         var detectedPkg: String? = null
         MediaGuardRuntime.isGuardEnabled = true
         MediaGuardRuntime.guardedPackages = setOf("com.google.android.youtube")
+        MediaGuardRuntime.updateVisibleWindows(emptySet())
         MediaGuardRuntime.onUnexpectedPauseDetected = { detectedPkg = it }
 
         MediaGuardRuntime.recordUserPlay("com.google.android.youtube")
         MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PLAYING)
         MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PAUSED)
         assertEquals("com.google.android.youtube", detectedPkg)
+
+        // If YouTube window is still visible (e.g. Picture-in-Picture), manual pause inside PiP is NOT overridden
+        detectedPkg = null
+        MediaGuardRuntime.updateVisibleWindows(setOf("com.google.android.youtube"))
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PLAYING)
+        MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PAUSED)
+        assertNull(detectedPkg)
+        MediaGuardRuntime.updateVisibleWindows(emptySet())
 
         detectedPkg = null
         MediaGuardRuntime.onSessionPlaybackState("com.google.android.youtube", PlaybackState.STATE_PLAYING)
@@ -573,24 +615,13 @@ class SymbianAndSearchTest {
         assertNull(detectedPkg)
         MediaGuardRuntime.onUnexpectedPauseDetected = null
 
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         viewModel.toggleBackgroundSpoofPackage("com.google.android.youtube")
         pumpMainUntil {
             viewModel.uiState.value.backgroundSpoofPackages.contains("com.google.android.youtube") &&
                 viewModel.uiState.value.backgroundSpoofEnabled
-        }
-
-        viewModel.setAppAdaptationMode("org.telegram.messenger", AppAdaptationMode.MESSENGER)
-        pumpMainUntil {
-            viewModel.uiState.value.appAdaptationModes["org.telegram.messenger"] == AppAdaptationMode.MESSENGER &&
-                viewModel.uiState.value.appAdaptationEnabled
-        }
-
-        viewModel.cycleAppAdaptationMode("org.telegram.messenger")
-        pumpMainUntil {
-            (viewModel.uiState.value.appAdaptationModes["org.telegram.messenger"] ?: AppAdaptationMode.DISABLED) == AppAdaptationMode.DISABLED
         }
 
         viewModel.optimizeAndroidSystem()
@@ -600,7 +631,7 @@ class SymbianAndSearchTest {
     }
 
     @Test
-    fun `wildcard search google news routing active media priority and adaptation defaults work`() {
+    fun `wildcard search google news routing weather consensus and deb metadata work`() {
         // 1. Wildcard file matching (*apk, *.docx, .flac)
         assertEquals("apk", UniversalSearchRepository.parseWildcardExtension("*apk"))
         assertEquals("docx", UniversalSearchRepository.parseWildcardExtension("*.DOCX"))
@@ -656,12 +687,44 @@ class SymbianAndSearchTest {
         assertTrue(MediaControlRepository.isStreamingPackage("ru.yandex.music"))
         assertFalse(MediaControlRepository.isStreamingPackage("com.aimp.player"))
 
-        // 4. Default adaptation recommendations (Settings -> STANDARD, Telegram -> MESSENGER)
-        assertEquals(AppAdaptationMode.STANDARD, AppAdaptationRuntime.recommendedDefaultMode("com.android.settings", "Настройки"))
-        assertEquals(AppAdaptationMode.MESSENGER, AppAdaptationRuntime.recommendedDefaultMode("org.telegram.messenger", "Telegram"))
-        assertEquals(AppAdaptationMode.DISABLED, AppAdaptationRuntime.recommendedDefaultMode("com.example.game", "Chess"))
+        // 4. Multi-source Weather consensus parsing & averaging
+        val openMeteoJson = """
+            {"current":{"temperature_2m":12.0,"apparent_temperature":10.0,"relative_humidity_2m":70,"weather_code":1,"wind_speed_10m":15.0},
+             "hourly":{"time":["2026-11-19T12:00"],"temperature_2m":[12.0],"precipitation_probability":[10],"weather_code":[1]},
+             "daily":{"time":["2026-11-19"],"temperature_2m_min":[6.0],"temperature_2m_max":[14.0],"weather_code":[1],"wind_speed_10m_max":[18.0]}}
+        """.trimIndent()
+        val metNoJson = """
+            {"properties":{"timeseries":[{"data":{"instant":{"details":{"air_temperature":14.0,"wind_speed":5.0,"relative_humidity":80.0}},"next_1_hours":{"summary":{"symbol_code":"fair_day"}}}}]}}
+        """.trimIndent()
+        val wttrJson = """
+            {"current_condition":[{"temp_C":"16","windspeedKmph":"21","humidity":"60","lang_ru":[{"value":"Ясно"}]}]}
+        """.trimIndent()
 
-        // 5. RecentForegroundTracker snapshot & pinned retention
+        val omParsed = WeatherRepository.parseOpenMeteoJson(openMeteoJson)
+        val metParsed = WeatherRepository.parseMetNorwayJson(metNoJson)
+        val wttrParsed = WeatherRepository.parseWttrJson(wttrJson)
+        val consensus = WeatherRepository.buildConsensusReport("Москва", omParsed, metParsed, wttrParsed)
+        assertNotNull(consensus)
+        assertEquals(3, consensus?.sources?.size)
+        // Average of 12, 14, 16 is 14°C; wind avg of 15, 18 (5 m/s * 3.6), 21 is 18 km/h; humidity avg of 70, 80, 60 is 70%
+        assertEquals(14, consensus?.tempC)
+        assertEquals(18, consensus?.windKmh)
+        assertEquals(70, consensus?.humidityPercent)
+
+        // 5. Linux .deb AR archive metadata inspection
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val linuxRepo = LinuxPackagesRepository(app, ShizukuBridge(app))
+        val debFile = File(app.cacheDir, "neovim_0.9.5_arm64.deb").apply {
+            writeText("!<arch>\nPackage: neovim\nVersion: 0.9.5\nArchitecture: arm64\nDescription: Modern Vim editor\n")
+        }
+        val debEntry = linuxRepo.parsePackageFile(debFile, LinuxPackageKind.DEB)
+        assertEquals("neovim", debEntry.packageName)
+        assertEquals("0.9.5", debEntry.version)
+        assertEquals("arm64", debEntry.architecture)
+        assertEquals("Modern Vim editor", debEntry.description)
+        debFile.delete()
+
+        // 6. RecentForegroundTracker snapshot & pinned retention
         RecentForegroundTracker.clearHistoryExcept(emptySet())
         RecentForegroundTracker.recordForeground("com.whatsapp", "com.example")
         RecentForegroundTracker.recordForeground("com.android.settings", "com.example")
@@ -677,7 +740,7 @@ class SymbianAndSearchTest {
     @Test
     fun `bb10 recents ctrl r escape writer space launch language scale and cover style work`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         // Language, UI Scale & Player Cover Style settings
@@ -735,7 +798,7 @@ class SymbianAndSearchTest {
     @Test
     fun `niagara side rail filters to matching initial letter apps only and toggles off cleanly`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = LauncherViewModel(app)
+        val viewModel = createViewModel(app)
         pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
 
         val field = LauncherViewModel::class.java.getDeclaredField("_allApps")
@@ -781,5 +844,103 @@ class SymbianAndSearchTest {
             viewModel.uiState.value.highlightedLetter == null &&
                 viewModel.uiState.value.filteredApps.size == 4
         }
+    }
+
+    @Test
+    fun `niagara rail supports cyrillic latin translit and 2d workspaces plus locked single chat work`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = createViewModel(app)
+        pumpMainUntil { !viewModel.uiState.value.isLoadingApps }
+
+        assertTrue(KeyboardSearchMatcher.matchesInitialWithTranslit("Telegram", 'T', 'Т'))
+        assertTrue(KeyboardSearchMatcher.matchesInitialWithTranslit("Авито", 'А', 'A'))
+
+        // 1. Ctrl+M opens AND second Ctrl+M closes music drawer
+        val ctrlM = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_M, 0, KeyEvent.META_CTRL_ON)
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlM, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showMusicSheet }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlM, viewModel, {}, {}))
+        pumpMainUntil { !viewModel.uiState.value.showMusicSheet }
+
+        // 2. Shift+F1 / F12 / Ctrl+/ open AND close shortcuts dialog
+        val shiftF1 = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F1, 0, KeyEvent.META_SHIFT_ON)
+        val f12 = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_F12)
+        val ctrlSlash = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SLASH, 0, KeyEvent.META_CTRL_ON)
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(shiftF1, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showShortcutsDialog }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(shiftF1, viewModel, {}, {}))
+        pumpMainUntil { !viewModel.uiState.value.showShortcutsDialog }
+
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(f12, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showShortcutsDialog }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlSlash, viewModel, {}, {}))
+        pumpMainUntil { !viewModel.uiState.value.showShortcutsDialog }
+
+        // 3. Ctrl+R toggles BB10 Recents open AND closed
+        val ctrlR = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_R, 0, KeyEvent.META_CTRL_ON)
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlR, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.showRecentsOverlay }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlR, viewModel, {}, {}))
+        pumpMainUntil { !viewModel.uiState.value.showRecentsOverlay }
+
+        // 4. Ctrl+N with intercepted shade toggles HUB <-> HOME cleanly
+        viewModel.toggleShadeInterception()
+        pumpMainUntil { viewModel.uiState.value.shizukuState.interceptShadeEnabled }
+        val ctrlN = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_N, 0, KeyEvent.META_CTRL_ON)
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlN, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HUB }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlN, viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HOME }
+        viewModel.toggleShadeInterception()
+
+        // 5. AppPreviewCache stores thumbnails and refreshRecentFrames attaches them
+        val sampleApp = AppEntry("t1/1", "Telegram", "org.telegram.messenger", "1", null, 'T', false, HubCategory.CHAT, 0)
+        val appsField = LauncherViewModel::class.java.getDeclaredField("_allApps").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val appsFlow = appsField.get(viewModel) as MutableStateFlow<List<AppEntry>>
+        appsFlow.value = listOf(sampleApp)
+        pumpMainUntil { viewModel.uiState.value.allApps.any { it.packageName == "org.telegram.messenger" } }
+
+        val bmp = Bitmap.createBitmap(40, 60, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).drawColor(AndroidColor.rgb(30, 120, 200))
+        AppPreviewCache.put("org.telegram.messenger", bmp.asImageBitmap())
+        RecentForegroundTracker.recordForeground("org.telegram.messenger", app.packageName)
+        viewModel.refreshRecentFrames()
+        pumpMainUntil {
+            viewModel.uiState.value.recentFrames.any {
+                it.packageName == "org.telegram.messenger" && it.previewBitmap != null
+            }
+        }
+        AppPreviewCache.remove("org.telegram.messenger")
+
+        // 6. Locked single chat opens and Esc closes cleanly back to tiles
+        val thread = LockedChatThread(
+            key = "chat:1",
+            packageName = "org.telegram.messenger",
+            appName = "Telegram",
+            contactName = "Алексей",
+            messages = emptyList(),
+            canReplyInline = true,
+            supportsMediaReply = false,
+            lastTimestamp = 1000L,
+            timeFormatted = "12:00"
+        )
+        viewModel.openLockedChat(thread)
+        pumpMainUntil { viewModel.uiState.value.lockedChatThread?.contactName == "Алексей" }
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.lockedChatThread == null }
+
+        // 7. 2D Multi-workspace creation, navigation, Escape to (0,0), and deletion
+        viewModel.createWorkspaceWithApp(sampleApp)
+        pumpMainUntil {
+            !viewModel.uiState.value.workspaceGrid.isOnHome &&
+                viewModel.uiState.value.workspaceGrid.activeCell.packageName == "org.telegram.messenger"
+        }
+        val createdX = viewModel.uiState.value.workspaceGrid.activeX
+        val createdY = viewModel.uiState.value.workspaceGrid.activeY
+        assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE), viewModel, {}, {}))
+        pumpMainUntil { viewModel.uiState.value.workspaceGrid.isOnHome }
+        viewModel.deleteWorkspace(createdX, createdY)
+        pumpMainUntil { viewModel.uiState.value.workspaceGrid.cells.none { it.x == createdX && it.y == createdY } }
     }
 }

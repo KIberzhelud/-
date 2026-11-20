@@ -142,7 +142,7 @@ fun buildVistaThemeTokens(
         UiThemeColor.BLUE -> BlueVistaTokens
         UiThemeColor.GRAY -> GrayVistaTokens
     }
-    if (!hasWallpaper || wallpaperPalette == null) {
+    if (wallpaperPalette == null) {
         return base
     }
 
@@ -156,7 +156,7 @@ fun buildVistaThemeTokens(
     val div = lerp(dark, accent, 0.36f)
 
     return VistaThemeTokens(
-        isGlassMode = true,
+        isGlassMode = hasWallpaper,
         baseColor = themeColor,
         background = bg,
         surface = surf,

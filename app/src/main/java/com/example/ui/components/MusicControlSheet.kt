@@ -1,9 +1,11 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -29,12 +31,13 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
@@ -43,7 +46,6 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.ThumbDown
@@ -55,6 +57,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,11 +71,15 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaControlRepository
@@ -122,6 +129,7 @@ fun InlineMusicControlDrawer(
     localTracks: List<LocalAudioTrack>,
     telegramNotifications: List<HubNotificationItem>,
     trackSearchQuery: String,
+    streamSearchHistory: List<String> = emptyList(),
     hasAudioReadAccess: Boolean,
     hasAllFilesAccess: Boolean,
     musicApps: List<AppEntry>,
@@ -141,6 +149,7 @@ fun InlineMusicControlDrawer(
     onSearchAndPlayInStream: (String, String?) -> Unit,
     onConnectBrowser: (String?) -> Unit,
     onPlayLocalTrack: (LocalAudioTrack) -> Unit,
+    onDeleteLocalTrack: (LocalAudioTrack) -> Unit = {},
     onOpenHubNotification: (String) -> Unit,
     onRefreshTracks: () -> Unit,
     onRequestAudioPermission: () -> Unit,
@@ -157,11 +166,13 @@ fun InlineMusicControlDrawer(
     onToggleMute: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
     onLaunchMusicApp: (AppEntry) -> Unit,
+    onOpenFullPoweramp: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
     val active = mediaState.activeSession
+    var pendingDeleteTrack by remember { mutableStateOf<LocalAudioTrack?>(null) }
     val isActiveStreaming = active != null &&
         active.id != MediaControlRepository.LOCAL_SESSION_ID &&
         MediaControlRepository.isStreamingPackage(active.packageName)
@@ -171,10 +182,47 @@ fun InlineMusicControlDrawer(
             modifier = contentModifier
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
-            // 1. Pinned Compact Top Header: Source + Open + YT Audio + Close
+            // 1. Pinned Compact Top Header: Source + Open + YT Audio + Close (reverse-swipe closes drawer)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .pointerInput(isLandscape) {
+                        var dragDelta = 0f
+                        var triggered = false
+                        if (isLandscape) {
+                            detectHorizontalDragGestures(
+                                onDragStart = {
+                                    dragDelta = 0f
+                                    triggered = false
+                                },
+                                onHorizontalDrag = { change, amount ->
+                                    if (triggered) return@detectHorizontalDragGestures
+                                    dragDelta += amount
+                                    if (dragDelta < -36f) {
+                                        change.consume()
+                                        triggered = true
+                                        onClose()
+                                    }
+                                }
+                            )
+                        } else {
+                            detectVerticalDragGestures(
+                                onDragStart = {
+                                    dragDelta = 0f
+                                    triggered = false
+                                },
+                                onVerticalDrag = { change, amount ->
+                                    if (triggered) return@detectVerticalDragGestures
+                                    dragDelta += amount
+                                    if (dragDelta < -36f) {
+                                        change.consume()
+                                        triggered = true
+                                        onClose()
+                                    }
+                                }
+                            )
+                        }
+                    }
                     .symbianMetallicBar()
                     .border(1.dp, theme.chromeBorderOuter, RoundedCornerShape(3.dp))
                     .padding(horizontal = 7.dp, vertical = 4.dp),
@@ -247,6 +295,23 @@ fun InlineMusicControlDrawer(
                                 modifier = Modifier.size(13.dp)
                             )
                         }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton(isPrimary = true)
+                            .clickable(onClick = onOpenFullPoweramp)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .testTag("open_full_poweramp_button")
+                    ) {
+                        Text(
+                            text = "Poweramp ▶",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = Color.White
+                        )
                     }
 
                     val spoofActive = backgroundSpoofEnabled && (active == null || isCurrentSessionSpoofed)
@@ -601,9 +666,20 @@ fun InlineMusicControlDrawer(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                            var drawerSearchTfv by remember {
+                                mutableStateOf(TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length)))
+                            }
+                            LaunchedEffect(trackSearchQuery) {
+                                if (trackSearchQuery != drawerSearchTfv.text) {
+                                    drawerSearchTfv = TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length))
+                                }
+                            }
                             BasicTextField(
-                                value = trackSearchQuery,
-                                onValueChange = onTrackSearchChange,
+                                value = drawerSearchTfv,
+                                onValueChange = { next ->
+                                    drawerSearchTfv = next
+                                    onTrackSearchChange(next.text)
+                                },
                                 singleLine = true,
                                 textStyle = MaterialTheme.typography.bodySmall.copy(
                                     color = TextPrimary,
@@ -613,8 +689,8 @@ fun InlineMusicControlDrawer(
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                                 keyboardActions = KeyboardActions(
                                     onSearch = {
-                                        if (trackSearchQuery.isNotBlank()) {
-                                            onSearchAndPlayInStream(trackSearchQuery, active?.packageName)
+                                        if (drawerSearchTfv.text.isNotBlank()) {
+                                            onSearchAndPlayInStream(drawerSearchTfv.text, active?.packageName)
                                         }
                                     }
                                 ),
@@ -657,6 +733,38 @@ fun InlineMusicControlDrawer(
                             tint = theme.accent,
                             modifier = Modifier.size(14.dp)
                         )
+                    }
+                }
+
+                // Stream search history chips when search query is blank
+                if (trackSearchQuery.isBlank() && streamSearchHistory.isNotEmpty() && selectedTab == MusicDrawerTab.STREAMING) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        streamSearchHistory.take(8).forEach { hist ->
+                            Box(
+                                modifier = Modifier
+                                    .vistaAeroButton()
+                                    .clickable {
+                                        onTrackSearchChange(hist)
+                                        onSearchAndPlayInStream(hist, active?.packageName)
+                                    }
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                                    .testTag("stream_history_chip")
+                            ) {
+                                Text(
+                                    text = "↺ $hist",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                    color = TextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -823,7 +931,7 @@ fun InlineMusicControlDrawer(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Icon(
-                                                    imageVector = Icons.Rounded.Send,
+                                                    imageVector = Icons.AutoMirrored.Rounded.Send,
                                                     contentDescription = null,
                                                     tint = Color.White,
                                                     modifier = Modifier.size(14.dp)
@@ -874,7 +982,8 @@ fun InlineMusicControlDrawer(
                                             track = track,
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
-                                            onClick = { onPlayLocalTrack(track) }
+                                            onClick = { onPlayLocalTrack(track) },
+                                            onLongClick = { pendingDeleteTrack = track }
                                         )
                                     }
                                 }
@@ -1035,7 +1144,8 @@ fun InlineMusicControlDrawer(
                                             track = track,
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
-                                            onClick = { onPlayLocalTrack(track) }
+                                            onClick = { onPlayLocalTrack(track) },
+                                            onLongClick = { pendingDeleteTrack = track }
                                         )
                                     }
                                 }
@@ -1136,7 +1246,7 @@ fun InlineMusicControlDrawer(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.KeyboardArrowLeft,
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
                     contentDescription = "Свернуть панель плеера влево",
                     tint = theme.accent,
                     modifier = Modifier.size(17.dp)
@@ -1199,6 +1309,53 @@ fun InlineMusicControlDrawer(
                     ),
                     color = theme.chromeInnerGlow
                 )
+            }
+        }
+    }
+
+    pendingDeleteTrack?.let { trackToDelete ->
+        Dialog(
+            onDismissRequest = { pendingDeleteTrack = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.88f)
+                    .widthIn(max = 380.dp)
+                    .vistaWindowFrame(RoundedCornerShape(6.dp))
+                    .padding(14.dp)
+            ) {
+                Text(
+                    text = "Удалить аудиофайл?",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextPrimary
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = trackToDelete.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    VistaButton(text = "Отмена", onClick = { pendingDeleteTrack = null })
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Удалить",
+                        isPrimary = true,
+                        onClick = {
+                            onDeleteLocalTrack(trackToDelete)
+                            pendingDeleteTrack = null
+                        },
+                        modifier = Modifier.testTag("confirm_delete_audio_btn")
+                    )
+                }
             }
         }
     }
@@ -1346,12 +1503,14 @@ private fun BrowserTrackRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LocalTrackRow(
     track: LocalAudioTrack,
     isSelected: Boolean,
     isPlaying: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {}
 ) {
     val theme = LocalVistaTheme.current
     Row(
@@ -1367,7 +1526,7 @@ private fun LocalTrackRow(
                         .border(0.5.dp, theme.divider.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
                 }
             )
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .testTag("local_track_row_${track.id}"),
         verticalAlignment = Alignment.CenterVertically

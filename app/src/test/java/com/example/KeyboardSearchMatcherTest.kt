@@ -16,6 +16,7 @@ class KeyboardSearchMatcherTest {
         assertTrue(KeyboardSearchMatcher.matches("Авито", "ави"))
         assertTrue(KeyboardSearchMatcher.matches("Авито", "fdb"))
         assertTrue(KeyboardSearchMatcher.matches("Яндекс Музыка", "ямз"))
+        assertFalse(KeyboardSearchMatcher.matches("Киберпортал", "кот"))
         assertFalse(KeyboardSearchMatcher.matches("Chrome", "xyz"))
     }
 

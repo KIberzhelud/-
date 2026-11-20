@@ -25,8 +25,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,17 +47,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.R
+import com.example.data.KeyboardSearchMatcher
+import com.example.data.LauncherPreferencesRepository
+import com.example.model.ConsensusWeatherReport
 import com.example.model.HubNotificationItem
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
 import com.example.model.ShizukuState
+import com.example.model.WeatherCityResult
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
@@ -95,7 +103,7 @@ fun HubView(
     onOpenAppearanceSettings: () -> Unit,
     onOpenAutoKillSettings: () -> Unit,
     onOpenOptimizationSettings: () -> Unit = {},
-    onOpenAdaptationSettings: () -> Unit = {},
+    onOpenLinuxCatalog: () -> Unit = {},
     onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
     onOpenDefaultLauncherSettings: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
@@ -103,6 +111,13 @@ fun HubView(
     onOpenMusicSheet: () -> Unit,
     onOpenShortcuts: () -> Unit,
     onOpenSystemSettings: (String) -> Unit,
+    showWeatherInHubOther: Boolean = true,
+    weatherReport: ConsensusWeatherReport? = null,
+    selectedWeatherCity: WeatherCityResult = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY,
+    isWeatherLoading: Boolean = false,
+    onRefreshWeather: () -> Unit = {},
+    onOpenWeatherForecast: () -> Unit = {},
+    onOpenWeatherCityPicker: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -343,7 +358,7 @@ fun HubView(
             }
 
             HubSubTab.OTHER -> {
-                if (filteredNotifications.isEmpty()) {
+                if (filteredNotifications.isEmpty() && !showWeatherInHubOther) {
                     HubEmptyNotificationsState(
                         iconRes = R.drawable.ic_symbian_tools,
                         title = "Прочих уведомлений пока нет",
@@ -358,36 +373,85 @@ fun HubView(
                             .fillMaxSize()
                             .testTag("hub_other_notifications_list")
                     ) {
-                        itemsIndexed(filteredNotifications, key = { _, it -> it.key }) { idx, item ->
-                            HubNotificationCard(
-                                item = item,
-                                isFocused = idx == focusedIndex,
-                                onOpen = { onOpenNotification(item.key) },
-                                onDismiss = { onDismissNotification(item.key) },
-                                onInvokeAction = { actionIdx -> onInvokeNotificationAction(item.key, actionIdx) },
-                                onOpenUrl = onOpenUrl,
-                                onSendReply = { _, _, _ -> false }
-                            )
+                        if (showWeatherInHubOther) {
+                            item(key = "hub_other_weather_card") {
+                                WeatherWidgetCard(
+                                    report = weatherReport,
+                                    selectedCity = selectedWeatherCity,
+                                    isLoading = isWeatherLoading,
+                                    compact = false,
+                                    onRefresh = onRefreshWeather,
+                                    onOpenForecast = onOpenWeatherForecast,
+                                    onOpenCityPicker = onOpenWeatherCityPicker,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        if (filteredNotifications.isEmpty()) {
+                            item(key = "hub_other_empty_hint") {
+                                Text(
+                                    text = "Прочих уведомлений пока нет",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        } else {
+                            itemsIndexed(filteredNotifications, key = { _, it -> it.key }) { idx, item ->
+                                HubNotificationCard(
+                                    item = item,
+                                    isFocused = idx == focusedIndex,
+                                    onOpen = { onOpenNotification(item.key) },
+                                    onDismiss = { onDismissNotification(item.key) },
+                                    onInvokeAction = { actionIdx -> onInvokeNotificationAction(item.key, actionIdx) },
+                                    onOpenUrl = onOpenUrl,
+                                    onSendReply = { _, _, _ -> false }
+                                )
+                            }
                         }
                     }
                 }
             }
 
             HubSubTab.SETTINGS -> {
-                val actions = listOf(
-                    HubOtherAction("Оформление, язык, масштаб и стиль плеера", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
-                    HubOtherAction("Оптимизация Android, ОЗУ и Фон YouTube", R.drawable.ic_symbian_tools, onOpenOptimizationSettings),
-                    HubOtherAction("Адаптация приложений (Мессенджер / F1–F6)", R.drawable.ic_symbian_messaging, onOpenAdaptationSettings),
-                    HubOtherAction("Одноразовые приложения (автозакрытие)", R.drawable.ic_symbian_tools, onOpenAutoKillSettings),
-                    HubOtherAction("Лаунчер по умолчанию", R.drawable.ic_symbian_home, onOpenDefaultLauncherSettings),
-                    HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
-                    HubOtherAction("Панель музыки (F5 / Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
-                    HubOtherAction("Горячие клавиши (F1–F6, Ctrl+R)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
-                    HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
-                    HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
-                    HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
-                    HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
-                )
+                var settingsQueryTfv by remember { mutableStateOf(TextFieldValue("")) }
+                val settingsQuery = settingsQueryTfv.text
+                val actions = remember(
+                    onOpenAppearanceSettings,
+                    onOpenOptimizationSettings,
+                    onOpenLinuxCatalog,
+                    onOpenAutoKillSettings,
+                    onOpenDefaultLauncherSettings,
+                    onOpenNotificationAccess,
+                    onOpenMusicSheet,
+                    onOpenShortcuts,
+                    onOpenSystemSettings,
+                    onOpenAllFilesAccess
+                ) {
+                    listOf(
+                        HubOtherAction("Оформление, палитры, язык и масштаб", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
+                        HubOtherAction("Оптимизация Android, жесты и Фон YouTube", R.drawable.ic_symbian_tools, onOpenOptimizationSettings),
+                        HubOtherAction("Пакеты Linux (.deb / AppImage / Termux)", R.drawable.ic_symbian_tools, onOpenLinuxCatalog),
+                        HubOtherAction("Одноразовые приложения (автозакрытие)", R.drawable.ic_symbian_tools, onOpenAutoKillSettings),
+                        HubOtherAction("Лаунчер по умолчанию", R.drawable.ic_symbian_home, onOpenDefaultLauncherSettings),
+                        HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
+                        HubOtherAction("Панель музыки (F5 / Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
+                        HubOtherAction("Горячие клавиши (F1–F6, Ctrl+R)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
+                        HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
+                        HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
+                        HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
+                        HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
+                    )
+                }
+                val filteredActions = remember(actions, settingsQuery) {
+                    if (settingsQuery.isBlank()) actions
+                    else actions.filter { KeyboardSearchMatcher.matches(it.title, settingsQuery) }
+                }
+                val showShizukuCard = remember(settingsQuery) {
+                    settingsQuery.isBlank() ||
+                        listOf("shizuku", "шизуку", "root", "рут", "жест", "штор", "блок", "перехват", "доступ", "gesture", "lock")
+                            .any { settingsQuery.contains(it, ignoreCase = true) || KeyboardSearchMatcher.matches(it, settingsQuery) }
+                }
 
                 LazyColumn(
                     state = listState,
@@ -397,58 +461,135 @@ fun HubView(
                         .fillMaxSize()
                         .testTag("hub_settings_list")
                 ) {
-                    item(key = "shizuku_panel") {
-                        ShizukuControlPanelCard(
-                            shizukuState = shizukuState,
-                            onRequestShizukuPermission = onRequestShizukuPermission,
-                            onOpenShizukuApp = onOpenShizukuApp,
-                            onGrantNotificationAccessViaShizuku = onGrantNotificationViaShizuku,
-                            onGrantOverlayAndAccessibilityViaShizuku = onGrantOverlayAndAccessibilityViaShizuku,
-                            onOpenOptimizationSettings = onOpenOptimizationSettings,
-                            onOpenAdaptationSettings = onOpenAdaptationSettings,
-                            onToggleShadeInterception = onToggleShadeInterception,
-                            onToggleLockScreenInterception = onToggleLockScreenInterception,
-                            onToggleOemGestureBypass = onToggleOemGestureBypass,
-                            onPreviewLockScreen = onPreviewLockScreen
-                        )
-                    }
-
-                    item(key = "system_tools_header") {
-                        Text(
-                            text = "ИНСТРУМЕНТЫ И НАСТРОЙКИ KEYDECK",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = theme.accent,
-                            modifier = Modifier.padding(top = 4.dp, start = 4.dp)
-                        )
-                    }
-
-                    itemsIndexed(actions, key = { idx, _ -> "settings_tool_$idx" }) { idx, item ->
+                    item(key = "settings_search_bar") {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
-                                .clickable(onClick = item.onClick)
-                                .padding(horizontal = 12.dp, vertical = 12.dp)
-                                .testTag("hub_setting_item_$idx"),
+                                .vistaInsetBox(isFocused = settingsQuery.isNotEmpty())
+                                .padding(horizontal = 9.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .vistaInsetBox(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Image(
-                                    painter = painterResource(item.iconRes),
-                                    contentDescription = item.title,
-                                    modifier = Modifier.size(18.dp)
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = "Поиск в настройках",
+                                tint = theme.accent,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Box(modifier = Modifier.weight(1f)) {
+                                if (settingsQuery.isEmpty()) {
+                                    Text(
+                                        text = "Поиск по настройкам (жесты, тема, Linux, Shizuku)…",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                BasicTextField(
+                                    value = settingsQueryTfv,
+                                    onValueChange = { settingsQueryTfv = it },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                                    cursorBrush = SolidColor(theme.accent),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("hub_settings_search_input")
                                 )
                             }
-                            Spacer(Modifier.width(10.dp))
+                            if (settingsQuery.isNotEmpty()) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Очистить поиск настроек",
+                                    tint = TextSecondary,
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .clickable { settingsQueryTfv = TextFieldValue("", TextRange.Zero) }
+                                )
+                            }
+                        }
+                    }
+
+                    if (showWeatherInHubOther && (settingsQuery.isBlank() || KeyboardSearchMatcher.matches("погода weather", settingsQuery))) {
+                        item(key = "hub_weather_card") {
+                            WeatherWidgetCard(
+                                report = weatherReport,
+                                selectedCity = selectedWeatherCity,
+                                isLoading = isWeatherLoading,
+                                compact = false,
+                                onRefresh = onRefreshWeather,
+                                onOpenForecast = onOpenWeatherForecast,
+                                onOpenCityPicker = onOpenWeatherCityPicker,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    if (showShizukuCard) {
+                        item(key = "shizuku_panel") {
+                            ShizukuControlPanelCard(
+                                shizukuState = shizukuState,
+                                onRequestShizukuPermission = onRequestShizukuPermission,
+                                onOpenShizukuApp = onOpenShizukuApp,
+                                onGrantNotificationAccessViaShizuku = onGrantNotificationViaShizuku,
+                                onGrantOverlayAndAccessibilityViaShizuku = onGrantOverlayAndAccessibilityViaShizuku,
+                                onOpenOptimizationSettings = onOpenOptimizationSettings,
+                                onOpenLinuxCatalog = onOpenLinuxCatalog,
+                                onToggleShadeInterception = onToggleShadeInterception,
+                                onToggleLockScreenInterception = onToggleLockScreenInterception,
+                                onToggleOemGestureBypass = onToggleOemGestureBypass,
+                                onPreviewLockScreen = onPreviewLockScreen
+                            )
+                        }
+                    }
+
+                    if (filteredActions.isNotEmpty()) {
+                        item(key = "system_tools_header") {
                             Text(
-                                text = item.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = TextPrimary
+                                text = "ИНСТРУМЕНТЫ И НАСТРОЙКИ KEYDECK",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.accent,
+                                modifier = Modifier.padding(top = 4.dp, start = 4.dp)
+                            )
+                        }
+
+                        itemsIndexed(filteredActions, key = { _, item -> "settings_tool_${item.title}" }) { idx, item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
+                                    .clickable(onClick = item.onClick)
+                                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                                    .testTag("hub_setting_item_$idx"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .vistaInsetBox(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Image(
+                                        painter = painterResource(item.iconRes),
+                                        contentDescription = item.title,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    } else if (!showShizukuCard) {
+                        item(key = "settings_empty") {
+                            Text(
+                                text = "По запросу «$settingsQuery» разделы настроек не найдены",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                modifier = Modifier.padding(16.dp)
                             )
                         }
                     }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,7 +58,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -92,7 +95,8 @@ fun WriterStudioScreen(
     writerViewModel: WriterViewModel,
     isLandscape: Boolean,
     onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    wallpaperBitmap: ImageBitmap? = null
 ) {
     val state by writerViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -127,15 +131,33 @@ fun WriterStudioScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                if (theme.isGlassMode) theme.background.copy(alpha = 0.28f)
-                else theme.background
+            .background(Color(0xFF0A111A))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
             )
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .imePadding()
             .testTag("writer_studio_screen")
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        if (wallpaperBitmap != null) {
+            Image(
+                bitmap = wallpaperBitmap,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    if (wallpaperBitmap != null) Color(0xD8070D14)
+                    else theme.background.copy(alpha = 0.98f)
+                )
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .imePadding()
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             // Top Symbian / Vista Writer Bar
             Row(
                 modifier = Modifier
@@ -329,6 +351,7 @@ fun WriterStudioScreen(
                 }
             }
         }
+        }
 
         // Studio status toast
         AnimatedVisibility(
@@ -408,7 +431,7 @@ private fun BooksWorkspace(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.72f)
+                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.44f)
                     else theme.surface.copy(alpha = 0.94f)
                 )
                 .horizontalScroll(rememberScrollState())
@@ -520,7 +543,7 @@ private fun BooksWorkspace(
                         .width(245.dp)
                         .fillMaxHeight()
                         .background(
-                            if (theme.isGlassMode) theme.surface.copy(alpha = 0.52f)
+                            if (theme.isGlassMode) theme.surface.copy(alpha = 0.42f)
                             else theme.surface.copy(alpha = 0.85f)
                         )
                 ) {
@@ -582,7 +605,7 @@ private fun BooksWorkspace(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        if (theme.isGlassMode) theme.surfaceElevated.copy(alpha = 0.72f)
+                        if (theme.isGlassMode) theme.surfaceElevated.copy(alpha = 0.46f)
                         else theme.surfaceElevated
                     )
                     .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -712,7 +735,15 @@ private fun BookPlanPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .vistaInsetBox()
+                .then(
+                    if (theme.isGlassMode) {
+                        Modifier
+                            .background(theme.insetBg.copy(alpha = 0.48f), RoundedCornerShape(3.dp))
+                            .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                    } else {
+                        Modifier.vistaInsetBox()
+                    }
+                )
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp)
         ) {
@@ -962,7 +993,15 @@ private fun ChapterTextEditorPane(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .vistaInsetBox()
+                .then(
+                    if (theme.isGlassMode) {
+                        Modifier
+                            .background(theme.insetBg.copy(alpha = 0.48f), RoundedCornerShape(3.dp))
+                            .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                    } else {
+                        Modifier.vistaInsetBox()
+                    }
+                )
                 .verticalScroll(rememberScrollState())
                 .padding(14.dp)
         ) {

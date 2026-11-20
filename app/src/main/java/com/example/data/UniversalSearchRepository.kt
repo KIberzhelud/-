@@ -22,6 +22,7 @@ import androidx.core.content.FileProvider
 import com.example.model.DeviceSearchFile
 import com.example.model.SearchResultKind
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -453,6 +454,11 @@ class UniversalSearchRepository(
 
     fun openFile(item: DeviceSearchFile): Boolean {
         val uri = resolvePlayableUri(item)
+        val isApk = item.name.endsWith(".apk", ignoreCase = true) ||
+            item.mimeType.equals("application/vnd.android.package-archive", ignoreCase = true)
+        if (isApk) {
+            return openApkInstaller(item, uri)
+        }
         return runCatching {
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, item.mimeType)
@@ -461,6 +467,86 @@ class UniversalSearchRepository(
             context.startActivity(intent)
             true
         }.getOrDefault(false)
+    }
+
+    internal fun selectPreferredApkInstallerPackage(candidatePackages: List<String>): String? {
+        val blockedTokens = listOf("termux", "editor", "browser", "chrome", "firefox", "opera", "viewer")
+        val filtered = candidatePackages.filter { pkg ->
+            val low = pkg.lowercase()
+            blockedTokens.none { low.contains(it) }
+        }
+        val preferredOrder = listOf(
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller",
+            "com.miui.packageinstaller",
+            "com.samsung.android.packageinstaller",
+            "com.oplus.appdetail",
+            "com.bbk.appstore"
+        )
+        preferredOrder.forEach { pref ->
+            filtered.firstOrNull { it.equals(pref, ignoreCase = true) }?.let { return it }
+        }
+        return filtered.firstOrNull { it.contains("packageinstaller", ignoreCase = true) }
+            ?: filtered.firstOrNull()
+    }
+
+    private fun openApkInstaller(item: DeviceSearchFile, uri: Uri): Boolean {
+        val apkMime = "application/vnd.android.package-archive"
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, apkMime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val resolved = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.queryIntentActivities(
+                    viewIntent,
+                    PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.queryIntentActivities(viewIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            }
+        }.getOrDefault(emptyList())
+        val candidates = resolved.mapNotNull { it.activityInfo?.packageName }.distinct()
+        val chosenPkg = selectPreferredApkInstallerPackage(candidates)
+        if (chosenPkg != null) {
+            runCatching {
+                context.grantUriPermission(chosenPkg, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val launched = runCatching {
+                val explicitIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, apkMime)
+                    setPackage(chosenPkg)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(explicitIntent)
+                true
+            }.getOrDefault(false)
+            if (launched) return true
+        }
+        if (!item.localFilePath.isNullOrBlank()) {
+            val status = shizukuBridge.statusState.value
+            if ((status.isBinderAlive && status.isPermissionGranted) || status.isRootAvailable) {
+                val quoted = "'" + item.localFilePath.replace("'", "'\\''") + "'"
+                kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+                    shizukuBridge.runPrivilegedOrRootShell("pm install -r $quoted")
+                }
+                return true
+            }
+        }
+        return runCatching {
+            context.startActivity(viewIntent)
+            true
+        }.getOrDefault(false)
+    }
+
+    fun copyFileToClipboard(item: DeviceSearchFile): Boolean {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return false
+        val uri = resolvePlayableUri(item)
+        val clip = ClipData.newUri(context.contentResolver, item.name, uri)
+        clipboard.setPrimaryClip(clip)
+        return true
     }
 
     fun shareFile(item: DeviceSearchFile): Boolean {
@@ -587,6 +673,8 @@ class UniversalSearchRepository(
         }
         false
     }
+
+    fun resolveShareableUri(item: DeviceSearchFile): Uri = resolvePlayableUri(item)
 
     private fun resolvePlayableUri(item: DeviceSearchFile): Uri {
         val parsed = Uri.parse(item.uriString)

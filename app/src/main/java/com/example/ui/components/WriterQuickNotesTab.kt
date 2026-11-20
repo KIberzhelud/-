@@ -101,7 +101,7 @@ fun WriterQuickNotesTab(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.70f)
+                    if (theme.isGlassMode) theme.surface.copy(alpha = 0.44f)
                     else theme.surface.copy(alpha = 0.94f)
                 )
                 .padding(horizontal = 8.dp, vertical = 5.dp),

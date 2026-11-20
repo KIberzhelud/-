@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,7 +45,6 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.ViewQuilt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -73,7 +71,6 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaGuardRuntime
 import com.example.model.AndroidOptimizationStats
-import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.ShizukuState
 import com.example.ui.theme.CallIncomingGreen
@@ -89,8 +86,9 @@ import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
 
 /**
- * Dialog for Deep Android Optimization (RAM/Cache cleanup, Phantom Process Killer patch, Doze whitelist)
- * and 3rd-party Background Audio Playback Spoofing (YouTube, VK Video, Rutube, etc.).
+ * Dialog for Deep Android Optimization (RAM/Cache cleanup, Phantom Process Killer patch, Doze whitelist),
+ * OEM Gesture Bypass + Accessibility/Overlay controls, and 3rd-party Background Audio Playback Spoofing
+ * (YouTube, VK Video, Rutube, etc.).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -105,6 +103,10 @@ fun AndroidOptimizationAndSpoofDialog(
     onToggleBackgroundSpoofEnabled: () -> Unit,
     onToggleBackgroundSpoofPackage: (String) -> Unit,
     onBoostPackageViaShizuku: (String) -> Unit,
+    onToggleOemGestureBypass: () -> Unit = {},
+    onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
+    onOpenAccessibilitySettings: () -> Unit = {},
+    onOpenOverlaySettings: () -> Unit = {},
     onOpenBackgroundWebAudio: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -112,8 +114,10 @@ fun AndroidOptimizationAndSpoofDialog(
     val shizukuReady = shizukuState.isBinderAlive && shizukuState.isPermissionGranted
     val hasPrivileged = shizukuReady || shizukuState.isRootAvailable
     var searchQuery by remember { mutableStateOf("") }
+    // Freeze checked set on open so toggling rows doesn't jump list scroll position
+    val initialSpoofed = remember(allApps) { backgroundSpoofPackages }
 
-    val sortedApps = remember(allApps, backgroundSpoofPackages, searchQuery) {
+    val sortedApps = remember(allApps, initialSpoofed, searchQuery) {
         val filtered = if (searchQuery.isBlank()) {
             allApps
         } else {
@@ -125,7 +129,7 @@ fun AndroidOptimizationAndSpoofDialog(
         filtered
             .distinctBy { it.packageName }
             .sortedWith(
-                compareByDescending<AppEntry> { backgroundSpoofPackages.contains(it.packageName) }
+                compareByDescending<AppEntry> { initialSpoofed.contains(it.packageName) }
                     .thenByDescending { MediaGuardRuntime.isDefaultSpoilerCandidate(it.packageName) }
                     .thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
             )
@@ -135,7 +139,7 @@ fun AndroidOptimizationAndSpoofDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 610.dp)
+                .heightIn(max = 620.dp)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("optimization_and_spoof_dialog")
         ) {
@@ -254,7 +258,100 @@ fun AndroidOptimizationAndSpoofDialog(
                     }
                 }
 
-                // 2. Anti-Pause Background Playback Spoof for YouTube, VK Video, etc.
+                // 2. Permissions & OEM Gesture Bypass (Xiaomi / HyperOS)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaInsetBox()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Text(
+                        text = "ЖЕСТЫ, СПЕЦ. ВОЗМОЖНОСТИ И ПОЗИЦИИ",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = theme.focusBorder
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        StatusBadgeBox(
+                            icon = Icons.Rounded.Security,
+                            label = if (shizukuState.isAccessibilityEnabled) "Спец. возм.: ВКЛ" else "Спец. возм.: ВЫКЛ",
+                            ok = shizukuState.isAccessibilityEnabled,
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatusBadgeBox(
+                            icon = Icons.Rounded.Layers,
+                            label = if (shizukuState.hasOverlayPermission) "Поверх окон: ВКЛ" else "Поверх окон: ВЫКЛ",
+                            ok = shizukuState.hasOverlayPermission,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (hasPrivileged && (!shizukuState.isAccessibilityEnabled || !shizukuState.hasOverlayPermission)) {
+                            VistaButton(
+                                text = if (shizukuState.isRootAvailable && !shizukuReady) {
+                                    "Включить через Root"
+                                } else {
+                                    "Включить всё через Shizuku"
+                                },
+                                isPrimary = true,
+                                onClick = onGrantOverlayAndAccessibilityViaShizuku,
+                                modifier = Modifier.testTag("grant_perms_shizuku_btn")
+                            )
+                        }
+                        if (!shizukuState.isAccessibilityEnabled) {
+                            VistaButton(
+                                text = "Спец. возм.",
+                                onClick = onOpenAccessibilitySettings
+                            )
+                        }
+                        if (!shizukuState.hasOverlayPermission) {
+                            VistaButton(
+                                text = "Поверх окон",
+                                onClick = onOpenOverlaySettings
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(theme.surface.copy(alpha = 0.55f))
+                            .clickable(onClick = onToggleOemGestureBypass)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("oem_gesture_bypass_row"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Обход блокировки жестов (Xiaomi / HyperOS)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Прозрачные края Назад/Домой/Недавние и учёт клавиатуры",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = TextMuted
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        VistaSwitch(
+                            checked = shizukuState.oemGestureBypassEnabled,
+                            onCheckedChange = { onToggleOemGestureBypass() },
+                            modifier = Modifier.testTag("oem_gesture_bypass_switch")
+                        )
+                    }
+                }
+
+                // 3. Anti-Pause Background Playback Spoof for YouTube, VK Video, etc.
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -285,7 +382,7 @@ fun AndroidOptimizationAndSpoofDialog(
                                 )
                             }
                             Text(
-                                text = "Спуфинг фонового аудиофокуса + WakeLock + автовозврат воспроизведения при сворачивании и выключении экрана.",
+                                text = "Спуфинг фонового аудиофокуса + WakeLock + автовозврат воспроизведения (кроме режима PiP).",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextSecondary
                             )
@@ -318,7 +415,6 @@ fun AndroidOptimizationAndSpoofDialog(
                         )
                     }
 
-                    // Search box for spoof packages
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -429,13 +525,8 @@ fun AndroidOptimizationAndSpoofDialog(
     }
 }
 
-/**
- * Custom WebView that spoofs window visibility so HTML5 audio/video keeps playing
- * even when minimized, overlayed, or when the device screen is turned off.
- */
 private class BackgroundAudioWebView(context: Context) : WebView(context) {
     override fun onWindowVisibilityChanged(visibility: Int) {
-        // Always report VISIBLE to WebView renderer so JS doesn't pause media on screen off/minimize
         super.onWindowVisibilityChanged(View.VISIBLE)
     }
 
@@ -517,7 +608,6 @@ fun BackgroundWebAudioDialog(
                 }
             }
 
-            // Quick service presets & Desktop UA spoof toggle
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -562,7 +652,6 @@ fun BackgroundWebAudioDialog(
                 }
             }
 
-            // Navigation / Address bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -629,7 +718,6 @@ fun BackgroundWebAudioDialog(
                                 if (!url.isNullOrBlank()) {
                                     urlInput = url
                                 }
-                                // Inject Page Visibility API & wake/background play spoof for YouTube/HTML5 video
                                 view?.evaluateJavascript(
                                     """
                                     (function(){
@@ -662,344 +750,6 @@ fun BackgroundWebAudioDialog(
                 color = MusicSourceAmber,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
             )
-        }
-    }
-}
-
-/**
- * Dialog to configure App UI Adaptation (Accessibility + Overlay redraw into Standard / Messenger modes)
- * with F1-F6 tab switching and D-Pad/arrow-key focus navigation.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun AppAdaptationSettingsDialog(
-    enabled: Boolean,
-    adaptationModes: Map<String, AppAdaptationMode>,
-    allApps: List<AppEntry>,
-    shizukuState: ShizukuState,
-    onToggleEnabled: () -> Unit,
-    onSetAppMode: (String, AppAdaptationMode) -> Unit,
-    onGrantViaShizuku: () -> Unit,
-    onToggleOemGestureBypass: () -> Unit = {},
-    onOpenAccessibilitySettings: () -> Unit,
-    onOpenOverlaySettings: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val theme = LocalVistaTheme.current
-    val shizukuReady = shizukuState.isBinderAlive && shizukuState.isPermissionGranted
-    val hasPrivileged = shizukuReady || shizukuState.isRootAvailable
-    var searchQuery by remember { mutableStateOf("") }
-
-    val sortedApps = remember(allApps, adaptationModes, searchQuery) {
-        val filtered = if (searchQuery.isBlank()) {
-            allApps
-        } else {
-            allApps.filter {
-                KeyboardSearchMatcher.matches(it.label, searchQuery) ||
-                    KeyboardSearchMatcher.matches(it.packageName, searchQuery)
-            }
-        }
-        filtered
-            .distinctBy { it.packageName }
-            .sortedWith(
-                compareByDescending<AppEntry> {
-                    (adaptationModes[it.packageName] ?: AppAdaptationMode.DISABLED) != AppAdaptationMode.DISABLED
-                }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.label }
-            )
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 620.dp)
-                .vistaWindowFrame(RoundedCornerShape(5.dp))
-                .testTag("app_adaptation_dialog")
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .symbianMetallicBar()
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = Icons.Rounded.ViewQuilt,
-                        contentDescription = null,
-                        tint = theme.accent,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "АДАПТАЦИЯ ПРИЛОЖЕНИЙ",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = theme.focusBorder,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .vistaAeroButton()
-                        .clickable(onClick = onDismiss),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Закрыть", tint = TextSecondary, modifier = Modifier.size(15.dp))
-                }
-            }
-
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Master toggle
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .vistaInsetBox()
-                        .clickable(onClick = onToggleEnabled)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Перерисовка сторонних приложений",
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                            color = TextPrimary
-                        )
-                        Text(
-                            text = "Обычные приложения и Мессенджеры перерисовываются в стиль Vista/Symbian с управлением стрелками, Enter, Esc и вкладками F1–F6.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    VistaSwitch(
-                        checked = enabled,
-                        onCheckedChange = { onToggleEnabled() },
-                        modifier = Modifier.testTag("adaptation_master_switch")
-                    )
-                }
-
-                // Permissions status row (Accessibility + Overlay)
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .vistaInsetBox()
-                        .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        StatusBadgeBox(
-                            icon = Icons.Rounded.Security,
-                            label = if (shizukuState.isAccessibilityEnabled) "Спец. возм.: ВКЛ" else "Спец. возм.: ВЫКЛ",
-                            ok = shizukuState.isAccessibilityEnabled,
-                            modifier = Modifier.weight(1f)
-                        )
-                        StatusBadgeBox(
-                            icon = Icons.Rounded.Layers,
-                            label = if (shizukuState.hasOverlayPermission) "Поверх окон: ВКЛ" else "Поверх окон: ВЫКЛ",
-                            ok = shizukuState.hasOverlayPermission,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (hasPrivileged && (!shizukuState.isAccessibilityEnabled || !shizukuState.hasOverlayPermission)) {
-                            VistaButton(
-                                text = if (shizukuState.isRootAvailable && !shizukuReady) {
-                                    "Включить через Root"
-                                } else {
-                                    "Включить всё через Shizuku"
-                                },
-                                isPrimary = true,
-                                onClick = onGrantViaShizuku,
-                                modifier = Modifier.testTag("grant_adaptation_shizuku_btn")
-                            )
-                        }
-                        if (!shizukuState.isAccessibilityEnabled) {
-                            VistaButton(
-                                text = "Спец. возможности",
-                                onClick = onOpenAccessibilitySettings
-                            )
-                        }
-                        if (!shizukuState.hasOverlayPermission) {
-                            VistaButton(
-                                text = "Поверх окон",
-                                onClick = onOpenOverlaySettings
-                            )
-                        }
-                        val settingsAdapted = (adaptationModes["com.android.settings"] ?: AppAdaptationMode.DISABLED) != AppAdaptationMode.DISABLED
-                        VistaButton(
-                            text = if (settingsAdapted) "Настройки Android: Адапт. ✓" else "Перерисовать Настройки Android",
-                            isPrimary = settingsAdapted,
-                            onClick = {
-                                val next = if (settingsAdapted) AppAdaptationMode.DISABLED else AppAdaptationMode.STANDARD
-                                onSetAppMode("com.android.settings", next)
-                            },
-                            modifier = Modifier.testTag("toggle_android_settings_adaptation_btn")
-                        )
-                    }
-
-                    // OEM Gesture Bypass (Xiaomi MIUI / HyperOS / ColorOS)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(theme.surface.copy(alpha = 0.55f))
-                            .clickable(onClick = onToggleOemGestureBypass)
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("oem_gesture_bypass_row"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Обход блокировки жестов (Xiaomi / HyperOS)",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = TextPrimary
-                            )
-                            Text(
-                                text = "Нижняя полоса и боковые триггеры Назад/Домой/Недавние для стороннего лаунчера",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = TextMuted
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        VistaSwitch(
-                            checked = shizukuState.oemGestureBypassEnabled,
-                            onCheckedChange = { onToggleOemGestureBypass() },
-                            modifier = Modifier.testTag("oem_gesture_bypass_switch")
-                        )
-                    }
-                }
-
-                // Search bar
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .vistaInsetBox()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.Search, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (searchQuery.isEmpty()) {
-                            Text("Найти приложение или мессенджер…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                        }
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
-                            cursorBrush = SolidColor(theme.accent),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("adaptation_search_input")
-                        )
-                    }
-                    if (searchQuery.isNotEmpty()) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "Очистить",
-                            tint = TextSecondary,
-                            modifier = Modifier
-                                .size(14.dp)
-                                .clickable { searchQuery = "" }
-                        )
-                    }
-                }
-
-                // Per-app mode list: Выкл | Стандарт | Мессенджер
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 170.dp, max = 300.dp)
-                        .vistaInsetBox()
-                        .padding(4.dp)
-                        .testTag("adaptation_apps_list"),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(sortedApps, key = { "adapt_${it.packageName}" }) { app ->
-                        val currentMode = adaptationModes[app.packageName] ?: AppAdaptationMode.DISABLED
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .vistaAeroButton(isActive = currentMode != AppAdaptationMode.DISABLED, shape = RoundedCornerShape(3.dp))
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                                .testTag("adapt_row_${app.packageName}"),
-                            verticalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                app.icon?.let { bmp ->
-                                    Image(
-                                        bitmap = bmp,
-                                        contentDescription = app.label,
-                                        modifier = Modifier
-                                            .size(22.dp)
-                                            .clip(RoundedCornerShape(3.dp))
-                                    )
-                                    Spacer(Modifier.width(7.dp))
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = app.label,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = app.packageName,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                                        color = TextMuted,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                AppAdaptationMode.entries.forEach { mode ->
-                                    val selected = currentMode == mode
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .vistaAeroButton(isPrimary = selected, isActive = selected, shape = RoundedCornerShape(3.dp))
-                                            .clickable { onSetAppMode(app.packageName, mode) }
-                                            .padding(vertical = 4.dp, horizontal = 4.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = mode.shortTitle,
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontSize = 10.sp,
-                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                                            ),
-                                            color = if (selected) Color.White else TextSecondary,
-                                            maxLines = 1
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

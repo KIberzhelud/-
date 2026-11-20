@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -59,6 +63,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -67,16 +72,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
-import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.CallsSubTab
 import com.example.model.MainTab
 import com.example.ui.components.AddHubLinkDialog
 import com.example.ui.components.AndroidOptimizationAndSpoofDialog
-import com.example.ui.components.AppAdaptationSettingsDialog
 import com.example.ui.components.AppContextDialog
 import com.example.ui.components.AppIconPickerDialog
 import com.example.ui.components.AppTileGrid
@@ -91,9 +95,16 @@ import com.example.ui.components.HubView
 import com.example.ui.components.InlineMusicControlDrawer
 import com.example.ui.components.KeyboardShortcutsDialog
 import com.example.ui.components.LandscapeSymbianSidebar
+import com.example.ui.components.LinuxCatalogDialog
+import com.example.ui.components.LockedSingleChatView
 import com.example.ui.components.PortraitMusicHeaderBar
+import com.example.ui.components.PowerampPlayerScreen
 import com.example.ui.components.RenameAppDialog
+import com.example.ui.components.SourceChooserDialog
 import com.example.ui.components.VistaButton
+import com.example.ui.components.WeatherCityPickerDialog
+import com.example.ui.components.WeatherForecastDialog
+import com.example.ui.components.WorkspaceCanvasHost
 import com.example.ui.components.WriterStudioScreen
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
@@ -104,6 +115,7 @@ import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaWindowFrame
 import com.example.viewmodel.LauncherUiState
 import com.example.viewmodel.LauncherViewModel
+import com.example.viewmodel.PendingStreamCaptureRequest
 import com.example.viewmodel.WriterViewModel
 
 @Composable
@@ -122,6 +134,37 @@ fun LauncherScreen(
 
     val callsSearchFocusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+    val mediaProjectionManager = remember(context) {
+        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+    }
+
+    val streamCaptureProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { res ->
+        viewModel.onMediaProjectionResult(res.resultCode, res.data)
+    }
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && mediaProjectionManager != null) {
+            streamCaptureProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        } else {
+            viewModel.clearPendingStreamCaptureRequest()
+        }
+    }
+
+    var pendingCoverAlbumId by remember { mutableStateOf<String?>(null) }
+    val albumCoverPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val albumId = pendingCoverAlbumId
+        pendingCoverAlbumId = null
+        if (uri != null && albumId != null) {
+            viewModel.setAlbumCoverFromUri(albumId, uri)
+        }
+    }
 
     val permissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -230,12 +273,17 @@ fun LauncherScreen(
         }
     }
 
-    val hasAnyModalOpen = state.showMusicSheet ||
+    val hasAnyModalOpen = state.showFullPowerampPlayer ||
+        state.sourcePickerTarget != null ||
+        state.pendingStreamCaptureRequest != null ||
+        state.showWeatherForecastDialog ||
+        state.showWeatherCityPickerDialog ||
+        state.showMusicSheet ||
         showAllFilesPromptDialog ||
         state.showAppearanceDialog ||
         state.showAutoKillDialog ||
         state.showOptimizationDialog ||
-        state.showAdaptationDialog ||
+        state.showLinuxCatalogDialog ||
         state.showBackgroundWebAudioDialog ||
         state.showShortcutsDialog ||
         state.showAddLinkDialog ||
@@ -247,17 +295,24 @@ fun LauncherScreen(
     val shouldHandleBack = hasAnyModalOpen ||
         state.showRecentsOverlay ||
         state.isWriterModeOpen ||
+        state.lockedChatThread != null ||
         state.appSearchQuery.isNotEmpty() ||
         state.callsSearchQuery.isNotEmpty() ||
         state.highlightedLetter != null ||
+        ((state.showWorkspaceSpace || !state.workspaceGrid.isOnHome) && state.activeTab == MainTab.HOME) ||
         state.activeTab != MainTab.HOME
 
     BackHandler(enabled = shouldHandleBack) {
         when {
             showAllFilesPromptDialog -> showAllFilesPromptDialog = false
+            state.sourcePickerTarget != null -> viewModel.openSourcePicker(null)
+            state.pendingStreamCaptureRequest != null -> viewModel.clearPendingStreamCaptureRequest()
+            state.showWeatherCityPickerDialog -> viewModel.setShowWeatherCityPickerDialog(false)
+            state.showWeatherForecastDialog -> viewModel.setShowWeatherForecastDialog(false)
+            state.showFullPowerampPlayer -> viewModel.closeFullPowerampPlayer()
             state.showRecentsOverlay -> viewModel.closeRecentsOverlay()
             state.showBackgroundWebAudioDialog -> viewModel.setShowBackgroundWebAudioDialog(false)
-            state.showAdaptationDialog -> viewModel.setShowAdaptationDialog(false)
+            state.showLinuxCatalogDialog -> viewModel.setShowLinuxCatalogDialog(false)
             state.showOptimizationDialog -> viewModel.setShowOptimizationDialog(false)
             state.showAppearanceDialog -> viewModel.setShowAppearanceDialog(false)
             state.showAutoKillDialog -> viewModel.setShowAutoKillDialog(false)
@@ -269,10 +324,12 @@ fun LauncherScreen(
             state.renameTargetApp != null -> viewModel.openRenameAppDialog(null)
             state.iconPickerTargetApp != null -> viewModel.openIconPickerDialog(null)
             state.isWriterModeOpen -> viewModel.closeWriterMode()
+            state.lockedChatThread != null -> viewModel.closeLockedChat()
             state.appSearchQuery.isNotEmpty() || state.callsSearchQuery.isNotEmpty() || state.highlightedLetter != null -> {
                 viewModel.clearAllSearchOrHighlights()
                 focusManager.clearFocus()
             }
+            (state.showWorkspaceSpace || !state.workspaceGrid.isOnHome) && state.activeTab == MainTab.HOME -> viewModel.openHomeWorkspace()
             state.activeTab != MainTab.HOME -> viewModel.selectTab(MainTab.HOME)
         }
     }
@@ -354,6 +411,7 @@ fun LauncherScreen(
                     onSwipeMusicSource = viewModel::swipeMusicSource,
                     onToggleMute = viewModel::toggleMute,
                     onTogglePlayerDrawer = viewModel::toggleMusicDrawer,
+                    onOpenFullPlayer = { viewModel.openFullPowerampPlayer() },
                     onSelectMainTab = viewModel::selectTab,
                     onSelectCallsSubTab = viewModel::selectCallsSubTab,
                     onSelectHubSubTab = viewModel::selectHubSubTab,
@@ -375,6 +433,7 @@ fun LauncherScreen(
                         localTracks = state.localAudioTracks,
                         telegramNotifications = state.hubNotifications,
                         trackSearchQuery = state.localTrackSearchQuery,
+                        streamSearchHistory = state.streamSearchHistory,
                         hasAudioReadAccess = state.hasAudioReadAccess,
                         hasAllFilesAccess = state.hasAllFilesAccess,
                         musicApps = state.musicApps,
@@ -396,6 +455,7 @@ fun LauncherScreen(
                         onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
                         onConnectBrowser = viewModel::connectBrowserForPackage,
                         onPlayLocalTrack = viewModel::playLocalAudioTrack,
+                        onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
                         onOpenHubNotification = viewModel::openHubNotification,
                         onRefreshTracks = viewModel::refreshLocalAudioTracks,
                         onRequestAudioPermission = { requestMediaAndAudioPermissions() },
@@ -411,7 +471,8 @@ fun LauncherScreen(
                         onSetVolume = viewModel::setVolume,
                         onToggleMute = viewModel::toggleMute,
                         onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
-                        onLaunchMusicApp = viewModel::launchApp
+                        onLaunchMusicApp = viewModel::launchApp,
+                        onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
                     )
                 }
 
@@ -473,11 +534,14 @@ fun LauncherScreen(
                         scaleY = desktopScale
                     }
                     .windowInsetsPadding(WindowInsets.statusBars)
+                    .imePadding()
             ) {
                 PortraitMusicHeaderBar(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
                     isDrawerOpen = state.showMusicSheet,
+                    isCollapsed = state.isPlayerCollapsed,
+                    showDeleteWorkspace = state.activeTab == MainTab.HOME && !state.workspaceGrid.isOnHome,
                     coverStyle = state.playerCoverStyle,
                     onTogglePlayPause = viewModel::togglePlayPause,
                     onSkipPrevious = viewModel::skipPrevious,
@@ -487,7 +551,10 @@ fun LauncherScreen(
                     onSwipeMusicSource = viewModel::swipeMusicSource,
                     onTogglePlayerDrawer = viewModel::toggleMusicDrawer,
                     onOpenPlayerDrawer = { viewModel.setShowMusicSheet(true) },
-                    onClosePlayerDrawer = { viewModel.setShowMusicSheet(false) }
+                    onClosePlayerDrawer = { viewModel.setShowMusicSheet(false) },
+                    onSetCollapsed = viewModel::setPlayerCollapsed,
+                    onOpenFullPlayer = { viewModel.openFullPowerampPlayer() },
+                    onDeleteWorkspace = { viewModel.deleteWorkspace() }
                 )
 
                 AnimatedVisibility(
@@ -502,6 +569,7 @@ fun LauncherScreen(
                         localTracks = state.localAudioTracks,
                         telegramNotifications = state.hubNotifications,
                         trackSearchQuery = state.localTrackSearchQuery,
+                        streamSearchHistory = state.streamSearchHistory,
                         hasAudioReadAccess = state.hasAudioReadAccess,
                         hasAllFilesAccess = state.hasAllFilesAccess,
                         musicApps = state.musicApps,
@@ -523,6 +591,7 @@ fun LauncherScreen(
                         onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
                         onConnectBrowser = viewModel::connectBrowserForPackage,
                         onPlayLocalTrack = viewModel::playLocalAudioTrack,
+                        onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
                         onOpenHubNotification = viewModel::openHubNotification,
                         onRefreshTracks = viewModel::refreshLocalAudioTracks,
                         onRequestAudioPermission = { requestMediaAndAudioPermissions() },
@@ -538,7 +607,8 @@ fun LauncherScreen(
                         onSetVolume = viewModel::setVolume,
                         onToggleMute = viewModel::toggleMute,
                         onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
-                        onLaunchMusicApp = viewModel::launchApp
+                        onLaunchMusicApp = viewModel::launchApp,
+                        onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
                     )
                 }
 
@@ -621,7 +691,10 @@ fun LauncherScreen(
                         label = L10n.tab(lang, MainTab.HOME),
                         iconRes = R.drawable.ic_symbian_menu,
                         selected = state.activeTab == MainTab.HOME && !state.isWriterModeOpen,
-                        onClick = { viewModel.selectTab(MainTab.HOME) },
+                        onClick = {
+                            viewModel.selectTab(MainTab.HOME)
+                            viewModel.closeWorkspaceSpace()
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("nav_home_portrait")
@@ -686,7 +759,82 @@ fun LauncherScreen(
             WriterStudioScreen(
                 writerViewModel = writerViewModel,
                 isLandscape = isLandscape,
-                onClose = viewModel::closeWriterMode
+                onClose = viewModel::closeWriterMode,
+                wallpaperBitmap = state.wallpaperBitmap,
+                modifier = Modifier.imePadding()
+            )
+        }
+
+        // Full-Screen Poweramp Player Overlay (Long-Press or 2nd Expand)
+        AnimatedVisibility(
+            visible = state.showFullPowerampPlayer,
+            enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
+        ) {
+            PowerampPlayerScreen(
+                mediaState = state.mediaState,
+                livePositionMs = state.livePositionMs,
+                coverStyle = state.playerCoverStyle,
+                activeTab = state.powerampTab,
+                isLandscape = isLandscape,
+                sourceSelectionMode = state.sourceSelectionMode,
+                localTracks = state.localAudioTracks,
+                unifiedSearchQuery = state.unifiedMusicQuery,
+                unifiedSearchResults = state.unifiedMusicResults,
+                isSearchingOnline = state.isSearchingMusicOnline,
+                currentLyrics = state.currentLyrics,
+                isFetchingLyrics = state.isFetchingLyrics,
+                equalizerState = state.equalizerState,
+                audioCaptureState = state.audioCaptureState,
+                smartAlbums = state.smartAlbums,
+                selectedAlbumId = state.selectedAlbumId,
+                onClose = viewModel::closeFullPowerampPlayer,
+                onSelectTab = viewModel::selectPowerampTab,
+                onToggleSourceMode = viewModel::toggleMusicSourceMode,
+                onSelectSession = viewModel::selectMediaSession,
+                onTogglePlayPause = viewModel::togglePlayPause,
+                onSkipPrevious = viewModel::skipPrevious,
+                onSkipNext = viewModel::skipNext,
+                onSeekTo = viewModel::seekTo,
+                onSeekBy = viewModel::seekBy,
+                onSkipToQueueItem = viewModel::skipToQueueItem,
+                onOpenActivePlayer = viewModel::openActivePlayer,
+                onPlayLocalTrack = viewModel::playLocalAudioTrack,
+                onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
+                onDeleteActiveTrack = viewModel::deleteActiveTrackIfLocal,
+                onSetPlaybackSpeed = viewModel::setLocalPlaybackSpeed,
+                onCycleRepeatMode = viewModel::cycleLocalRepeatMode,
+                onToggleShuffle = viewModel::toggleLocalShuffle,
+                onSearchMusicEverywhere = viewModel::searchMusicEverywhere,
+                onUnifiedTrackAction = viewModel::handleUnifiedTrackAction,
+                onOpenSourcePicker = viewModel::openSourcePicker,
+                onStopAudioCapture = viewModel::stopStreamCapture,
+                onAutoFetchLyrics = viewModel::autoPickLyricsAgain,
+                onSaveLyrics = viewModel::saveEditedLyrics,
+                onDeleteLyrics = viewModel::deleteCurrentLyrics,
+                onSetEqualizerEnabled = viewModel::setEqualizerEnabled,
+                onApplyEqualizerPreset = viewModel::applyEqualizerPreset,
+                onSetEqualizerBand = viewModel::setEqualizerBandLevel,
+                onSetBassBoost = viewModel::setBassBoostStrength,
+                onSetVirtualizer = viewModel::setVirtualizerStrength,
+                onSelectAlbum = viewModel::selectSmartAlbum,
+                onCreateAlbum = viewModel::createSmartAlbum,
+                onRefreshAlbumOnline = viewModel::refreshAlbumOnlineMetadata,
+                onAttachLocalTracksToAlbum = viewModel::attachLocalTracksToAlbum,
+                onDetachLocalTrackFromAlbum = viewModel::detachTrackFromAlbum,
+                onPickCustomAlbumCover = { albumId ->
+                    pendingCoverAlbumId = albumId
+                    albumCoverPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onSelectAlternateCoverUrl = viewModel::setAlbumCoverUrl,
+                onDeleteAlbum = viewModel::deleteSmartAlbum,
+                onDownloadMissingAlbumTrack = viewModel::downloadExpectedTrackForAlbum,
+                onDownloadAllMissingAlbumTracks = viewModel::downloadMissingAlbumTracks,
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .imePadding()
             )
         }
 
@@ -730,13 +878,12 @@ fun LauncherScreen(
         AppContextDialog(
             app = app,
             isAutoKill = state.autoKillPackages.contains(app.packageName),
-            adaptationMode = state.appAdaptationModes[app.packageName] ?: AppAdaptationMode.DISABLED,
             isBackgroundSpoofed = state.backgroundSpoofPackages.contains(app.packageName),
             onDismiss = { viewModel.openContextMenu(null) },
             onLaunch = { viewModel.launchApp(app) },
+            onCreateWorkspace = { viewModel.createWorkspaceWithApp(app) },
             onTogglePin = { viewModel.togglePinApp(app) },
             onToggleAutoKill = { viewModel.toggleAutoKillPackage(app.packageName) },
-            onCycleAdaptationMode = { viewModel.cycleAppAdaptationMode(app.packageName) },
             onToggleBackgroundSpoof = { viewModel.toggleBackgroundSpoofPackage(app.packageName) },
             onRename = { viewModel.openRenameAppDialog(app) },
             onChooseIcon = { viewModel.openIconPickerDialog(app) },
@@ -757,9 +904,13 @@ fun LauncherScreen(
             hasWallpaper = state.hasWallpaper,
             wallpaperBitmap = state.wallpaperBitmap,
             wallpaperPalette = state.wallpaperPalette,
+            savedPalettes = state.savedPalettes,
+            activeCustomPaletteId = state.activeCustomPaletteId,
             appLanguage = state.appLanguage,
             uiScale = state.uiScale,
             playerCoverStyle = state.playerCoverStyle,
+            showWeatherInHubOther = state.showWeatherInHubOther,
+            showWeatherInHomeTile = state.showWeatherInHomeTile,
             onSelectThemeColor = viewModel::setUiThemeColor,
             onPickWallpaper = {
                 wallpaperPickerLauncher.launch(
@@ -767,9 +918,15 @@ fun LauncherScreen(
                 )
             },
             onClearWallpaper = viewModel::clearWallpaper,
+            onSaveCurrentWallpaperPalette = viewModel::saveCurrentWallpaperPalette,
+            onCreateAndSaveCustomPalette = viewModel::createAndSaveCustomPalette,
+            onSelectCustomPalette = viewModel::selectCustomPalette,
+            onDeleteCustomPalette = viewModel::deleteCustomPalette,
             onSelectLanguage = viewModel::setAppLanguage,
             onChangeUiScale = viewModel::setUiScale,
             onSelectCoverStyle = viewModel::setPlayerCoverStyle,
+            onToggleWeatherInHubOther = viewModel::toggleWeatherInHubOther,
+            onToggleWeatherInHomeTile = viewModel::toggleWeatherInHomeTile,
             onDismiss = { viewModel.setShowAppearanceDialog(false) }
         )
     }
@@ -799,24 +956,23 @@ fun LauncherScreen(
             onToggleBackgroundSpoofEnabled = viewModel::toggleBackgroundSpoofEnabled,
             onToggleBackgroundSpoofPackage = viewModel::toggleBackgroundSpoofPackage,
             onBoostPackageViaShizuku = viewModel::boostAppForBackgroundViaShizuku,
+            onToggleOemGestureBypass = viewModel::toggleOemGestureBypass,
+            onGrantOverlayAndAccessibilityViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
+            onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
+            onOpenOverlaySettings = viewModel::openOverlaySettings,
             onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
             onDismiss = { viewModel.setShowOptimizationDialog(false) }
         )
     }
 
-    if (state.showAdaptationDialog) {
-        AppAdaptationSettingsDialog(
-            enabled = state.appAdaptationEnabled,
-            adaptationModes = state.appAdaptationModes,
-            allApps = state.allApps,
-            shizukuState = state.shizukuState,
-            onToggleEnabled = viewModel::toggleAppAdaptationEnabled,
-            onSetAppMode = viewModel::setAppAdaptationMode,
-            onGrantViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
-            onToggleOemGestureBypass = viewModel::toggleOemGestureBypass,
-            onOpenAccessibilitySettings = viewModel::openAccessibilitySettings,
-            onOpenOverlaySettings = viewModel::openOverlaySettings,
-            onDismiss = { viewModel.setShowAdaptationDialog(false) }
+    if (state.showLinuxCatalogDialog) {
+        LinuxCatalogDialog(
+            packages = state.linuxPackages,
+            isTermuxInstalled = state.isTermuxInstalled,
+            onInstallOrRun = viewModel::installOrRunLinuxPackage,
+            onRefresh = viewModel::refreshLinuxCatalog,
+            onOpenTermuxDownload = viewModel::openTermuxDownload,
+            onDismiss = { viewModel.setShowLinuxCatalogDialog(false) }
         )
     }
 
@@ -873,6 +1029,122 @@ fun LauncherScreen(
             onDismiss = { viewModel.setShowAddLinkDialog(false) },
             onConfirm = viewModel::addHubQuickLink
         )
+    }
+
+    state.sourcePickerTarget?.let { targetResult ->
+        SourceChooserDialog(
+            result = targetResult,
+            forDownload = state.sourcePickerActionDownload,
+            onPickPlay = { candidate -> viewModel.playTrackSourceCandidate(candidate) },
+            onPickDownload = { candidate -> viewModel.downloadTrackSourceCandidate(candidate) },
+            onDismiss = { viewModel.openSourcePicker(null) }
+        )
+    }
+
+    state.pendingStreamCaptureRequest?.let { captureReq ->
+        StreamCaptureConsentDialog(
+            request = captureReq,
+            onConfirm = {
+                val granted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    if (mediaProjectionManager != null) {
+                        streamCaptureProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+                    } else {
+                        viewModel.clearPendingStreamCaptureRequest()
+                    }
+                } else {
+                    recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            onDismiss = viewModel::clearPendingStreamCaptureRequest
+        )
+    }
+
+    if (state.showWeatherForecastDialog && state.weatherReport != null) {
+        WeatherForecastDialog(
+            report = state.weatherReport!!,
+            onDismiss = { viewModel.setShowWeatherForecastDialog(false) },
+            onRefresh = viewModel::refreshWeather,
+            onPickCity = {
+                viewModel.setShowWeatherForecastDialog(false)
+                viewModel.setShowWeatherCityPickerDialog(true)
+            },
+            showInHubOther = state.showWeatherInHubOther,
+            showInHomeTile = state.showWeatherInHomeTile,
+            onToggleHubOther = viewModel::toggleWeatherInHubOther,
+            onToggleHomeTile = viewModel::toggleWeatherInHomeTile
+        )
+    }
+
+    if (state.showWeatherCityPickerDialog) {
+        WeatherCityPickerDialog(
+            currentCity = state.selectedWeatherCity,
+            searchResults = state.weatherCityResults,
+            onSearchChange = viewModel::searchWeatherCities,
+            onSelectCity = viewModel::selectWeatherCity,
+            onDismiss = { viewModel.setShowWeatherCityPickerDialog(false) }
+        )
+    }
+}
+
+@Composable
+private fun StreamCaptureConsentDialog(
+    request: PendingStreamCaptureRequest,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val theme = LocalVistaTheme.current
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .vistaWindowFrame(RoundedCornerShape(5.dp))
+                .testTag("stream_capture_consent_dialog")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .symbianMetallicBar()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ЗАХВАТ ЗВУКА СТРИМИНГА",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = theme.focusBorder
+                )
+            }
+            Column(modifier = Modifier.padding(14.dp)) {
+                Text(
+                    text = "Трек «${request.title}» будет захвачен напрямую из потока ${request.appLabel} во время воспроизведения и сохранён в WAV.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Потребуется разрешение на запись аудио и системный запрос захвата звука.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MusicSourceAmber
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    VistaButton(text = "Отмена", onClick = onDismiss)
+                    Spacer(Modifier.width(8.dp))
+                    VistaButton(
+                        text = "Начать захват",
+                        isPrimary = true,
+                        onClick = onConfirm,
+                        modifier = Modifier.testTag("stream_capture_confirm_btn")
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -957,45 +1229,93 @@ private fun MainTabContent(
 ) {
     when (activeTab) {
         MainTab.HOME -> {
-            AppTileGrid(
-                apps = state.filteredApps,
-                searchImages = state.searchImages,
-                searchFiles = state.searchFiles,
-                musicSearchResults = state.musicSearchResults,
-                isSearchingDevice = state.isSearchingDevice,
-                indexedFolderCount = state.indexedFolderCount,
-                hasAllFilesAccess = state.hasAllFilesAccess,
-                columns = gridColumns,
-                searchQuery = state.appSearchQuery,
-                focusedIndex = state.focusedAppIndex,
-                highlightedLetter = state.highlightedLetter,
-                isLoading = state.isLoadingApps,
-                gridState = appGridState,
-                searchFocusRequester = appSearchFocusRequester,
-                isSearchFocused = viewModel.isAppSearchInputFocused,
-                embeddedSnapshot = state.embeddedSnapshot,
-                messengerSearchMode = state.messengerSearchMode,
-                onToggleMessengerSearchMode = viewModel::toggleMessengerSearchMode,
-                onSearchFocusChange = { viewModel.isAppSearchInputFocused = it },
-                onRequestSearchFocus = { runCatching { appSearchFocusRequester.requestFocus() } },
-                onSearchQueryChange = viewModel::updateAppSearchQuery,
-                onClearSearch = viewModel::clearAllSearchOrHighlights,
-                onLaunchApp = viewModel::launchApp,
-                onLongPressApp = viewModel::openContextMenu,
-                onOpenSearchFile = viewModel::openSearchFile,
-                onLongPressSearchFile = viewModel::openFileContextMenu,
-                onLaunchMusicMatch = viewModel::launchMusicSearchMatch,
-                onSendFileToMessenger = viewModel::sendFileToMessenger,
-                onSendAdaptationCommand = viewModel::sendAdaptationCommand,
-                onDisableEmbeddedAdaptation = viewModel::disableEmbeddedAdaptation,
-                onRestoreEmbeddedApp = viewModel::restoreAdaptedApp,
-                onDismissEmbedded = viewModel::dismissEmbeddedSnapshot,
-                onConnectSearchFolder = onConnectSearchFolder,
-                onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
-                onSearchWeb = viewModel::searchOnWeb,
-                onOpenShortcuts = { viewModel.setShowShortcutsDialog(true) },
-                onOpenWriter = { viewModel.openWriterMode() }
-            )
+            when {
+                state.lockedChatThread != null -> {
+                    LockedSingleChatView(
+                        thread = state.lockedChatThread,
+                        onSendReply = { text -> viewModel.replyLockedChat(text) },
+                        onDropUri = { uri, mime -> viewModel.replyLockedChat("", uri, mime) },
+                        onOpenInApp = { viewModel.openLockedChatInMessenger(state.lockedChatThread) },
+                        onClose = viewModel::closeLockedChat,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
+                    )
+                }
+
+                state.showWorkspaceSpace &&
+                    state.appSearchQuery.isBlank() &&
+                    state.highlightedLetter == null -> {
+                    WorkspaceCanvasHost(
+                        workspaceGrid = state.workspaceGrid,
+                        allApps = state.allApps,
+                        onNavigateWorkspace = viewModel::navigateWorkspace,
+                        onSelectWorkspaceCoord = { tx, ty ->
+                            viewModel.navigateWorkspace(
+                                tx - state.workspaceGrid.activeX,
+                                ty - state.workspaceGrid.activeY
+                            )
+                        },
+                        onAssignApp = viewModel::assignAppToCurrentWorkspace,
+                        onLaunchCellAppInBounds = viewModel::launchCurrentWorkspaceAppInBounds,
+                        onOpenHome = viewModel::openHomeWorkspace,
+                        onDeleteWorkspace = { viewModel.deleteWorkspace() },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
+                    )
+                }
+
+                else -> {
+                    AppTileGrid(
+                        apps = state.filteredApps,
+                        chatSearchResults = state.chatSearchResults,
+                        searchImages = state.searchImages,
+                        searchFiles = state.searchFiles,
+                        linuxSearchResults = state.linuxSearchResults,
+                        musicSearchResults = state.musicSearchResults,
+                        isSearchingDevice = state.isSearchingDevice,
+                        indexedFolderCount = state.indexedFolderCount,
+                        hasAllFilesAccess = state.hasAllFilesAccess,
+                        columns = gridColumns,
+                        searchQuery = state.appSearchQuery,
+                        focusedIndex = state.focusedAppIndex,
+                        highlightedLetter = state.highlightedLetter,
+                        isLoading = state.isLoadingApps,
+                        gridState = appGridState,
+                        searchFocusRequester = appSearchFocusRequester,
+                        isSearchFocused = viewModel.isAppSearchInputFocused,
+                        onSearchFocusChange = { viewModel.isAppSearchInputFocused = it },
+                        onRequestSearchFocus = { runCatching { appSearchFocusRequester.requestFocus() } },
+                        onSearchQueryChange = viewModel::updateAppSearchQuery,
+                        onClearSearch = viewModel::clearAllSearchOrHighlights,
+                        onLaunchApp = viewModel::launchApp,
+                        onLongPressApp = viewModel::openContextMenu,
+                        onOpenLockedChat = viewModel::openLockedChat,
+                        onOpenSearchFile = viewModel::openSearchFile,
+                        onLongPressSearchFile = viewModel::openFileContextMenu,
+                        onSendFileToTarget = viewModel::sendFileToWorkspaceAppOrChat,
+                        onCopySearchFile = viewModel::copySearchFileToClipboard,
+                        onResolveFileUri = viewModel::resolveShareableUri,
+                        onRunLinuxPackage = viewModel::installOrRunLinuxPackage,
+                        onLaunchMusicMatch = viewModel::launchMusicSearchMatch,
+                        onConnectSearchFolder = onConnectSearchFolder,
+                        onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
+                        onSearchWeb = viewModel::searchOnWeb,
+                        onOpenShortcuts = { viewModel.setShowShortcutsDialog(true) },
+                        onOpenWriter = { viewModel.openWriterMode() },
+                        onSwipeToWorkspaceSpace = viewModel::swipeToWorkspaceSpace,
+                        showWeatherTile = state.showWeatherInHomeTile,
+                        weatherReport = state.weatherReport,
+                        selectedWeatherCity = state.selectedWeatherCity,
+                        isWeatherLoading = state.isWeatherLoading,
+                        onRefreshWeather = viewModel::refreshWeather,
+                        onOpenWeatherForecast = { viewModel.setShowWeatherForecastDialog(true) },
+                        onOpenWeatherCityPicker = { viewModel.setShowWeatherCityPickerDialog(true) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
 
         MainTab.CALLS -> {
@@ -1051,14 +1371,21 @@ private fun MainTabContent(
                 onOpenAppearanceSettings = { viewModel.setShowAppearanceDialog(true) },
                 onOpenAutoKillSettings = { viewModel.setShowAutoKillDialog(true) },
                 onOpenOptimizationSettings = { viewModel.setShowOptimizationDialog(true) },
-                onOpenAdaptationSettings = { viewModel.setShowAdaptationDialog(true) },
+                onOpenLinuxCatalog = { viewModel.setShowLinuxCatalogDialog(true) },
                 onGrantOverlayAndAccessibilityViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
                 onOpenDefaultLauncherSettings = viewModel::openDefaultLauncherSettings,
                 onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
                 onOpenAllFilesAccess = viewModel::openAllFilesAccessSettings,
                 onOpenMusicSheet = { viewModel.setShowMusicSheet(true) },
                 onOpenShortcuts = { viewModel.setShowShortcutsDialog(true) },
-                onOpenSystemSettings = viewModel::openSystemSettings
+                onOpenSystemSettings = viewModel::openSystemSettings,
+                showWeatherInHubOther = state.showWeatherInHubOther,
+                weatherReport = state.weatherReport,
+                selectedWeatherCity = state.selectedWeatherCity,
+                isWeatherLoading = state.isWeatherLoading,
+                onRefreshWeather = viewModel::refreshWeather,
+                onOpenWeatherForecast = { viewModel.setShowWeatherForecastDialog(true) },
+                onOpenWeatherCityPicker = { viewModel.setShowWeatherCityPickerDialog(true) }
             )
         }
     }

@@ -7,19 +7,30 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.model.AlbumExpectedTrack
 import com.example.model.AlphabetMode
-import com.example.model.AppAdaptationMode
 import com.example.model.AppIconMode
 import com.example.model.AppIconOverride
 import com.example.model.AppLanguage
+import com.example.model.CustomColorPalette
+import com.example.model.EqualizerPreset
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
+import com.example.model.MediaQueueTrack
 import com.example.model.PlayerCoverStyle
+import com.example.model.SmartAlbum
+import com.example.model.SourceSelectionMode
+import com.example.model.TrackLyricsData
 import com.example.model.UiThemeColor
+import com.example.model.WeatherCityResult
+import com.example.model.WorkspaceCell
+import com.example.model.WorkspaceGridState
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.launcherDataStore by preferencesDataStore(name = "keydeck_launcher_prefs")
 
@@ -43,14 +54,24 @@ class LauncherPreferencesRepository(private val context: Context) {
         val BG_SPOOF_ENABLED = booleanPreferencesKey("bg_spoof_enabled")
         val BG_SPOOF_PACKAGES = stringSetPreferencesKey("bg_spoof_packages")
         val BG_SPOOF_INITIALIZED = booleanPreferencesKey("bg_spoof_initialized")
-        val ADAPTATION_ENABLED = booleanPreferencesKey("app_adaptation_enabled")
-        val ADAPTATION_MODES = stringSetPreferencesKey("app_adaptation_modes")
-        val ADAPTATION_INITIALIZED = booleanPreferencesKey("app_adaptation_initialized")
         val APP_LANGUAGE = stringPreferencesKey("app_language")
         val UI_SCALE = floatPreferencesKey("ui_scale")
         val PLAYER_COVER_STYLE = stringPreferencesKey("player_cover_style")
+        val PLAYER_COLLAPSED = booleanPreferencesKey("player_collapsed")
         val PINNED_RECENTS = stringSetPreferencesKey("pinned_recents")
         val OEM_GESTURE_BYPASS = booleanPreferencesKey("oem_gesture_bypass")
+        val WORKSPACES_JSON = stringPreferencesKey("workspaces_grid_json")
+        val SAVED_PALETTES_JSON = stringPreferencesKey("saved_palettes_json")
+        val ACTIVE_PALETTE_ID = stringPreferencesKey("active_palette_id")
+        val WEATHER_CITY_JSON = stringPreferencesKey("weather_city_json")
+        val STREAMING_HISTORY_JSON = stringPreferencesKey("streaming_history_json")
+        val STREAM_SEARCH_HISTORY = stringSetPreferencesKey("stream_search_history")
+        val SHOW_WEATHER_IN_HUB_OTHER = booleanPreferencesKey("show_weather_in_hub_other")
+        val SHOW_WEATHER_IN_HOME_TILE = booleanPreferencesKey("show_weather_in_home_tile")
+        val MUSIC_SOURCE_MODE = stringPreferencesKey("music_source_mode")
+        val SMART_ALBUMS_JSON = stringPreferencesKey("smart_albums_json")
+        val LYRICS_OVERRIDES_JSON = stringPreferencesKey("lyrics_overrides_json")
+        val EQUALIZER_JSON = stringPreferencesKey("equalizer_settings_json")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -162,30 +183,6 @@ class LauncherPreferencesRepository(private val context: Context) {
         .map { prefs -> prefs[Keys.BG_SPOOF_PACKAGES] ?: emptySet() }
         .onStart { emit(emptySet()) }
 
-    val appAdaptationEnabled: Flow<Boolean> = context.launcherDataStore.data
-        .map { prefs -> prefs[Keys.ADAPTATION_ENABLED] ?: false }
-        .onStart { emit(false) }
-
-    val appAdaptationModes: Flow<Map<String, AppAdaptationMode>> = context.launcherDataStore.data
-        .map { prefs ->
-            val raw = prefs[Keys.ADAPTATION_MODES] ?: emptySet()
-            buildMap {
-                raw.forEach { entry ->
-                    val sep = entry.indexOf("||")
-                    if (sep > 0) {
-                        val pkg = entry.substring(0, sep)
-                        val mode = runCatching {
-                            AppAdaptationMode.valueOf(entry.substring(sep + 2))
-                        }.getOrDefault(AppAdaptationMode.DISABLED)
-                        if (mode != AppAdaptationMode.DISABLED) {
-                            put(pkg, mode)
-                        }
-                    }
-                }
-            }
-        }
-        .onStart { emit(emptyMap()) }
-
     val appLanguage: Flow<AppLanguage> = context.launcherDataStore.data
         .map { prefs ->
             when (prefs[Keys.APP_LANGUAGE]) {
@@ -208,6 +205,10 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
         .onStart { emit(PlayerCoverStyle.COVER) }
 
+    val isPlayerCollapsed: Flow<Boolean> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.PLAYER_COLLAPSED] ?: false }
+        .onStart { emit(false) }
+
     val pinnedRecentPackages: Flow<Set<String>> = context.launcherDataStore.data
         .map { prefs -> prefs[Keys.PINNED_RECENTS] ?: emptySet() }
         .onStart { emit(emptySet()) }
@@ -215,6 +216,58 @@ class LauncherPreferencesRepository(private val context: Context) {
     val oemGestureBypassEnabled: Flow<Boolean> = context.launcherDataStore.data
         .map { prefs -> prefs[Keys.OEM_GESTURE_BYPASS] ?: false }
         .onStart { emit(false) }
+
+    val workspaceGridState: Flow<WorkspaceGridState> = context.launcherDataStore.data
+        .map { prefs -> parseWorkspaceGrid(prefs[Keys.WORKSPACES_JSON]) }
+        .onStart { emit(WorkspaceGridState()) }
+
+    val savedPalettes: Flow<List<CustomColorPalette>> = context.launcherDataStore.data
+        .map { prefs -> parsePalettes(prefs[Keys.SAVED_PALETTES_JSON]) }
+        .onStart { emit(emptyList()) }
+
+    val activeCustomPaletteId: Flow<String?> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.ACTIVE_PALETTE_ID]?.takeIf { it.isNotBlank() } }
+        .onStart { emit(null) }
+
+    val selectedWeatherCity: Flow<WeatherCityResult> = context.launcherDataStore.data
+        .map { prefs -> parseWeatherCity(prefs[Keys.WEATHER_CITY_JSON]) }
+        .onStart { emit(DEFAULT_WEATHER_CITY) }
+
+    val streamingHistory: Flow<List<MediaQueueTrack>> = context.launcherDataStore.data
+        .map { prefs -> parseStreamingHistory(prefs[Keys.STREAMING_HISTORY_JSON]) }
+        .onStart { emit(emptyList()) }
+
+    val streamSearchHistory: Flow<List<String>> = context.launcherDataStore.data
+        .map { prefs -> (prefs[Keys.STREAM_SEARCH_HISTORY] ?: emptySet()).toList().sorted() }
+        .onStart { emit(emptyList()) }
+
+    val showWeatherInHubOther: Flow<Boolean> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.SHOW_WEATHER_IN_HUB_OTHER] ?: true }
+        .onStart { emit(true) }
+
+    val showWeatherInHomeTile: Flow<Boolean> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.SHOW_WEATHER_IN_HOME_TILE] ?: false }
+        .onStart { emit(false) }
+
+    val musicSourceMode: Flow<SourceSelectionMode> = context.launcherDataStore.data
+        .map { prefs ->
+            runCatching {
+                SourceSelectionMode.valueOf(prefs[Keys.MUSIC_SOURCE_MODE].orEmpty())
+            }.getOrDefault(SourceSelectionMode.AUTO)
+        }
+        .onStart { emit(SourceSelectionMode.AUTO) }
+
+    val smartAlbums: Flow<List<SmartAlbum>> = context.launcherDataStore.data
+        .map { prefs -> parseSmartAlbums(prefs[Keys.SMART_ALBUMS_JSON]) }
+        .onStart { emit(emptyList()) }
+
+    val lyricsOverrides: Flow<Map<String, TrackLyricsData>> = context.launcherDataStore.data
+        .map { prefs -> parseLyricsMap(prefs[Keys.LYRICS_OVERRIDES_JSON]) }
+        .onStart { emit(emptyMap()) }
+
+    val equalizerConfig: Flow<SavedEqualizerConfig?> = context.launcherDataStore.data
+        .map { prefs -> parseEqualizerConfig(prefs[Keys.EQUALIZER_JSON]) }
+        .onStart { emit(null) }
 
     suspend fun togglePinApp(appId: String) {
         context.launcherDataStore.edit { prefs ->
@@ -337,6 +390,7 @@ class LauncherPreferencesRepository(private val context: Context) {
     }
 
     suspend fun initDefaultAutoKillPackagesIfNeeded(defaults: Set<String>) {
+        if (context.launcherDataStore.data.first()[Keys.AUTO_KILL_INITIALIZED] == true) return
         context.launcherDataStore.edit { prefs ->
             if (prefs[Keys.AUTO_KILL_INITIALIZED] != true) {
                 prefs[Keys.AUTO_KILL_INITIALIZED] = true
@@ -383,6 +437,7 @@ class LauncherPreferencesRepository(private val context: Context) {
     }
 
     suspend fun initDefaultBackgroundSpoofPackagesIfNeeded(defaults: Set<String>) {
+        if (context.launcherDataStore.data.first()[Keys.BG_SPOOF_INITIALIZED] == true) return
         context.launcherDataStore.edit { prefs ->
             if (prefs[Keys.BG_SPOOF_INITIALIZED] != true) {
                 prefs[Keys.BG_SPOOF_INITIALIZED] = true
@@ -404,38 +459,6 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun setAppAdaptationEnabled(enabled: Boolean) {
-        context.launcherDataStore.edit { prefs ->
-            prefs[Keys.ADAPTATION_ENABLED] = enabled
-        }
-    }
-
-    suspend fun initDefaultAdaptationModesIfNeeded(defaults: Map<String, AppAdaptationMode>) {
-        context.launcherDataStore.edit { prefs ->
-            if (prefs[Keys.ADAPTATION_INITIALIZED] != true) {
-                prefs[Keys.ADAPTATION_INITIALIZED] = true
-                if (defaults.isNotEmpty()) {
-                    prefs[Keys.ADAPTATION_MODES] = defaults.entries
-                        .filter { it.value != AppAdaptationMode.DISABLED }
-                        .map { "${it.key}||${it.value.name}" }
-                        .toSet()
-                }
-            }
-        }
-    }
-
-    suspend fun setAppAdaptationMode(packageName: String, mode: AppAdaptationMode) {
-        context.launcherDataStore.edit { prefs ->
-            val current = prefs[Keys.ADAPTATION_MODES]?.toMutableSet() ?: mutableSetOf()
-            current.removeAll { it.startsWith("$packageName||") }
-            if (mode != AppAdaptationMode.DISABLED) {
-                current.add("$packageName||${mode.name}")
-            }
-            prefs[Keys.ADAPTATION_INITIALIZED] = true
-            prefs[Keys.ADAPTATION_MODES] = current
-        }
-    }
-
     suspend fun setAppLanguage(language: AppLanguage) {
         context.launcherDataStore.edit { prefs ->
             prefs[Keys.APP_LANGUAGE] = language.name
@@ -454,6 +477,12 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun setPlayerCollapsed(collapsed: Boolean) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.PLAYER_COLLAPSED] = collapsed
+        }
+    }
+
     suspend fun togglePinRecentPackage(packageName: String) {
         context.launcherDataStore.edit { prefs ->
             val current = prefs[Keys.PINNED_RECENTS]?.toMutableSet() ?: mutableSetOf()
@@ -468,5 +497,447 @@ class LauncherPreferencesRepository(private val context: Context) {
         context.launcherDataStore.edit { prefs ->
             prefs[Keys.OEM_GESTURE_BYPASS] = enabled
         }
+    }
+
+    suspend fun saveWorkspaceGridState(state: WorkspaceGridState) {
+        val cellsWithHome = if (state.cells.any { it.x == 0 && it.y == 0 }) {
+            state.cells
+        } else {
+            listOf(WorkspaceCell(0, 0)) + state.cells
+        }
+        val obj = JSONObject().apply {
+            put("activeX", state.activeX)
+            put("activeY", state.activeY)
+            val arr = JSONArray()
+            cellsWithHome.forEach { cell ->
+                arr.put(
+                    JSONObject().apply {
+                        put("x", cell.x)
+                        put("y", cell.y)
+                        cell.packageName?.let { put("pkg", it) }
+                        cell.activityName?.let { put("act", it) }
+                        cell.label?.let { put("lbl", it) }
+                    }
+                )
+            }
+            put("cells", arr)
+        }
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.WORKSPACES_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun saveCustomPalette(palette: CustomColorPalette, activate: Boolean = true) {
+        context.launcherDataStore.edit { prefs ->
+            val list = parsePalettes(prefs[Keys.SAVED_PALETTES_JSON]).toMutableList()
+            val idx = list.indexOfFirst { it.id == palette.id }
+            if (idx >= 0) list[idx] = palette else list.add(0, palette)
+            prefs[Keys.SAVED_PALETTES_JSON] = serializePalettes(list.take(18))
+            if (activate) {
+                prefs[Keys.ACTIVE_PALETTE_ID] = palette.id
+            }
+        }
+    }
+
+    suspend fun setActiveCustomPaletteId(paletteId: String?) {
+        context.launcherDataStore.edit { prefs ->
+            if (paletteId.isNullOrBlank()) {
+                prefs.remove(Keys.ACTIVE_PALETTE_ID)
+            } else {
+                prefs[Keys.ACTIVE_PALETTE_ID] = paletteId
+            }
+        }
+    }
+
+    suspend fun deleteCustomPalette(paletteId: String) {
+        context.launcherDataStore.edit { prefs ->
+            val list = parsePalettes(prefs[Keys.SAVED_PALETTES_JSON]).filterNot { it.id == paletteId }
+            prefs[Keys.SAVED_PALETTES_JSON] = serializePalettes(list)
+            if (prefs[Keys.ACTIVE_PALETTE_ID] == paletteId) {
+                prefs.remove(Keys.ACTIVE_PALETTE_ID)
+            }
+        }
+    }
+
+    suspend fun setSelectedWeatherCity(city: WeatherCityResult) {
+        val obj = JSONObject().apply {
+            put("name", city.name)
+            put("country", city.country)
+            put("admin", city.admin)
+            put("lat", city.latitude)
+            put("lon", city.longitude)
+        }
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.WEATHER_CITY_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun saveStreamingHistory(tracks: List<MediaQueueTrack>) {
+        val arr = JSONArray()
+        tracks.take(40).forEach { t ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", t.queueId)
+                    put("title", t.title)
+                    put("sub", t.subtitle)
+                    put("pkg", t.packageName)
+                    put("app", t.appLabel)
+                    t.mediaId?.let { put("mid", it) }
+                }
+            )
+        }
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.STREAMING_HISTORY_JSON] = arr.toString()
+        }
+    }
+
+    suspend fun addStreamSearchHistory(query: String) {
+        val q = query.trim()
+        if (q.length < 2) return
+        context.launcherDataStore.edit { prefs ->
+            val cur = (prefs[Keys.STREAM_SEARCH_HISTORY] ?: emptySet()).toMutableSet()
+            cur.add(q)
+            if (cur.size > 20) {
+                val trimmed = cur.drop(cur.size - 20).toSet()
+                prefs[Keys.STREAM_SEARCH_HISTORY] = trimmed
+            } else {
+                prefs[Keys.STREAM_SEARCH_HISTORY] = cur
+            }
+        }
+    }
+
+    suspend fun setShowWeatherInHubOther(enabled: Boolean) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.SHOW_WEATHER_IN_HUB_OTHER] = enabled
+        }
+    }
+
+    suspend fun setShowWeatherInHomeTile(enabled: Boolean) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.SHOW_WEATHER_IN_HOME_TILE] = enabled
+        }
+    }
+
+    suspend fun setMusicSourceMode(mode: SourceSelectionMode) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.MUSIC_SOURCE_MODE] = mode.name
+        }
+    }
+
+    suspend fun saveSmartAlbums(albums: List<SmartAlbum>) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.SMART_ALBUMS_JSON] = serializeSmartAlbums(albums)
+        }
+    }
+
+    suspend fun saveLyricsOverride(lyrics: TrackLyricsData) {
+        context.launcherDataStore.edit { prefs ->
+            val map = parseLyricsMap(prefs[Keys.LYRICS_OVERRIDES_JSON]).toMutableMap()
+            map[lyrics.trackKey] = lyrics
+            if (map.size > 60) {
+                val trimKey = map.keys.firstOrNull()
+                if (trimKey != null && trimKey != lyrics.trackKey) map.remove(trimKey)
+            }
+            prefs[Keys.LYRICS_OVERRIDES_JSON] = serializeLyricsMap(map)
+        }
+    }
+
+    suspend fun saveEqualizerConfig(config: SavedEqualizerConfig) {
+        val obj = JSONObject().apply {
+            put("en", config.enabled)
+            put("pre", config.preset.name)
+            put("bass", config.bassBoost)
+            put("virt", config.virtualizer)
+            val arr = JSONArray()
+            config.bandsMb.forEach { arr.put(it) }
+            put("bands", arr)
+        }
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.EQUALIZER_JSON] = obj.toString()
+        }
+    }
+
+    private fun parseWorkspaceGrid(raw: String?): WorkspaceGridState {
+        if (raw.isNullOrBlank()) return WorkspaceGridState()
+        return runCatching {
+            val obj = JSONObject(raw)
+            val activeX = obj.optInt("activeX", 0)
+            val activeY = obj.optInt("activeY", 0)
+            val arr = obj.optJSONArray("cells") ?: JSONArray()
+            val list = mutableListOf<WorkspaceCell>()
+            for (i in 0 until arr.length()) {
+                val c = arr.optJSONObject(i) ?: continue
+                list.add(
+                    WorkspaceCell(
+                        x = c.optInt("x", 0),
+                        y = c.optInt("y", 0),
+                        packageName = c.optString("pkg", "").takeIf { it.isNotBlank() },
+                        activityName = c.optString("act", "").takeIf { it.isNotBlank() },
+                        label = c.optString("lbl", "").takeIf { it.isNotBlank() }
+                    )
+                )
+            }
+            if (list.none { it.x == 0 && it.y == 0 }) {
+                list.add(0, WorkspaceCell(0, 0))
+            }
+            val safeActive = if (list.any { it.x == activeX && it.y == activeY }) activeX to activeY else 0 to 0
+            WorkspaceGridState(cells = list.distinctBy { it.x to it.y }, activeX = safeActive.first, activeY = safeActive.second)
+        }.getOrDefault(WorkspaceGridState())
+    }
+
+    private fun parsePalettes(raw: String?): List<CustomColorPalette> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    add(
+                        CustomColorPalette(
+                            id = o.optString("id"),
+                            name = o.optString("name"),
+                            dominantDarkArgb = o.optLong("dark"),
+                            accentArgb = o.optLong("accent"),
+                            highlightArgb = o.optLong("hl"),
+                            isFromWallpaper = o.optBoolean("wall", false)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun serializePalettes(list: List<CustomColorPalette>): String {
+        val arr = JSONArray()
+        list.forEach { p ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", p.id)
+                    put("name", p.name)
+                    put("dark", p.dominantDarkArgb)
+                    put("accent", p.accentArgb)
+                    put("hl", p.highlightArgb)
+                    put("wall", p.isFromWallpaper)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseWeatherCity(raw: String?): WeatherCityResult {
+        if (raw.isNullOrBlank()) return DEFAULT_WEATHER_CITY
+        return runCatching {
+            val o = JSONObject(raw)
+            WeatherCityResult(
+                name = o.optString("name", DEFAULT_WEATHER_CITY.name),
+                country = o.optString("country", ""),
+                admin = o.optString("admin", ""),
+                latitude = o.optDouble("lat", DEFAULT_WEATHER_CITY.latitude),
+                longitude = o.optDouble("lon", DEFAULT_WEATHER_CITY.longitude)
+            )
+        }.getOrDefault(DEFAULT_WEATHER_CITY)
+    }
+
+    private fun parseStreamingHistory(raw: String?): List<MediaQueueTrack> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    add(
+                        MediaQueueTrack(
+                            queueId = o.optLong("id", i.toLong()),
+                            title = o.optString("title"),
+                            subtitle = o.optString("sub"),
+                            mediaId = o.optString("mid", "").takeIf { it.isNotBlank() },
+                            packageName = o.optString("pkg"),
+                            appLabel = o.optString("app"),
+                            isActive = false
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun serializeSmartAlbums(albums: List<SmartAlbum>): String {
+        val arr = JSONArray()
+        albums.forEach { a ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", a.id)
+                    put("title", a.title)
+                    put("artist", a.artist)
+                    put("rid", a.releaseId)
+                    put("expCnt", a.expectedTrackCount)
+                    a.coverUrl?.let { put("cov", it) }
+                    a.customCoverPath?.let { put("custCov", it) }
+                    val altArr = JSONArray()
+                    a.alternateCoverUrls.forEach { altArr.put(it) }
+                    put("altCov", altArr)
+                    val attArr = JSONArray()
+                    a.attachedLocalTrackIds.forEach { attArr.put(it) }
+                    put("attIds", attArr)
+                    val expArr = JSONArray()
+                    a.expectedTracks.forEach { t ->
+                        expArr.put(
+                            JSONObject().apply {
+                                put("num", t.trackNumber)
+                                put("title", t.title)
+                                put("art", t.artist)
+                                put("dur", t.durationMs)
+                                t.matchedLocalTrackId?.let { put("mid", it) }
+                                t.matchedLocalTitle?.let { put("mlt", it) }
+                                t.matchedFormat?.let { put("mfmt", it) }
+                            }
+                        )
+                    }
+                    put("exp", expArr)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseSmartAlbums(raw: String?): List<SmartAlbum> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val altCov = buildList {
+                        val a = o.optJSONArray("altCov") ?: JSONArray()
+                        for (j in 0 until a.length()) {
+                            a.optString(j).takeIf { it.isNotBlank() }?.let { add(it) }
+                        }
+                    }
+                    val attIds = buildList {
+                        val a = o.optJSONArray("attIds") ?: JSONArray()
+                        for (j in 0 until a.length()) {
+                            a.optString(j).takeIf { it.isNotBlank() }?.let { add(it) }
+                        }
+                    }
+                    val expTracks = buildList {
+                        val a = o.optJSONArray("exp") ?: JSONArray()
+                        for (j in 0 until a.length()) {
+                            val to = a.optJSONObject(j) ?: continue
+                            add(
+                                AlbumExpectedTrack(
+                                    trackNumber = to.optInt("num", j + 1),
+                                    title = to.optString("title"),
+                                    artist = to.optString("art"),
+                                    durationMs = to.optLong("dur", 0L),
+                                    matchedLocalTrackId = to.optString("mid", "").takeIf { it.isNotBlank() },
+                                    matchedLocalTitle = to.optString("mlt", "").takeIf { it.isNotBlank() },
+                                    matchedFormat = to.optString("mfmt", "").takeIf { it.isNotBlank() }
+                                )
+                            )
+                        }
+                    }
+                    add(
+                        SmartAlbum(
+                            id = o.optString("id"),
+                            title = o.optString("title"),
+                            artist = o.optString("artist"),
+                            releaseId = o.optString("rid"),
+                            expectedTrackCount = o.optInt("expCnt", expTracks.size),
+                            coverUrl = o.optString("cov", "").takeIf { it.isNotBlank() },
+                            alternateCoverUrls = altCov,
+                            customCoverPath = o.optString("custCov", "").takeIf { it.isNotBlank() },
+                            attachedLocalTrackIds = attIds,
+                            expectedTracks = expTracks
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun serializeLyricsMap(map: Map<String, TrackLyricsData>): String {
+        val arr = JSONArray()
+        map.values.forEach { item ->
+            arr.put(
+                JSONObject().apply {
+                    put("key", item.trackKey)
+                    put("title", item.title)
+                    put("art", item.artist)
+                    put("raw", item.rawLrc)
+                    put("plain", item.plainText)
+                    put("src", item.sourceLabel)
+                    put("del", item.isDeleted)
+                    put("edt", item.isCustomEdited)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseLyricsMap(raw: String?): Map<String, TrackLyricsData> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildMap {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val key = o.optString("key").trim()
+                    if (key.isEmpty()) continue
+                    val rawLrc = o.optString("raw", "")
+                    val synced = MusicCatalogAndLyricsRepository.parseLrc(rawLrc)
+                    put(
+                        key,
+                        TrackLyricsData(
+                            trackKey = key,
+                            title = o.optString("title"),
+                            artist = o.optString("art"),
+                            syncedLines = synced,
+                            plainText = o.optString("plain"),
+                            rawLrc = rawLrc,
+                            sourceLabel = o.optString("src", "LRC"),
+                            isDeleted = o.optBoolean("del", false),
+                            isCustomEdited = o.optBoolean("edt", false)
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun parseEqualizerConfig(raw: String?): SavedEqualizerConfig? {
+        if (raw.isNullOrBlank()) return null
+        return runCatching {
+            val o = JSONObject(raw)
+            val preset = runCatching { EqualizerPreset.valueOf(o.optString("pre")) }.getOrDefault(EqualizerPreset.FLAT)
+            val bands = buildList {
+                val arr = o.optJSONArray("bands") ?: JSONArray()
+                for (i in 0 until arr.length()) add(arr.optInt(i, 0))
+            }
+            SavedEqualizerConfig(
+                enabled = o.optBoolean("en", true),
+                preset = preset,
+                bandsMb = bands,
+                bassBoost = o.optInt("bass", 250),
+                virtualizer = o.optInt("virt", 180)
+            )
+        }.getOrNull()
+    }
+
+    data class SavedEqualizerConfig(
+        val enabled: Boolean,
+        val preset: EqualizerPreset,
+        val bandsMb: List<Int>,
+        val bassBoost: Int,
+        val virtualizer: Int
+    )
+
+    companion object {
+        val DEFAULT_WEATHER_CITY = WeatherCityResult(
+            name = "Москва",
+            country = "Россия",
+            admin = "Москва",
+            latitude = 55.7558,
+            longitude = 37.6173
+        )
     }
 }

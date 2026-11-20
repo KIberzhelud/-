@@ -60,15 +60,12 @@ enum class PlayerCoverStyle(val title: String) {
     DISC("Крутящийся диск")
 }
 
-enum class GlobalSearchMode {
-    APPS_AND_FILES,
-    MESSENGER_SEARCH
-}
-
 enum class SearchCategoryGroup {
     APPS,
+    CHATS,
     IMAGES,
     FILES,
+    LINUX,
     MUSIC
 }
 
@@ -87,7 +84,8 @@ data class RecentAppFrame(
     val previewSubtitle: String,
     val badgeText: String = "",
     val isPinned: Boolean = false,
-    val isPlayingMedia: Boolean = false
+    val isPlayingMedia: Boolean = false,
+    val previewBitmap: ImageBitmap? = null
 )
 
 data class MusicStreamMatch(
@@ -171,7 +169,11 @@ data class MediaSessionUi(
     val canPlayFromSearch: Boolean = false,
     val activeQueueItemId: Long = -1L,
     val queue: List<MediaQueueTrack> = emptyList(),
-    val customActions: List<MediaCustomActionItem> = emptyList()
+    val customActions: List<MediaCustomActionItem> = emptyList(),
+    val formatLabel: String = "",
+    val bitrateKbps: Int = 0,
+    val sampleRateHz: Int = 0,
+    val artworkUrl: String? = null
 )
 
 data class LocalAudioTrack(
@@ -183,7 +185,10 @@ data class LocalAudioTrack(
     val uriString: String,
     val filePath: String? = null,
     val displayPath: String = "",
-    val isTelegramAudio: Boolean = false
+    val isTelegramAudio: Boolean = false,
+    val formatLabel: String = "",
+    val bitrateKbps: Int = 0,
+    val sampleRateHz: Int = 0
 )
 
 data class MediaPlayerState(
@@ -267,39 +272,112 @@ data class HubNotificationItem(
     val appIcon: ImageBitmap? = null
 )
 
-enum class AppAdaptationMode(val title: String, val shortTitle: String) {
-    DISABLED("Без адаптации", "Выкл"),
-    STANDARD("Стандартная перерисовка (F1–F6 + стрелки)", "Стандарт"),
-    MESSENGER("Мессенджер (чаты, быстрый ввод, F1–F6)", "Мессенджер")
+data class WorkspaceCell(
+    val x: Int,
+    val y: Int,
+    val packageName: String? = null,
+    val activityName: String? = null,
+    val label: String? = null
+) {
+    val isHome: Boolean get() = x == 0 && y == 0
+    val hasAssignedApp: Boolean get() = !packageName.isNullOrBlank()
 }
 
-data class AdaptedTabNode(
-    val index: Int,
-    val label: String,
-    val viewId: String? = null,
-    val isSelected: Boolean = false
-)
+data class WorkspaceGridState(
+    val cells: List<WorkspaceCell> = listOf(WorkspaceCell(0, 0)),
+    val activeX: Int = 0,
+    val activeY: Int = 0
+) {
+    val activeCell: WorkspaceCell
+        get() = cells.firstOrNull { it.x == activeX && it.y == activeY } ?: WorkspaceCell(activeX, activeY)
+    val isOnHome: Boolean get() = activeX == 0 && activeY == 0
+}
 
-data class AdaptedItemNode(
-    val index: Int,
-    val title: String,
-    val subtitle: String = "",
-    val badge: String = "",
-    val isClickable: Boolean = true,
-    val isEditable: Boolean = false
-)
-
-data class AdaptedAppSnapshot(
+data class LockedChatThread(
+    val key: String,
     val packageName: String,
-    val appLabel: String,
-    val mode: AppAdaptationMode,
-    val tabs: List<AdaptedTabNode> = emptyList(),
-    val items: List<AdaptedItemNode> = emptyList(),
-    val focusedItemIndex: Int = 0,
-    val hasInputField: Boolean = false,
-    val inputHint: String = "",
-    val hasSendButton: Boolean = false,
-    val overlayCollapsed: Boolean = false
+    val appName: String,
+    val contactName: String,
+    val messages: List<HubChatMessage> = emptyList(),
+    val canReplyInline: Boolean = false,
+    val supportsMediaReply: Boolean = false,
+    val lastTimestamp: Long = 0L,
+    val timeFormatted: String = "",
+    val fallbackPhoneNumber: String? = null,
+    val appIcon: ImageBitmap? = null
+)
+
+data class CustomColorPalette(
+    val id: String,
+    val name: String,
+    val dominantDarkArgb: Long,
+    val accentArgb: Long,
+    val highlightArgb: Long,
+    val isFromWallpaper: Boolean = false
+)
+
+data class WeatherSourceReading(
+    val sourceName: String,
+    val tempC: Double?,
+    val condition: String,
+    val windKmh: Double?,
+    val humidityPercent: Int?
+)
+
+data class HourlyWeatherPoint(
+    val timeLabel: String,
+    val tempC: Int,
+    val condition: String,
+    val precipitationProb: Int
+)
+
+data class DailyWeatherForecast(
+    val dayLabel: String,
+    val minTempC: Int,
+    val maxTempC: Int,
+    val condition: String,
+    val windMaxKmh: Int
+)
+
+data class WeatherCityResult(
+    val name: String,
+    val country: String = "",
+    val admin: String = "",
+    val latitude: Double,
+    val longitude: Double
+)
+
+data class ConsensusWeatherReport(
+    val cityName: String,
+    val tempC: Int,
+    val feelsLikeC: Int,
+    val condition: String,
+    val iconKey: String,
+    val windKmh: Int,
+    val humidityPercent: Int,
+    val updatedAtMs: Long,
+    val sources: List<WeatherSourceReading> = emptyList(),
+    val hourly: List<HourlyWeatherPoint> = emptyList(),
+    val daily: List<DailyWeatherForecast> = emptyList()
+)
+
+enum class LinuxPackageKind(val title: String) {
+    DEB(".deb Пакет"),
+    APPIMAGE("AppImage"),
+    SHELL("Скрипт / CLI")
+}
+
+data class LinuxPackageEntry(
+    val id: String,
+    val filePath: String,
+    val name: String,
+    val packageName: String,
+    val version: String,
+    val architecture: String,
+    val description: String,
+    val sizeBytes: Long,
+    val kind: LinuxPackageKind,
+    val isInstalled: Boolean = false
 )
 
 data class AndroidOptimizationStats(

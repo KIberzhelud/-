@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.ui.LockScreenActivity
@@ -14,17 +15,22 @@ class LauncherMediaListenerService : NotificationListenerService() {
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            val action = intent?.action ?: return
-            if (action == Intent.ACTION_SCREEN_OFF || action == Intent.ACTION_SCREEN_ON) {
-                if (ShizukuRuntimeFlags.interceptLockScreenEnabled.get()) {
-                    val lockIntent = Intent(this@LauncherMediaListenerService, LockScreenActivity::class.java).apply {
-                        addFlags(
-                            Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                Intent.FLAG_ACTIVITY_NO_ANIMATION
-                        )
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    MediaGuardRuntime.isScreenOff = true
+                    if (ShizukuRuntimeFlags.interceptLockScreenEnabled.get()) {
+                        val lockIntent = Intent(this@LauncherMediaListenerService, LockScreenActivity::class.java).apply {
+                            addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+                            )
+                        }
+                        runCatching { startActivity(lockIntent) }
                     }
-                    runCatching { startActivity(lockIntent) }
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    MediaGuardRuntime.isScreenOff = false
                 }
             }
         }
@@ -65,7 +71,11 @@ class LauncherMediaListenerService : NotificationListenerService() {
             addAction(Intent.ACTION_SCREEN_ON)
         }
         runCatching {
-            registerReceiver(screenReceiver, filter)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(screenReceiver, filter)
+            }
             screenReceiverRegistered = true
         }
     }

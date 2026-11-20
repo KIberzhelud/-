@@ -57,6 +57,8 @@ import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.symbianGlossyTile
+import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import kotlin.math.abs
@@ -116,44 +118,58 @@ fun FavoritesAndAlphabetRail(
             if (showFavoritesColumn) {
                 Column(
                     modifier = Modifier
-                        .width(66.dp)
+                        .width(68.dp)
                         .fillMaxHeight()
-                        .padding(vertical = 6.dp, horizontal = 3.dp)
+                        .padding(vertical = 4.dp, horizontal = 3.dp)
                         .testTag("favorites_panel_column"),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .symbianMetallicBar()
+                            .padding(vertical = 3.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "★",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = theme.focusBorder
+                        )
+                    }
+                    Spacer(Modifier.height(5.dp))
                     if (activeTab == MainTab.CALLS) {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             items(starredContacts, key = { "${it.id}_${it.number}" }) { contact ->
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .symbianGlossyTile(bucket = 1, shape = RoundedCornerShape(4.dp))
                                         .clickable { onCallContact(contact) }
-                                        .padding(vertical = 4.dp, horizontal = 2.dp),
+                                        .padding(vertical = 4.dp, horizontal = 3.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(34.dp)
+                                            .size(32.dp)
                                             .vistaInsetBox(),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Image(
                                             painter = painterResource(com.example.R.drawable.ic_symbian_contacts),
                                             contentDescription = contact.name,
-                                            modifier = Modifier.size(22.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                     Spacer(Modifier.height(3.dp))
                                     Text(
                                         text = contact.name,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = TextSecondary,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp),
+                                        color = TextPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center
@@ -166,19 +182,19 @@ fun FavoritesAndAlphabetRail(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .testTag("favorites_rail_list"),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             items(favoriteApps, key = { it.id }) { app ->
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .symbianGlossyTile(bucket = 0, shape = RoundedCornerShape(4.dp))
                                         .combinedClickable(
                                             onClick = { onLaunchApp(app) },
                                             onLongClick = { onLongPressApp(app) }
                                         )
-                                        .padding(vertical = 3.dp, horizontal = 2.dp),
+                                        .padding(vertical = 4.dp, horizontal = 3.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     if (app.icon != null) {
@@ -186,15 +202,15 @@ fun FavoritesAndAlphabetRail(
                                             bitmap = app.icon,
                                             contentDescription = app.label,
                                             modifier = Modifier
-                                                .size(34.dp)
+                                                .size(32.dp)
                                                 .clip(RoundedCornerShape(6.dp))
                                         )
                                     }
                                     Spacer(Modifier.height(3.dp))
                                     Text(
                                         text = app.label,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = TextSecondary,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.5.sp),
+                                        color = TextPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center

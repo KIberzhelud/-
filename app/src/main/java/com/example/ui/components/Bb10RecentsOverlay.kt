@@ -250,17 +250,41 @@ private fun ActiveFrameCard(
             .clickable(onClick = onOpen)
             .testTag("bb10_frame_${frame.packageName}")
     ) {
-        // Top preview card body (Active Frame visual content + corner badge/actions)
+        // Top preview card body (Real screenshot/cover thumbnail when available + Active Frame overlay)
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(8.dp)
         ) {
+            frame.previewBitmap?.let { previewBmp ->
+                Image(
+                    bitmap = previewBmp,
+                    contentDescription = frame.appLabel,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("bb10_preview_image_${frame.packageName}")
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.Black.copy(alpha = 0.72f),
+                                    Color.Black.copy(alpha = 0.36f),
+                                    Color.Black.copy(alpha = 0.76f)
+                                )
+                            )
+                        )
+                )
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(),
+                    .fillMaxWidth()
+                    .padding(8.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -288,7 +312,7 @@ private fun ActiveFrameCard(
                                     fontSize = 10.5.sp,
                                     lineHeight = 13.sp
                                 ),
-                                color = TextSecondary,
+                                color = if (frame.previewBitmap != null) Color.White.copy(alpha = 0.92f) else TextSecondary,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -325,14 +349,14 @@ private fun ActiveFrameCard(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(theme.accent.copy(alpha = 0.22f))
-                                .border(0.75.dp, theme.accent.copy(alpha = 0.5f), RoundedCornerShape(3.dp))
+                                .background(theme.accent.copy(alpha = 0.28f))
+                                .border(0.75.dp, theme.accent.copy(alpha = 0.65f), RoundedCornerShape(3.dp))
                                 .padding(horizontal = 5.dp, vertical = 2.dp)
                         ) {
                             Text(
                                 text = frame.badgeText,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                color = theme.accent,
+                                color = Color.White,
                                 maxLines = 1
                             )
                         }

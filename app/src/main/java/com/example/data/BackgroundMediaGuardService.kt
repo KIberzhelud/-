@@ -22,6 +22,7 @@ import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.ui.LockScreenActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,12 +32,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Foreground MediaPlayback Service that acts as an anti-pause background audio guard for external
- * video/music apps (YouTube, VK Video, Rutube, browsers, etc.):
- * - Holds a PARTIAL_WAKE_LOCK so audio decoding stays alive when screen turns off
- * - Keeps active AudioManager + MediaSession monitoring
- * - Immediately intercepts unexpected PAUSED transitions on minimize/screen-off and dispatches
- *   staggered play/keyevent/Shizuku resume pulses unless user clicked Pause in KeyDeck.
+ * Foreground MediaPlayback Service that acts as:
+ * 1. Anti-pause background audio guard for external video/music apps (YouTube, VK Video, Rutube, browsers, etc.)
+ * 2. Reliable screen-off monitor that holds PARTIAL_WAKE_LOCK, keeps persistent media audio focus,
+ *    resumes spoofed players on screen-off, and triggers KeyDeck LockScreen immediately before unlock.
  */
 class BackgroundMediaGuardService : Service() {
 
@@ -74,10 +73,12 @@ class BackgroundMediaGuardService : Service() {
     private var screenReceiver: BroadcastReceiver? = null
     private var retryJob: Job? = null
     private var lastSpoofBurstAtMs: Long = 0L
+    private var activeFocusRequest: AudioFocusRequest? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        ShizukuRuntimeFlags.loadPersistedFlags(applicationContext)
         shizukuBridge = ShizukuBridge(applicationContext).also { it.startObserving() }
         mediaRepo = MediaControlRepository(applicationContext).also { it.startObserving() }
 
@@ -93,21 +94,53 @@ class BackgroundMediaGuardService : Service() {
             }
         }
 
-        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
         screenReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_SCREEN_OFF && MediaGuardRuntime.isGuardEnabled) {
-                    val guardedActive = mediaRepo?.mediaState?.value?.sessions
-                        ?.firstOrNull { MediaGuardRuntime.guardedPackages.contains(it.packageName) }
-                    if (guardedActive != null) {
-                        triggerSpoofResumeBurst(guardedActive.packageName, reason = "Экран выключен")
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        MediaGuardRuntime.isScreenOff = true
+                        if (MediaGuardRuntime.isGuardEnabled) {
+                            val guardedActive = mediaRepo?.mediaState?.value?.sessions
+                                ?.firstOrNull { MediaGuardRuntime.guardedPackages.contains(it.packageName) }
+                            if (guardedActive != null) {
+                                triggerSpoofResumeBurst(guardedActive.packageName, reason = "Экран выключен")
+                            }
+                        }
+                        if (ShizukuRuntimeFlags.interceptLockScreenEnabled.get()) {
+                            val lockIntent = Intent(this@BackgroundMediaGuardService, LockScreenActivity::class.java).apply {
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                        Intent.FLAG_ACTIVITY_NO_ANIMATION
+                                )
+                            }
+                            runCatching { startActivity(lockIntent) }
+                        }
+                    }
+                    Intent.ACTION_SCREEN_ON -> {
+                        MediaGuardRuntime.isScreenOff = false
+                        if (ShizukuRuntimeFlags.interceptLockScreenEnabled.get()) {
+                            val lockIntent = Intent(this@BackgroundMediaGuardService, LockScreenActivity::class.java).apply {
+                                addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                                        Intent.FLAG_ACTIVITY_NO_ANIMATION
+                                )
+                            }
+                            runCatching { startActivity(lockIntent) }
+                        }
                     }
                 }
             }
         }
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(screenReceiver, filter, RECEIVER_NOT_EXPORTED)
+                registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 registerReceiver(screenReceiver, filter)
             }
@@ -119,7 +152,12 @@ class BackgroundMediaGuardService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, buildNotification("Защита фонового звука активна"))
+        val titleText = if (MediaGuardRuntime.isGuardEnabled) {
+            "Защита фонового звука активна"
+        } else {
+            "Монитор экрана блокировки активен"
+        }
+        startForeground(NOTIFICATION_ID, buildNotification(titleText))
         if (intent?.action == ACTION_RESUME_PKG) {
             val pkg = intent.getStringExtra(EXTRA_PACKAGE_NAME)
             if (!pkg.isNullOrBlank()) {
@@ -149,8 +187,7 @@ class BackgroundMediaGuardService : Service() {
                 }
             }
 
-            // Hold transient media audio focus so system doesn't revoke stream focus
-            requestTransientPlaybackAudioFocus()
+            acquirePersistentPlaybackAudioFocus()
 
             val delays = listOf(80L, 320L, 780L, 1450L)
             for (d in delays) {
@@ -158,6 +195,9 @@ class BackgroundMediaGuardService : Service() {
                 if (!MediaGuardRuntime.isGuardEnabled) break
                 val elapsedPause = SystemClock.elapsedRealtime() - MediaGuardRuntime.lastUserPausedAtMs
                 if (MediaGuardRuntime.lastUserPausedPackage == packageName && elapsedPause < 4500L) {
+                    break
+                }
+                if (!MediaGuardRuntime.isScreenOff && MediaGuardRuntime.visibleWindowPackages.contains(packageName)) {
                     break
                 }
                 mediaRepo?.forceResumePackagePlayback(packageName)
@@ -173,20 +213,22 @@ class BackgroundMediaGuardService : Service() {
         }
     }
 
-    private fun requestTransientPlaybackAudioFocus() {
+    private fun acquirePersistentPlaybackAudioFocus() {
         val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .build()
-                am.requestAudioFocus(req)
-                am.abandonAudioFocusRequest(req)
+                if (activeFocusRequest == null) {
+                    activeFocusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                        )
+                        .setWillPauseWhenDucked(false)
+                        .build()
+                }
+                activeFocusRequest?.let { am.requestAudioFocus(it) }
             } else {
                 @Suppress("DEPRECATION")
                 am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -197,11 +239,22 @@ class BackgroundMediaGuardService : Service() {
         am.dispatchMediaKeyEvent(KeyEvent(ts, ts, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY, 0))
     }
 
+    private fun abandonPersistentAudioFocus() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            activeFocusRequest?.let { req ->
+                runCatching { am.abandonAudioFocusRequest(req) }
+            }
+        }
+        activeFocusRequest = null
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         MediaGuardRuntime.onUnexpectedPauseDetected = null
         retryJob?.cancel()
         serviceScope.cancel()
+        abandonPersistentAudioFocus()
         screenReceiver?.let { runCatching { unregisterReceiver(it) } }
         mediaRepo?.stopObserving()
         shizukuBridge?.stopObserving()

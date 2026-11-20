@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.content.ClipData
+import android.net.Uri
+import android.view.View
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -7,7 +10,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,37 +25,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Public
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -78,24 +72,25 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.data.AdaptationCommand
+import com.example.data.LauncherPreferencesRepository
 import com.example.data.UniversalSearchRepository
-import com.example.model.AdaptedAppSnapshot
-import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
+import com.example.model.ConsensusWeatherReport
 import com.example.model.DeviceSearchFile
-import com.example.model.GlobalSearchMode
+import com.example.model.LinuxPackageEntry
+import com.example.model.LockedChatThread
 import com.example.model.MusicStreamMatch
+import com.example.model.WeatherCityResult
 import com.example.ui.L10n
 import com.example.ui.LocalAppLang
-import com.example.ui.theme.CallIncomingGreen
-import com.example.ui.theme.CallMissedRed
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
@@ -106,14 +101,15 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
-import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun AppTileGrid(
     apps: List<AppEntry>,
+    chatSearchResults: List<LockedChatThread> = emptyList(),
     searchImages: List<DeviceSearchFile>,
     searchFiles: List<DeviceSearchFile>,
+    linuxSearchResults: List<LinuxPackageEntry> = emptyList(),
     musicSearchResults: List<MusicStreamMatch> = emptyList(),
     isSearchingDevice: Boolean,
     indexedFolderCount: Int,
@@ -126,57 +122,63 @@ fun AppTileGrid(
     gridState: LazyGridState,
     searchFocusRequester: FocusRequester,
     isSearchFocused: Boolean,
-    embeddedSnapshot: AdaptedAppSnapshot? = null,
-    messengerSearchMode: GlobalSearchMode = GlobalSearchMode.APPS_AND_FILES,
-    onToggleMessengerSearchMode: () -> Unit = {},
     onSearchFocusChange: (Boolean) -> Unit,
     onRequestSearchFocus: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onClearSearch: () -> Unit,
     onLaunchApp: (AppEntry) -> Unit,
     onLongPressApp: (AppEntry) -> Unit,
+    onOpenLockedChat: (LockedChatThread) -> Unit = {},
     onOpenSearchFile: (DeviceSearchFile) -> Unit,
     onLongPressSearchFile: (DeviceSearchFile) -> Unit,
+    onSendFileToTarget: (DeviceSearchFile) -> Unit = {},
+    onCopySearchFile: (DeviceSearchFile) -> Unit = {},
+    onResolveFileUri: (DeviceSearchFile) -> Uri = { Uri.parse(it.uriString) },
+    onRunLinuxPackage: (LinuxPackageEntry) -> Unit = {},
     onLaunchMusicMatch: (MusicStreamMatch) -> Unit = {},
-    onSendFileToMessenger: (DeviceSearchFile, String) -> Unit = { _, _ -> },
-    onSendAdaptationCommand: (AdaptationCommand) -> Unit = {},
-    onDisableEmbeddedAdaptation: (String) -> Unit = {},
-    onRestoreEmbeddedApp: (String) -> Unit = {},
-    onDismissEmbedded: () -> Unit = {},
     onConnectSearchFolder: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
     onSearchWeb: (query: String, engine: String) -> Unit,
     onOpenShortcuts: () -> Unit,
     onOpenWriter: () -> Unit,
+    onSwipeToWorkspaceSpace: () -> Unit = {},
+    showWeatherTile: Boolean = false,
+    weatherReport: ConsensusWeatherReport? = null,
+    selectedWeatherCity: WeatherCityResult = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY,
+    isWeatherLoading: Boolean = false,
+    onRefreshWeather: () -> Unit = {},
+    onOpenWeatherForecast: () -> Unit = {},
+    onOpenWeatherCityPicker: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
     val trimmedQuery = searchQuery.trim()
     val isUniversalMode = trimmedQuery.length >= 2
-    val hasMessengerEmbedded = embeddedSnapshot?.mode == AppAdaptationMode.MESSENGER
 
     // Collapsible Universal Search category folders (collapsed by default, auto-expand when apps empty)
+    var chatsExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var photosExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var filesExpanded by remember(trimmedQuery) { mutableStateOf(false) }
+    var linuxExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var musicExpanded by remember(trimmedQuery) { mutableStateOf(false) }
-    var internetExpanded by remember(trimmedQuery) { mutableStateOf(false) }
 
     LaunchedEffect(
         trimmedQuery,
         apps.size,
+        chatSearchResults.size,
         searchImages.size,
         searchFiles.size,
+        linuxSearchResults.size,
         musicSearchResults.size,
         isSearchingDevice
     ) {
         if (isUniversalMode && apps.isEmpty()) {
+            if (chatSearchResults.isNotEmpty()) chatsExpanded = true
             if (searchImages.isNotEmpty()) photosExpanded = true
             if (searchFiles.isNotEmpty()) filesExpanded = true
+            if (linuxSearchResults.isNotEmpty()) linuxExpanded = true
             if (musicSearchResults.isNotEmpty()) musicExpanded = true
-            if (searchImages.isEmpty() && searchFiles.isEmpty() && musicSearchResults.isEmpty() && !isSearchingDevice) {
-                internetExpanded = true
-            }
         }
     }
 
@@ -194,30 +196,6 @@ fun AppTileGrid(
                 modifier = Modifier
                     .weight(1f)
                     .vistaInsetBox(isFocused = isSearchFocused)
-                    .then(
-                        if (hasMessengerEmbedded) {
-                            Modifier.pointerInput(messengerSearchMode) {
-                                var dragX = 0f
-                                var triggered = false
-                                detectHorizontalDragGestures(
-                                    onDragStart = {
-                                        dragX = 0f
-                                        triggered = false
-                                    },
-                                    onHorizontalDrag = { _, delta ->
-                                        if (triggered) return@detectHorizontalDragGestures
-                                        dragX += delta
-                                        if (abs(dragX) > 40f) {
-                                            triggered = true
-                                            onToggleMessengerSearchMode()
-                                        }
-                                    }
-                                )
-                            }
-                        } else {
-                            Modifier
-                        }
-                    )
                     .clickable(onClick = onRequestSearchFocus)
                     .padding(horizontal = 8.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -234,11 +212,10 @@ fun AppTileGrid(
                 ) {
                     if (searchQuery.isEmpty()) {
                         Text(
-                            text = when {
-                                highlightedLetter != null -> "Буква: $highlightedLetter • ${L10n.searchPlaceholder(lang)}"
-                                hasMessengerEmbedded && messengerSearchMode == GlobalSearchMode.MESSENGER_SEARCH ->
-                                    L10n.messengerSearchPlaceholder(lang, embeddedSnapshot!!.appLabel)
-                                else -> L10n.searchPlaceholder(lang)
+                            text = if (highlightedLetter != null) {
+                                "Буква: $highlightedLetter • ${L10n.searchPlaceholder(lang)}"
+                            } else {
+                                L10n.searchPlaceholder(lang)
                             },
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
                             color = if (highlightedLetter != null) theme.accent else TextMuted,
@@ -246,9 +223,20 @@ fun AppTileGrid(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    var appsSearchTfv by remember {
+                        mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
+                    }
+                    LaunchedEffect(searchQuery) {
+                        if (searchQuery != appsSearchTfv.text) {
+                            appsSearchTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+                        }
+                    }
                     BasicTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChange,
+                        value = appsSearchTfv,
+                        onValueChange = { next ->
+                            appsSearchTfv = next
+                            onSearchQueryChange(next.text)
+                        },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
                             color = TextPrimary,
@@ -258,23 +246,20 @@ fun AppTileGrid(
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(
                             onGo = {
-                                if (hasMessengerEmbedded &&
-                                    messengerSearchMode == GlobalSearchMode.MESSENGER_SEARCH &&
-                                    trimmedQuery.isNotEmpty()
-                                ) {
-                                    onSendAdaptationCommand(AdaptationCommand.SendText(trimmedQuery))
-                                } else {
-                                    val firstApp = apps.firstOrNull()
-                                    val firstFile = searchFiles.firstOrNull()
-                                    val firstImg = searchImages.firstOrNull()
-                                    val firstMusic = musicSearchResults.firstOrNull()
-                                    when {
-                                        firstApp != null -> onLaunchApp(firstApp)
-                                        firstFile != null -> onOpenSearchFile(firstFile)
-                                        firstImg != null -> onOpenSearchFile(firstImg)
-                                        firstMusic != null -> onLaunchMusicMatch(firstMusic)
-                                        trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
-                                    }
+                                val firstApp = apps.firstOrNull()
+                                val firstChat = chatSearchResults.firstOrNull()
+                                val firstFile = searchFiles.firstOrNull()
+                                val firstImg = searchImages.firstOrNull()
+                                val firstLinux = linuxSearchResults.firstOrNull()
+                                val firstMusic = musicSearchResults.firstOrNull()
+                                when {
+                                    firstApp != null -> onLaunchApp(firstApp)
+                                    firstChat != null -> onOpenLockedChat(firstChat)
+                                    firstFile != null -> onOpenSearchFile(firstFile)
+                                    firstImg != null -> onOpenSearchFile(firstImg)
+                                    firstLinux != null -> onRunLinuxPackage(firstLinux)
+                                    firstMusic != null -> onLaunchMusicMatch(firstMusic)
+                                    trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
                                 }
                             }
                         ),
@@ -284,32 +269,6 @@ fun AppTileGrid(
                             .onFocusChanged { onSearchFocusChange(it.isFocused) }
                             .testTag("apps_search_input")
                     )
-                }
-            }
-
-            if (hasMessengerEmbedded) {
-                Spacer(Modifier.width(5.dp))
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton(isPrimary = messengerSearchMode == GlobalSearchMode.APPS_AND_FILES)
-                        .clickable(onClick = onToggleMessengerSearchMode)
-                        .padding(horizontal = 7.dp, vertical = 5.dp)
-                        .testTag("messenger_search_mode_toggle")
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Rounded.SwapHoriz,
-                            contentDescription = "Режим поиска",
-                            tint = Color.White,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Spacer(Modifier.width(3.dp))
-                        Text(
-                            text = if (messengerSearchMode == GlobalSearchMode.APPS_AND_FILES) "Поиск" else "Чат",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White
-                        )
-                    }
                 }
             }
 
@@ -377,107 +336,7 @@ fun AppTileGrid(
             }
         }
 
-        // Case A: Embedded Adapted App docked cleanly in tile area (no active search)
-        if (embeddedSnapshot != null && !isUniversalMode && highlightedLetter == null) {
-            EmbeddedAdaptedAppPanel(
-                snapshot = embeddedSnapshot,
-                searchFilter = "",
-                isDropTargetHighlight = false,
-                onSendCommand = onSendAdaptationCommand,
-                onDisableAdaptation = { onDisableEmbeddedAdaptation(embeddedSnapshot.packageName) },
-                onRestoreApp = { onRestoreEmbeddedApp(embeddedSnapshot.packageName) },
-                onDismiss = onDismissEmbedded,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(6.dp)
-            )
-            return@Column
-        }
-
-        // Case B: Messenger Dual Split Mode (Top = Expanded Search with File Send/Drag, Bottom = Adapted Messenger)
-        if (hasMessengerEmbedded && isUniversalMode && messengerSearchMode == GlobalSearchMode.APPS_AND_FILES) {
-            val messengerSnap = embeddedSnapshot!!
-            Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                Box(
-                    modifier = Modifier
-                        .weight(0.45f)
-                        .fillMaxWidth()
-                ) {
-                    UniversalResultsGrid(
-                        apps = apps,
-                        searchImages = searchImages,
-                        searchFiles = searchFiles,
-                        musicSearchResults = musicSearchResults,
-                        isSearchingDevice = isSearchingDevice,
-                        indexedFolderCount = indexedFolderCount,
-                        hasAllFilesAccess = hasAllFilesAccess,
-                        columns = columns,
-                        trimmedQuery = trimmedQuery,
-                        focusedIndex = focusedIndex,
-                        highlightedLetter = highlightedLetter,
-                        gridState = gridState,
-                        photosExpanded = photosExpanded,
-                        filesExpanded = filesExpanded,
-                        musicExpanded = musicExpanded,
-                        internetExpanded = internetExpanded,
-                        onTogglePhotos = { photosExpanded = !photosExpanded },
-                        onToggleFiles = { filesExpanded = !filesExpanded },
-                        onToggleMusic = { musicExpanded = !musicExpanded },
-                        onToggleInternet = { internetExpanded = !internetExpanded },
-                        messengerTargetPackage = messengerSnap.packageName,
-                        onSendFileToMessenger = { file ->
-                            onSendFileToMessenger(file, messengerSnap.packageName)
-                        },
-                        onLaunchApp = onLaunchApp,
-                        onLongPressApp = onLongPressApp,
-                        onOpenSearchFile = onOpenSearchFile,
-                        onLongPressSearchFile = onLongPressSearchFile,
-                        onLaunchMusicMatch = onLaunchMusicMatch,
-                        onConnectSearchFolder = onConnectSearchFolder,
-                        onRequestAllFilesAccess = onRequestAllFilesAccess,
-                        onSearchWeb = onSearchWeb
-                    )
-                }
-
-                HorizontalDivider(color = theme.focusBorder, thickness = 1.5.dp)
-
-                EmbeddedAdaptedAppPanel(
-                    snapshot = messengerSnap,
-                    searchFilter = "",
-                    isDropTargetHighlight = searchFiles.isNotEmpty() || searchImages.isNotEmpty(),
-                    onSendCommand = onSendAdaptationCommand,
-                    onDisableAdaptation = { onDisableEmbeddedAdaptation(messengerSnap.packageName) },
-                    onRestoreApp = { onRestoreEmbeddedApp(messengerSnap.packageName) },
-                    onDismiss = onDismissEmbedded,
-                    modifier = Modifier
-                        .weight(0.55f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                )
-            }
-            return@Column
-        }
-
-        // Case C: Messenger Search Only Mode (filters chats in embedded messenger)
-        if (hasMessengerEmbedded && isUniversalMode && messengerSearchMode == GlobalSearchMode.MESSENGER_SEARCH) {
-            EmbeddedAdaptedAppPanel(
-                snapshot = embeddedSnapshot!!,
-                searchFilter = trimmedQuery,
-                isDropTargetHighlight = false,
-                onSendCommand = onSendAdaptationCommand,
-                onDisableAdaptation = { onDisableEmbeddedAdaptation(embeddedSnapshot.packageName) },
-                onRestoreApp = { onRestoreEmbeddedApp(embeddedSnapshot.packageName) },
-                onDismiss = onDismissEmbedded,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(6.dp)
-            )
-            return@Column
-        }
-
-        // Case D: Normal Launcher App Grid + Universal Collapsible Folder Search
+        // Normal Launcher App Grid + Universal Collapsible Folder Search
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = theme.accent)
@@ -515,7 +374,7 @@ fun AppTileGrid(
                         )
                     } else {
                         Text(
-                            text = "Введите минимум 2 символа или маску (напр. *apk) для поиска",
+                            text = "Введите минимум 2 символа или маску (*apk, *deb) для поиска",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )
@@ -525,8 +384,10 @@ fun AppTileGrid(
         } else if (isUniversalMode) {
             UniversalResultsGrid(
                 apps = apps,
+                chatSearchResults = chatSearchResults,
                 searchImages = searchImages,
                 searchFiles = searchFiles,
+                linuxSearchResults = linuxSearchResults,
                 musicSearchResults = musicSearchResults,
                 isSearchingDevice = isSearchingDevice,
                 indexedFolderCount = indexedFolderCount,
@@ -534,22 +395,26 @@ fun AppTileGrid(
                 columns = columns,
                 trimmedQuery = trimmedQuery,
                 focusedIndex = focusedIndex,
-                highlightedLetter = highlightedLetter,
                 gridState = gridState,
+                chatsExpanded = chatsExpanded,
                 photosExpanded = photosExpanded,
                 filesExpanded = filesExpanded,
+                linuxExpanded = linuxExpanded,
                 musicExpanded = musicExpanded,
-                internetExpanded = internetExpanded,
+                onToggleChats = { chatsExpanded = !chatsExpanded },
                 onTogglePhotos = { photosExpanded = !photosExpanded },
                 onToggleFiles = { filesExpanded = !filesExpanded },
+                onToggleLinux = { linuxExpanded = !linuxExpanded },
                 onToggleMusic = { musicExpanded = !musicExpanded },
-                onToggleInternet = { internetExpanded = !internetExpanded },
-                messengerTargetPackage = null,
-                onSendFileToMessenger = {},
                 onLaunchApp = onLaunchApp,
                 onLongPressApp = onLongPressApp,
+                onOpenLockedChat = onOpenLockedChat,
                 onOpenSearchFile = onOpenSearchFile,
                 onLongPressSearchFile = onLongPressSearchFile,
+                onSendFileToTarget = onSendFileToTarget,
+                onCopySearchFile = onCopySearchFile,
+                onResolveFileUri = onResolveFileUri,
+                onRunLinuxPackage = onRunLinuxPackage,
                 onLaunchMusicMatch = onLaunchMusicMatch,
                 onConnectSearchFolder = onConnectSearchFolder,
                 onRequestAllFilesAccess = onRequestAllFilesAccess,
@@ -564,8 +429,42 @@ fun AppTileGrid(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
                     .fillMaxSize()
+                    .pointerInput(searchQuery, highlightedLetter) {
+                        if (searchQuery.isBlank() && highlightedLetter == null) {
+                            var dragX = 0f
+                            var triggered = false
+                            detectHorizontalDragGestures(
+                                onDragStart = {
+                                    dragX = 0f
+                                    triggered = false
+                                },
+                                onHorizontalDrag = { _, dragAmount ->
+                                    if (triggered) return@detectHorizontalDragGestures
+                                    dragX += dragAmount
+                                    if (kotlin.math.abs(dragX) > 110f) {
+                                        triggered = true
+                                        onSwipeToWorkspaceSpace()
+                                    }
+                                }
+                            )
+                        }
+                    }
                     .testTag("apps_metro_grid")
             ) {
+                if (showWeatherTile && searchQuery.isBlank() && highlightedLetter == null) {
+                    item(key = "home_weather_tile", span = { GridItemSpan(maxLineSpan) }) {
+                        WeatherWidgetCard(
+                            report = weatherReport,
+                            selectedCity = selectedWeatherCity,
+                            isLoading = isWeatherLoading,
+                            compact = true,
+                            onRefresh = onRefreshWeather,
+                            onOpenForecast = onOpenWeatherForecast,
+                            onOpenCityPicker = onOpenWeatherCityPicker,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
                 itemsIndexed(apps, key = { _, app -> app.id }) { index, app ->
                     AppGlossyTileItem(
                         app = app,
@@ -585,8 +484,10 @@ fun AppTileGrid(
 @Composable
 private fun UniversalResultsGrid(
     apps: List<AppEntry>,
+    chatSearchResults: List<LockedChatThread>,
     searchImages: List<DeviceSearchFile>,
     searchFiles: List<DeviceSearchFile>,
+    linuxSearchResults: List<LinuxPackageEntry>,
     musicSearchResults: List<MusicStreamMatch>,
     isSearchingDevice: Boolean,
     indexedFolderCount: Int,
@@ -594,22 +495,26 @@ private fun UniversalResultsGrid(
     columns: Int,
     trimmedQuery: String,
     focusedIndex: Int,
-    highlightedLetter: Char?,
     gridState: LazyGridState,
+    chatsExpanded: Boolean,
     photosExpanded: Boolean,
     filesExpanded: Boolean,
+    linuxExpanded: Boolean,
     musicExpanded: Boolean,
-    internetExpanded: Boolean,
+    onToggleChats: () -> Unit,
     onTogglePhotos: () -> Unit,
     onToggleFiles: () -> Unit,
+    onToggleLinux: () -> Unit,
     onToggleMusic: () -> Unit,
-    onToggleInternet: () -> Unit,
-    messengerTargetPackage: String?,
-    onSendFileToMessenger: (DeviceSearchFile) -> Unit,
     onLaunchApp: (AppEntry) -> Unit,
     onLongPressApp: (AppEntry) -> Unit,
+    onOpenLockedChat: (LockedChatThread) -> Unit,
     onOpenSearchFile: (DeviceSearchFile) -> Unit,
     onLongPressSearchFile: (DeviceSearchFile) -> Unit,
+    onSendFileToTarget: (DeviceSearchFile) -> Unit,
+    onCopySearchFile: (DeviceSearchFile) -> Unit,
+    onResolveFileUri: (DeviceSearchFile) -> Uri,
+    onRunLinuxPackage: (LinuxPackageEntry) -> Unit,
     onLaunchMusicMatch: (MusicStreamMatch) -> Unit,
     onConnectSearchFolder: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
@@ -643,7 +548,7 @@ private fun UniversalResultsGrid(
                         Icon(Icons.Rounded.FolderOpen, contentDescription = null, tint = MusicSourceAmber, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(7.dp))
                         Text(
-                            text = "Нужен доступ ко всем файлам для поиска *apk и папок",
+                            text = "Нужен доступ ко всем файлам для поиска *apk, *deb и папок",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextPrimary
                         )
@@ -716,45 +621,115 @@ private fun UniversalResultsGrid(
             }
         }
 
-        // 2. Collapsible Aero Folder Pills strip for Photos / Files / Music / Internet
-        item(key = "search_category_folders_strip", span = { GridItemSpan(maxLineSpan) }) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                if (searchImages.isNotEmpty()) {
-                    SearchFolderPill(
-                        label = L10n.photosFolder(lang, searchImages.size),
-                        expanded = photosExpanded,
-                        onClick = onTogglePhotos,
-                        tag = "folder_pill_photos"
+        // 2. Collapsible Aero Folder Pills strip for Chats / Photos / Files / Linux / Music
+        if (chatSearchResults.isNotEmpty() || searchImages.isNotEmpty() || searchFiles.isNotEmpty() ||
+            linuxSearchResults.isNotEmpty() || musicSearchResults.isNotEmpty()
+        ) {
+            item(key = "search_category_folders_strip", span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (chatSearchResults.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.chatsFolder(lang, chatSearchResults.size),
+                            expanded = chatsExpanded,
+                            onClick = onToggleChats,
+                            tag = "folder_pill_chats"
+                        )
+                    }
+                    if (searchImages.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.photosFolder(lang, searchImages.size),
+                            expanded = photosExpanded,
+                            onClick = onTogglePhotos,
+                            tag = "folder_pill_photos"
+                        )
+                    }
+                    if (searchFiles.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.filesFolder(lang, searchFiles.size),
+                            expanded = filesExpanded,
+                            onClick = onToggleFiles,
+                            tag = "folder_pill_files"
+                        )
+                    }
+                    if (linuxSearchResults.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.linuxFolder(lang, linuxSearchResults.size),
+                            expanded = linuxExpanded,
+                            onClick = onToggleLinux,
+                            tag = "folder_pill_linux"
+                        )
+                    }
+                    if (musicSearchResults.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.musicFolder(lang, musicSearchResults.size),
+                            expanded = musicExpanded,
+                            onClick = onToggleMusic,
+                            tag = "folder_pill_music"
+                        )
+                    }
+                }
+            }
+        }
+
+        // Expanded Chats & Mail (tap opens LockedSingleChatView in tile pane)
+        if (chatsExpanded && chatSearchResults.isNotEmpty()) {
+            item(key = "section_chats", span = { GridItemSpan(maxLineSpan) }) {
+                UniversalSectionHeader(title = L10n.chatsFolder(lang, chatSearchResults.size).uppercase(), iconRes = R.drawable.ic_symbian_messaging)
+            }
+            items(items = chatSearchResults, key = { "chat_${it.key}" }, span = { GridItemSpan(maxLineSpan) }) { thread ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaWindowFrame(RoundedCornerShape(3.dp))
+                        .clickable { onOpenLockedChat(thread) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("search_chat_row_${thread.key}"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (thread.appIcon != null) {
+                        Image(
+                            bitmap = thread.appIcon,
+                            contentDescription = thread.appName,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.Forum,
+                            contentDescription = thread.appName,
+                            tint = theme.accent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(9.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = thread.contactName,
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val preview = thread.messages.lastOrNull()?.text ?: thread.fallbackPhoneNumber.orEmpty()
+                        Text(
+                            text = if (preview.isNotBlank()) "${thread.appName} • $preview" else thread.appName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = thread.timeFormatted.ifBlank { "Чат ▶" },
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = theme.accent
                     )
                 }
-                if (searchFiles.isNotEmpty()) {
-                    SearchFolderPill(
-                        label = L10n.filesFolder(lang, searchFiles.size),
-                        expanded = filesExpanded,
-                        onClick = onToggleFiles,
-                        tag = "folder_pill_files"
-                    )
-                }
-                if (musicSearchResults.isNotEmpty()) {
-                    SearchFolderPill(
-                        label = L10n.musicFolder(lang, musicSearchResults.size),
-                        expanded = musicExpanded,
-                        onClick = onToggleMusic,
-                        tag = "folder_pill_music"
-                    )
-                }
-                SearchFolderPill(
-                    label = L10n.internetFolder(lang),
-                    expanded = internetExpanded,
-                    onClick = onToggleInternet,
-                    tag = "folder_pill_internet"
-                )
             }
         }
 
@@ -766,8 +741,8 @@ private fun UniversalResultsGrid(
             items(searchImages, key = { it.id }) { img ->
                 SearchImageCard(
                     file = img,
-                    canSendToMessenger = messengerTargetPackage != null,
-                    onSendToMessenger = { onSendFileToMessenger(img) },
+                    onCopy = { onCopySearchFile(img) },
+                    onSendToTarget = { onSendFileToTarget(img) },
                     onClick = { onOpenSearchFile(img) },
                     onLongClick = { onLongPressSearchFile(img) }
                 )
@@ -782,11 +757,58 @@ private fun UniversalResultsGrid(
             items(items = searchFiles, key = { it.id }, span = { GridItemSpan(maxLineSpan) }) { file ->
                 SearchFileRow(
                     file = file,
-                    canSendToMessenger = messengerTargetPackage != null,
-                    onSendToMessenger = { onSendFileToMessenger(file) },
+                    onCopy = { onCopySearchFile(file) },
+                    onSendToTarget = { onSendFileToTarget(file) },
                     onClick = { onOpenSearchFile(file) },
                     onLongClick = { onLongPressSearchFile(file) }
                 )
+            }
+        }
+
+        // Expanded Linux (.deb / AppImage / CLI)
+        if (linuxExpanded && linuxSearchResults.isNotEmpty()) {
+            item(key = "section_linux", span = { GridItemSpan(maxLineSpan) }) {
+                UniversalSectionHeader(title = L10n.linuxFolder(lang, linuxSearchResults.size).uppercase(), iconRes = R.drawable.ic_symbian_tools)
+            }
+            items(items = linuxSearchResults, key = { "linux_${it.id}" }, span = { GridItemSpan(maxLineSpan) }) { entry ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaWindowFrame(RoundedCornerShape(3.dp))
+                        .clickable { onRunLinuxPackage(entry) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("search_linux_row_${entry.id}"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Terminal,
+                        contentDescription = null,
+                        tint = MusicSourceAmber,
+                        modifier = Modifier.size(19.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = entry.name,
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${entry.kind.title} • v${entry.version} (${entry.architecture})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = if (entry.isInstalled) "Запуск ▶" else "Установ.",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = theme.accent
+                    )
+                }
             }
         }
 
@@ -825,16 +847,16 @@ private fun UniversalResultsGrid(
             }
         }
 
-        // Expanded Web Search
-        if (internetExpanded) {
-            item(key = "section_web_search", span = { GridItemSpan(maxLineSpan) }) {
-                val nothingLocal = apps.isEmpty() && searchImages.isEmpty() && searchFiles.isEmpty() && musicSearchResults.isEmpty() && !isSearchingDevice
-                WebSearchFallbackCard(
-                    query = trimmedQuery,
-                    isProminent = nothingLocal,
-                    onSearchWeb = { engine -> onSearchWeb(trimmedQuery, engine) }
-                )
-            }
+        // Always visible Web Search Card below category tabs & expanded results
+        item(key = "section_web_search", span = { GridItemSpan(maxLineSpan) }) {
+            val nothingLocal = apps.isEmpty() && chatSearchResults.isEmpty() &&
+                searchImages.isEmpty() && searchFiles.isEmpty() &&
+                linuxSearchResults.isEmpty() && musicSearchResults.isEmpty() && !isSearchingDevice
+            WebSearchFallbackCard(
+                query = trimmedQuery,
+                isProminent = nothingLocal,
+                onSearchWeb = { engine -> onSearchWeb(trimmedQuery, engine) }
+            )
         }
     }
 }
@@ -878,285 +900,6 @@ private fun SearchFolderPill(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun EmbeddedAdaptedAppPanel(
-    snapshot: AdaptedAppSnapshot,
-    searchFilter: String,
-    isDropTargetHighlight: Boolean,
-    onSendCommand: (AdaptationCommand) -> Unit,
-    onDisableAdaptation: () -> Unit,
-    onRestoreApp: () -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val theme = LocalVistaTheme.current
-    val lang = LocalAppLang.current
-    var draftText by remember(snapshot.packageName) { mutableStateOf("") }
-    val visibleItems = remember(snapshot.items, searchFilter) {
-        if (searchFilter.isBlank()) snapshot.items
-        else snapshot.items.filter {
-            it.title.contains(searchFilter, ignoreCase = true) ||
-                it.subtitle.contains(searchFilter, ignoreCase = true)
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .vistaWindowFrame(RoundedCornerShape(6.dp))
-            .then(
-                if (isDropTargetHighlight) {
-                    Modifier.border(2.dp, theme.focusBorder, RoundedCornerShape(6.dp))
-                } else Modifier
-            )
-            .testTag("embedded_adapted_app_panel")
-    ) {
-        // Vista Aero Header Bar (Long-press header also disables adaptation for this app)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .symbianMetallicBar()
-                .combinedClickable(
-                    onClick = {},
-                    onLongClick = onDisableAdaptation
-                )
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "${snapshot.appLabel} • ${snapshot.mode.shortTitle}",
-                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
-                    color = theme.focusBorder,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (isDropTargetHighlight) {
-                    Text(
-                        text = L10n.dropToMessengerHint(lang, snapshot.appLabel),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                        color = CallIncomingGreen,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton()
-                        .clickable(onClick = onDisableAdaptation)
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .testTag("embedded_disable_adaptation_btn")
-                ) {
-                    Text(
-                        text = L10n.embeddedDisableAdapt(lang),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                        color = CallMissedRed
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton(isPrimary = true)
-                        .clickable(onClick = onRestoreApp)
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = "Открыть приложение", tint = Color.White, modifier = Modifier.size(13.dp))
-                }
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton()
-                        .clickable(onClick = onDismiss)
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .testTag("embedded_dismiss_btn")
-                ) {
-                    Text(L10n.embeddedRestore(lang), style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = TextSecondary)
-                }
-            }
-        }
-
-        // F1-F6 tab switcher strip
-        if (snapshot.tabs.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(theme.surface.copy(alpha = 0.85f))
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                snapshot.tabs.take(6).forEachIndexed { idx, tab ->
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton(isPrimary = tab.isSelected, isActive = tab.isSelected)
-                            .clickable { onSendCommand(AdaptationCommand.ClickTab(idx)) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = "F${idx + 1} ${tab.label}",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = if (tab.isSelected) FontWeight.Bold else FontWeight.Medium
-                            ),
-                            color = if (tab.isSelected) Color.White else TextPrimary,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-        }
-
-        // Adapted rows / chat messages / settings entries
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (visibleItems.isEmpty()) {
-                item {
-                    Text(
-                        text = if (snapshot.mode == AppAdaptationMode.MESSENGER) {
-                            "Ожидание чатов / сообщений из ${snapshot.appLabel}. Нажмите «Открыть», чтобы обновить снимок."
-                        } else {
-                            "Элементы экрана ${snapshot.appLabel} появятся после открытия."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-            } else {
-                lazyItemsIndexed(visibleItems, key = { idx, it -> "${it.index}_$idx" }) { idx, node ->
-                    val focused = idx == snapshot.focusedItemIndex
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .symbianGlossyTile(bucket = idx, isFocused = focused)
-                            .clickable {
-                                val delta = node.index - snapshot.focusedItemIndex
-                                if (delta != 0) onSendCommand(AdaptationCommand.MoveFocus(delta))
-                                onSendCommand(AdaptationCommand.ActivateFocused)
-                            }
-                            .padding(horizontal = 9.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = node.title,
-                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp),
-                                color = TextPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (node.subtitle.isNotBlank()) {
-                                Text(
-                                    text = node.subtitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                        if (node.badge.isNotBlank()) {
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = node.badge,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MusicSourceAmber
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Messenger inline quick-send bar
-        if (snapshot.hasInputField) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(theme.surface.copy(alpha = 0.9f))
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .vistaInsetBox()
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    if (draftText.isEmpty()) {
-                        Text(snapshot.inputHint.ifBlank { "Сообщение…" }, style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                    }
-                    BasicTextField(
-                        value = draftText,
-                        onValueChange = { draftText = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
-                        cursorBrush = SolidColor(theme.accent),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton(isPrimary = draftText.isNotBlank())
-                        .clickable(enabled = draftText.isNotBlank()) {
-                            onSendCommand(AdaptationCommand.SendText(draftText))
-                            draftText = ""
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Отправить", tint = Color.White, modifier = Modifier.size(14.dp))
-                }
-            }
-        }
-
-        // Bottom control bar (Back / Up / Down / OK / Refresh)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .symbianMetallicBar()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    modifier = Modifier.vistaAeroButton().clickable { onSendCommand(AdaptationCommand.NavigateBack) }.padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(14.dp))
-                }
-                Box(
-                    modifier = Modifier.vistaAeroButton().clickable { onSendCommand(AdaptationCommand.MoveFocus(-1)) }.padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Вверх", tint = TextPrimary, modifier = Modifier.size(14.dp))
-                }
-                Box(
-                    modifier = Modifier.vistaAeroButton().clickable { onSendCommand(AdaptationCommand.MoveFocus(+1)) }.padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Вниз", tint = TextPrimary, modifier = Modifier.size(14.dp))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    modifier = Modifier.vistaAeroButton(isPrimary = true).clickable { onSendCommand(AdaptationCommand.ActivateFocused) }.padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text("OK", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
-                }
-                Box(
-                    modifier = Modifier.vistaAeroButton().clickable { onSendCommand(AdaptationCommand.RefreshTree) }.padding(horizontal = 7.dp, vertical = 4.dp)
-                ) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "Обновить", tint = theme.accent, modifier = Modifier.size(14.dp))
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
 private fun AppGlossyTileItem(
     app: AppEntry,
     index: Int,
@@ -1165,6 +908,7 @@ private fun AppGlossyTileItem(
     onLaunchApp: (AppEntry) -> Unit,
     onLongPressApp: (AppEntry) -> Unit
 ) {
+    val theme = LocalVistaTheme.current
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1202,7 +946,6 @@ private fun AppGlossyTileItem(
                 )
             }
             Spacer(Modifier.width(10.dp))
-            val theme = LocalVistaTheme.current
             Text(
                 text = app.label,
                 style = MaterialTheme.typography.titleSmall.copy(
@@ -1266,34 +1009,17 @@ private fun UniversalSectionHeader(
 @Composable
 private fun SearchImageCard(
     file: DeviceSearchFile,
-    canSendToMessenger: Boolean,
-    onSendToMessenger: () -> Unit,
+    onCopy: () -> Unit,
+    onSendToTarget: () -> Unit,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    var verticalDragAccum by remember { mutableFloatStateOf(0f) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .vistaWindowFrame(RoundedCornerShape(3.dp))
-            .then(
-                if (canSendToMessenger) {
-                    Modifier.pointerInput(file.id) {
-                        detectVerticalDragGestures(
-                            onDragStart = { verticalDragAccum = 0f },
-                            onDragEnd = {
-                                if (verticalDragAccum > 60f) {
-                                    onSendToMessenger()
-                                }
-                                verticalDragAccum = 0f
-                            },
-                            onVerticalDrag = { _, dragAmount -> verticalDragAccum += dragAmount }
-                        )
-                    }
-                } else Modifier
-            )
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -1323,14 +1049,27 @@ private fun SearchImageCard(
                     modifier = Modifier.size(34.dp)
                 )
             }
-            if (canSendToMessenger) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(4.dp)
-                        .vistaAeroButton(isPrimary = true)
-                        .clickable(onClick = onSendToMessenger)
+                        .vistaAeroButton()
+                        .clickable(onClick = onCopy)
                         .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .testTag("copy_file_${file.id}")
+                ) {
+                    Text("Ctrl+C", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = TextPrimary)
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton(isPrimary = true)
+                        .clickable(onClick = onSendToTarget)
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        .testTag("send_to_chat_${file.id}")
                 ) {
                     Text("В чат ⤵", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = Color.White)
                 }
@@ -1358,8 +1097,8 @@ private fun SearchImageCard(
 @Composable
 private fun SearchFileRow(
     file: DeviceSearchFile,
-    canSendToMessenger: Boolean,
-    onSendToMessenger: () -> Unit,
+    onCopy: () -> Unit,
+    onSendToTarget: () -> Unit,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -1375,28 +1114,11 @@ private fun SearchFileRow(
         else -> R.drawable.ic_symbian_files
     }
     val sizeText = UniversalSearchRepository.formatSize(file.sizeBytes)
-    var verticalDragAccum by remember { mutableFloatStateOf(0f) }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .vistaWindowFrame(RoundedCornerShape(3.dp))
-            .then(
-                if (canSendToMessenger) {
-                    Modifier.pointerInput(file.id) {
-                        detectVerticalDragGestures(
-                            onDragStart = { verticalDragAccum = 0f },
-                            onDragEnd = {
-                                if (verticalDragAccum > 55f) {
-                                    onSendToMessenger()
-                                }
-                                verticalDragAccum = 0f
-                            },
-                            onVerticalDrag = { _, dragAmount -> verticalDragAccum += dragAmount }
-                        )
-                    }
-                } else Modifier
-            )
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
@@ -1405,11 +1127,16 @@ private fun SearchFileRow(
             .testTag("search_file_row_${file.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Image(
-            painter = painterResource(iconRes),
-            contentDescription = file.name,
-            modifier = Modifier.size(26.dp)
-        )
+        Box(
+            modifier = Modifier.size(28.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(iconRes),
+                contentDescription = file.name,
+                modifier = Modifier.size(26.dp)
+            )
+        }
         Spacer(Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -1430,27 +1157,32 @@ private fun SearchFileRow(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        if (canSendToMessenger) {
-            Box(
-                modifier = Modifier
-                    .padding(start = 6.dp)
-                    .vistaAeroButton(isPrimary = true)
-                    .clickable(onClick = onSendToMessenger)
-                    .padding(horizontal = 7.dp, vertical = 4.dp)
-                    .testTag("send_to_chat_${file.id}")
-            ) {
-                Text(
-                    text = "В чат ⤵",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = Color.White
-                )
-            }
-        } else {
+        Box(
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .vistaAeroButton()
+                .clickable(onClick = onCopy)
+                .padding(horizontal = 6.dp, vertical = 4.dp)
+                .testTag("copy_file_${file.id}")
+        ) {
             Text(
-                text = "Зажать",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                color = TextMuted,
-                modifier = Modifier.padding(start = 6.dp)
+                text = "Ctrl+C",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = TextPrimary
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(start = 5.dp)
+                .vistaAeroButton(isPrimary = true)
+                .clickable(onClick = onSendToTarget)
+                .padding(horizontal = 7.dp, vertical = 4.dp)
+                .testTag("send_to_chat_${file.id}")
+        ) {
+            Text(
+                text = "В чат ⤵",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = Color.White
             )
         }
     }
@@ -1474,6 +1206,7 @@ private fun WebSearchFallbackCard(
                 else Modifier
             )
             .padding(12.dp)
+            .testTag("web_search_fallback_card")
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(

@@ -7,11 +7,13 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -87,11 +89,14 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import kotlin.math.abs
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PortraitMusicHeaderBar(
     mediaState: MediaPlayerState,
     livePositionMs: Long,
     isDrawerOpen: Boolean,
+    isCollapsed: Boolean = false,
+    showDeleteWorkspace: Boolean = false,
     coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
     onTogglePlayPause: () -> Unit,
     onSkipPrevious: () -> Unit,
@@ -102,6 +107,9 @@ fun PortraitMusicHeaderBar(
     onTogglePlayerDrawer: () -> Unit,
     onOpenPlayerDrawer: () -> Unit,
     onClosePlayerDrawer: () -> Unit,
+    onSetCollapsed: (Boolean) -> Unit = {},
+    onOpenFullPlayer: () -> Unit = {},
+    onDeleteWorkspace: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -114,8 +122,128 @@ fun PortraitMusicHeaderBar(
             .symbianMetallicBar()
             .testTag("portrait_music_panel")
     ) {
-        // Upper header row: vertical drag DOWN expands the inline player drawer; drag UP closes it.
-        // Source horizontal swipe is isolated strictly to the AlbumArtThumb so the seekbar below never conflicts!
+        if (isCollapsed) {
+            // Minimal single-row player matching search bar height (~40.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp)
+                    .pointerInput(isCollapsed) {
+                        var dragY = 0f
+                        var triggered = false
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                dragY = 0f
+                                triggered = false
+                            },
+                            onVerticalDrag = { _, amount ->
+                                if (triggered) return@detectVerticalDragGestures
+                                dragY += amount
+                                if (dragY > 28f) {
+                                    triggered = true
+                                    onSetCollapsed(false)
+                                }
+                            }
+                        )
+                    }
+                    .combinedClickable(
+                        onClick = { onSetCollapsed(false) },
+                        onLongClick = onOpenFullPlayer
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("collapsed_music_bar"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                AlbumArtThumb(
+                    artwork = active?.artwork,
+                    size = 26.dp,
+                    coverStyle = coverStyle,
+                    isPlaying = active?.isPlaying == true
+                )
+                Text(
+                    text = active?.let {
+                        if (it.artist.isNotBlank()) "${it.title} — ${it.artist}" else it.title
+                    } ?: L10n.noActiveTrack(lang),
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .weight(1f)
+                        .basicMarquee(iterations = Int.MAX_VALUE)
+                )
+                if (showDeleteWorkspace) {
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton()
+                            .clickable(onClick = onDeleteWorkspace)
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .testTag("header_delete_workspace_btn"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = L10n.deleteWorkspace(lang),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
+                            color = Color(0xFFFF9A9A),
+                            maxLines = 1
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(width = 32.dp, height = 28.dp)
+                        .vistaAeroButton(isPrimary = true)
+                        .clickable(onClick = onTogglePlayPause)
+                        .testTag("collapsed_play_pause_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (active?.isPlaying == true) "Пауза" else "Воспроизвести",
+                        tint = theme.focusBorder,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(width = 30.dp, height = 28.dp)
+                        .vistaAeroButton()
+                        .clickable(onClick = onSkipNext)
+                        .testTag("collapsed_next_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SkipNext,
+                        contentDescription = "Следующий трек",
+                        tint = TextPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(width = 28.dp, height = 28.dp)
+                        .vistaAeroButton()
+                        .clickable { onSetCollapsed(false) }
+                        .testTag("expand_music_bar_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Развернуть плеер",
+                        tint = theme.accent,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+            }
+            HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
+            return@Column
+        }
+
+        // Upper header row: vertical drag DOWN expands the inline player drawer;
+        // vertical drag UP closes drawer if open, or collapses player to minimal bar.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -130,12 +258,16 @@ fun PortraitMusicHeaderBar(
                         onVerticalDrag = { _, amount ->
                             if (triggered) return@detectVerticalDragGestures
                             dragY += amount
-                            if (dragY > 42f) {
+                            if (dragY > 36f) {
                                 triggered = true
-                                onOpenPlayerDrawer()
-                            } else if (dragY < -42f && isDrawerOpen) {
+                                if (!isDrawerOpen) onOpenPlayerDrawer() else onOpenFullPlayer()
+                            } else if (dragY < -36f) {
                                 triggered = true
-                                onClosePlayerDrawer()
+                                if (isDrawerOpen) {
+                                    onClosePlayerDrawer()
+                                } else {
+                                    onSetCollapsed(true)
+                                }
                             }
                         }
                     )
@@ -147,17 +279,20 @@ fun PortraitMusicHeaderBar(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(3.dp))
-                    .clickable(onClick = onTogglePlayerDrawer)
+                    .combinedClickable(
+                        onClick = onTogglePlayerDrawer,
+                        onLongClick = onOpenFullPlayer
+                    )
                     .padding(end = 6.dp)
                     .testTag("music_header_info"),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AlbumArtThumb(
                     artwork = active?.artwork,
-                    size = 44.dp,
+                    size = 42.dp,
                     coverStyle = coverStyle,
                     isPlaying = active?.isPlaying == true,
-                    modifier = Modifier.pointerInput(Unit) {
+                    modifier = Modifier.pointerInput(isDrawerOpen) {
                         var dragX = 0f
                         var dragY = 0f
                         var triggered = false
@@ -175,16 +310,20 @@ fun PortraitMusicHeaderBar(
                                     change.consume()
                                     triggered = true
                                     onSwipeMusicSource(if (dragX < 0f) +1 else -1)
-                                } else if (dragY > 42f && dragY > abs(dragX) * 1.4f) {
+                                } else if (dragY > 38f && dragY > abs(dragX) * 1.4f) {
                                     change.consume()
                                     triggered = true
-                                    onOpenPlayerDrawer()
+                                    if (!isDrawerOpen) onOpenPlayerDrawer() else onOpenFullPlayer()
+                                } else if (dragY < -38f && abs(dragY) > abs(dragX) * 1.4f) {
+                                    change.consume()
+                                    triggered = true
+                                    if (isDrawerOpen) onClosePlayerDrawer() else onSetCollapsed(true)
                                 }
                             }
                         )
                     }
                 )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = active?.title ?: L10n.noActiveTrack(lang),
@@ -204,7 +343,7 @@ fun PortraitMusicHeaderBar(
                     }
                     Text(
                         text = subtitle,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = TextSecondary,
                         maxLines = 1,
                         modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
@@ -223,7 +362,7 @@ fun PortraitMusicHeaderBar(
                         )
                     } else {
                         Text(
-                            text = if (isDrawerOpen) "▲ Скрыть панель" else "▼ Потяните вниз — плеер",
+                            text = if (isDrawerOpen) "▲ Скрыть панель" else "▼ Плеер • ▲ Свернуть",
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                             color = theme.accent.copy(alpha = 0.9f),
                             maxLines = 1,
@@ -233,58 +372,62 @@ fun PortraitMusicHeaderBar(
                 }
             }
 
-            // Windows Vista / Symbian metallic transport cluster
+            // Windows Vista / Symbian metallic transport cluster (compact fixed widths to prevent overlap)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 SymbianTransportButton(
                     onClick = onSkipPrevious,
+                    width = 32.dp,
                     modifier = Modifier.testTag("music_prev_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipPrevious,
                         contentDescription = "Предыдущий трек",
                         tint = TextPrimary,
-                        modifier = Modifier.size(19.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
                 SymbianTransportButton(
                     onClick = onTogglePlayPause,
                     isPrimary = true,
+                    width = 36.dp,
                     modifier = Modifier.testTag("music_play_pause_button")
                 ) {
                     Icon(
                         imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (active?.isPlaying == true) "Пауза" else "Воспроизвести",
                         tint = theme.focusBorder,
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
                 SymbianTransportButton(
                     onClick = onSkipNext,
+                    width = 32.dp,
                     modifier = Modifier.testTag("music_next_button")
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
                         contentDescription = "Следующий трек",
                         tint = TextPrimary,
-                        modifier = Modifier.size(19.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
                 if (mediaState.sessions.size > 1) {
                     SymbianTransportButton(
                         onClick = onCyclePlayer,
+                        width = 30.dp,
                         modifier = Modifier.testTag("music_switch_button")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.SwapHoriz,
                             contentDescription = "Переключить плеер",
                             tint = MusicSourceAmber,
-                            modifier = Modifier.size(17.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                     }
                 }
@@ -292,13 +435,39 @@ fun PortraitMusicHeaderBar(
                 SymbianTransportButton(
                     onClick = onTogglePlayerDrawer,
                     isActive = isDrawerOpen,
+                    width = 30.dp,
                     modifier = Modifier.testTag("music_tune_button")
                 ) {
                     Icon(
                         imageVector = if (isDrawerOpen) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
                         contentDescription = "Панель музыки и треков",
                         tint = theme.accent,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        if (showDeleteWorkspace) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(theme.surface.copy(alpha = if (theme.isGlassMode) 0.52f else 0.90f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable(onClick = onDeleteWorkspace)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .testTag("header_delete_workspace_btn")
+                ) {
+                    Text(
+                        text = L10n.deleteWorkspace(lang),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                        color = Color(0xFFFF9A9A)
                     )
                 }
             }
@@ -356,12 +525,13 @@ private fun SymbianTransportButton(
     onClick: () -> Unit,
     isPrimary: Boolean = false,
     isActive: Boolean = false,
+    width: Dp = if (isPrimary) 40.dp else 36.dp,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
     Box(
         modifier = modifier
-            .size(width = if (isPrimary) 40.dp else 36.dp, height = 36.dp)
+            .size(width = width, height = 34.dp)
             .vistaAeroButton(isPrimary = isPrimary, isActive = isActive)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
@@ -375,6 +545,7 @@ private fun SymbianTransportButton(
  * Top = Symbian/Vista Player (Album Art, Track, Interactive Seekbar, Transport, Volume/Tune)
  * Below Player = Stacked vertical Vista/Symbian buttons one under another
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LandscapeSymbianSidebar(
     mediaState: MediaPlayerState,
@@ -392,6 +563,7 @@ fun LandscapeSymbianSidebar(
     onSwipeMusicSource: (Int) -> Unit,
     onToggleMute: () -> Unit,
     onTogglePlayerDrawer: () -> Unit,
+    onOpenFullPlayer: () -> Unit = {},
     onSelectMainTab: (MainTab) -> Unit,
     onSelectCallsSubTab: (CallsSubTab) -> Unit,
     onSelectHubSubTab: (HubSubTab) -> Unit,
@@ -412,6 +584,34 @@ fun LandscapeSymbianSidebar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .pointerInput(isDrawerOpen) {
+                    var dragX = 0f
+                    var dragY = 0f
+                    var triggered = false
+                    detectDragGestures(
+                        onDragStart = {
+                            dragX = 0f
+                            dragY = 0f
+                            triggered = false
+                        },
+                        onDrag = { change, dragAmount ->
+                            if (triggered) return@detectDragGestures
+                            dragX += dragAmount.x
+                            dragY += dragAmount.y
+                            if (abs(dragX) > 36f && abs(dragX) > abs(dragY) * 1.4f) {
+                                if (dragX > 0f) {
+                                    change.consume()
+                                    triggered = true
+                                    if (!isDrawerOpen) onTogglePlayerDrawer() else onOpenFullPlayer()
+                                } else if (dragX < 0f && isDrawerOpen) {
+                                    change.consume()
+                                    triggered = true
+                                    onTogglePlayerDrawer()
+                                }
+                            }
+                        }
+                    )
+                }
                 .padding(horizontal = 8.dp, vertical = 8.dp)
                 .testTag("landscape_music_panel"),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -438,7 +638,10 @@ fun LandscapeSymbianSidebar(
                             }
                         )
                     }
-                    .clickable(onClick = onTogglePlayerDrawer)
+                    .combinedClickable(
+                        onClick = onTogglePlayerDrawer,
+                        onLongClick = onOpenFullPlayer
+                    )
                     .testTag("landscape_music_art"),
                 contentAlignment = Alignment.Center
             ) {
@@ -467,10 +670,10 @@ fun LandscapeSymbianSidebar(
                             onDrag = { change, dragAmount ->
                                 if (triggered) return@detectDragGestures
                                 dragX += dragAmount.x
-                                if (dragX > 36f && !isDrawerOpen) {
+                                if (dragX > 36f) {
                                     change.consume()
                                     triggered = true
-                                    onTogglePlayerDrawer()
+                                    if (!isDrawerOpen) onTogglePlayerDrawer() else onOpenFullPlayer()
                                 } else if (dragX < -36f && isDrawerOpen) {
                                     change.consume()
                                     triggered = true
@@ -479,7 +682,10 @@ fun LandscapeSymbianSidebar(
                             }
                         )
                     }
-                    .clickable(onClick = onTogglePlayerDrawer)
+                    .combinedClickable(
+                        onClick = onTogglePlayerDrawer,
+                        onLongClick = onOpenFullPlayer
+                    )
                     .padding(horizontal = 2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {

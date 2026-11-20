@@ -57,14 +57,9 @@ object L10n {
     fun camera(lang: AppLanguage) = if (lang == AppLanguage.RU) "Камера" else "Camera"
     fun books(lang: AppLanguage) = if (lang == AppLanguage.RU) "Книги" else "Books"
     fun searchPlaceholder(lang: AppLanguage) = if (lang == AppLanguage.RU) {
-        "Поиск: приложения, *apk, музыка, фото…"
+        "Поиск: приложения, чаты, *apk, *deb, музыка…"
     } else {
-        "Search apps, *apk, music, photos…"
-    }
-    fun messengerSearchPlaceholder(lang: AppLanguage, appName: String) = if (lang == AppLanguage.RU) {
-        "Поиск в $appName (свайп ⇄ общий поиск)"
-    } else {
-        "Search in $appName (swipe ⇄ universal)"
+        "Search apps, chats, *apk, *deb, music…"
     }
     fun noActiveTrack(lang: AppLanguage) = if (lang == AppLanguage.RU) "Нет активного трека" else "No active track"
     fun chooseServiceOrTg(lang: AppLanguage) = if (lang == AppLanguage.RU) {
@@ -96,15 +91,23 @@ object L10n {
     fun scaleLabel(lang: AppLanguage) = if (lang == AppLanguage.RU) "Масштаб интерфейса" else "UI Scale"
     fun playerStyleLabel(lang: AppLanguage) = if (lang == AppLanguage.RU) "Стиль плеера" else "Player Style"
     fun appsFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Приложения ($count)" else "Apps ($count)"
+    fun chatsFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Чаты и почта ($count)" else "Chats & Mail ($count)"
     fun photosFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Фото ($count)" else "Photos ($count)"
     fun filesFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Файлы ($count)" else "Files ($count)"
+    fun linuxFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Пакеты Linux ($count)" else "Linux Packages ($count)"
     fun musicFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Музыка и стриминги ($count)" else "Music & Streaming ($count)"
     fun internetFolder(lang: AppLanguage) = if (lang == AppLanguage.RU) "Интернет" else "Web"
-    fun embeddedDisableAdapt(lang: AppLanguage) = if (lang == AppLanguage.RU) "Выкл. перерисовку" else "Disable adapt"
-    fun embeddedRestore(lang: AppLanguage) = if (lang == AppLanguage.RU) "Свернуть" else "Minimize"
-    fun dropToMessengerHint(lang: AppLanguage, appName: String) = if (lang == AppLanguage.RU) {
-        "Перетащите файл сюда или нажмите «В чат ⤵» → $appName"
+    fun workspaceLabel(lang: AppLanguage, x: Int, y: Int) = if (lang == AppLanguage.RU) {
+        "Стол ($x, $y)"
     } else {
-        "Drop a file here or tap «To Chat ⤵» → $appName"
+        "Space ($x, $y)"
+    }
+    fun createWorkspace(lang: AppLanguage) = if (lang == AppLanguage.RU) "Создать рабочий стол" else "Create Workspace"
+    fun deleteWorkspace(lang: AppLanguage) = if (lang == AppLanguage.RU) "Удалить стол" else "Delete Space"
+    fun pickWorkspaceApp(lang: AppLanguage) = if (lang == AppLanguage.RU) "Выбрать приложение" else "Choose App"
+    fun dropToChatHint(lang: AppLanguage, targetName: String) = if (lang == AppLanguage.RU) {
+        "Перетащите файл сюда или нажмите «В чат ⤵» → $targetName"
+    } else {
+        "Drop a file here or tap «To Chat ⤵» → $targetName"
     }
 }

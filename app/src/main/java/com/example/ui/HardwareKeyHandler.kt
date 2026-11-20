@@ -38,13 +38,18 @@ object HardwareKeyHandler {
 
         if (event.action != AndroidKeyEvent.ACTION_DOWN) return false
 
-        val hasAnyModalOpen = state.showMusicSheet ||
+        val hasAnyModalOpen = state.showFullPowerampPlayer ||
+            state.sourcePickerTarget != null ||
+            state.pendingStreamCaptureRequest != null ||
+            state.showWeatherForecastDialog ||
+            state.showWeatherCityPickerDialog ||
+            state.showMusicSheet ||
             state.showShortcutsDialog ||
             state.showAddLinkDialog ||
             state.showAppearanceDialog ||
             state.showAutoKillDialog ||
             state.showOptimizationDialog ||
-            state.showAdaptationDialog ||
+            state.showLinuxCatalogDialog ||
             state.showBackgroundWebAudioDialog ||
             state.contextMenuApp != null ||
             state.contextMenuFile != null ||
@@ -52,21 +57,47 @@ object HardwareKeyHandler {
             state.iconPickerTargetApp != null
 
         if (hasAnyModalOpen) {
-            if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE ||
-                (event.keyCode == AndroidKeyEvent.KEYCODE_F5 && state.showMusicSheet)
+            if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
+                when {
+                    state.sourcePickerTarget != null -> viewModel.openSourcePicker(null)
+                    state.pendingStreamCaptureRequest != null -> viewModel.clearPendingStreamCaptureRequest()
+                    state.showWeatherCityPickerDialog -> viewModel.setShowWeatherCityPickerDialog(false)
+                    state.showWeatherForecastDialog -> viewModel.setShowWeatherForecastDialog(false)
+                    state.showFullPowerampPlayer -> viewModel.closeFullPowerampPlayer()
+                    else -> {
+                        viewModel.setShowMusicSheet(false)
+                        viewModel.setShowShortcutsDialog(false)
+                        viewModel.setShowAddLinkDialog(false)
+                        viewModel.setShowAppearanceDialog(false)
+                        viewModel.setShowAutoKillDialog(false)
+                        viewModel.setShowOptimizationDialog(false)
+                        viewModel.setShowLinuxCatalogDialog(false)
+                        viewModel.setShowBackgroundWebAudioDialog(false)
+                        viewModel.openContextMenu(null)
+                        viewModel.openFileContextMenu(null)
+                        viewModel.openRenameAppDialog(null)
+                        viewModel.openIconPickerDialog(null)
+                    }
+                }
+                return true
+            }
+            if ((state.showMusicSheet || state.showFullPowerampPlayer) &&
+                (event.keyCode == AndroidKeyEvent.KEYCODE_F5 ||
+                    (event.isCtrlPressed && event.keyCode == AndroidKeyEvent.KEYCODE_M))
             ) {
-                viewModel.setShowMusicSheet(false)
+                if (state.showFullPowerampPlayer) {
+                    viewModel.closeFullPowerampPlayer()
+                } else {
+                    viewModel.setShowMusicSheet(false)
+                }
+                return true
+            }
+            if (state.showShortcutsDialog &&
+                (event.keyCode == AndroidKeyEvent.KEYCODE_F12 ||
+                    (event.isShiftPressed && event.keyCode == AndroidKeyEvent.KEYCODE_F1) ||
+                    (event.isCtrlPressed && event.keyCode == AndroidKeyEvent.KEYCODE_SLASH))
+            ) {
                 viewModel.setShowShortcutsDialog(false)
-                viewModel.setShowAddLinkDialog(false)
-                viewModel.setShowAppearanceDialog(false)
-                viewModel.setShowAutoKillDialog(false)
-                viewModel.setShowOptimizationDialog(false)
-                viewModel.setShowAdaptationDialog(false)
-                viewModel.setShowBackgroundWebAudioDialog(false)
-                viewModel.openContextMenu(null)
-                viewModel.openFileContextMenu(null)
-                viewModel.openRenameAppDialog(null)
-                viewModel.openIconPickerDialog(null)
                 return true
             }
             return false
@@ -229,6 +260,15 @@ object HardwareKeyHandler {
                 }
                 AndroidKeyEvent.KEYCODE_N -> { viewModel.expandNotificationShade(); return true }
                 AndroidKeyEvent.KEYCODE_R -> { viewModel.toggleRecentsOverlay(); return true }
+                AndroidKeyEvent.KEYCODE_V -> {
+                    if (!state.isWriterModeOpen &&
+                        !viewModel.isAppSearchInputFocused &&
+                        !viewModel.isCallsSearchInputFocused
+                    ) {
+                        viewModel.pasteClipboardAction()
+                        return true
+                    }
+                }
                 AndroidKeyEvent.KEYCODE_F -> {
                     if (!state.isWriterModeOpen && state.activeTab == MainTab.HOME) {
                         onFocusAppSearch()
@@ -310,9 +350,15 @@ object HardwareKeyHandler {
                 }
             }
             AndroidKeyEvent.KEYCODE_ESCAPE -> {
-                if (state.appSearchQuery.isNotEmpty() || state.callsSearchQuery.isNotEmpty() || state.highlightedLetter != null) {
+                if (state.lockedChatThread != null) {
+                    viewModel.closeLockedChat()
+                    return true
+                } else if (state.appSearchQuery.isNotEmpty() || state.callsSearchQuery.isNotEmpty() || state.highlightedLetter != null) {
                     viewModel.clearAllSearchOrHighlights()
                     onClearTextFocus()
+                    return true
+                } else if ((state.showWorkspaceSpace || !state.workspaceGrid.isOnHome) && state.activeTab == MainTab.HOME) {
+                    viewModel.openHomeWorkspace()
                     return true
                 } else if (state.activeTab != MainTab.HOME) {
                     viewModel.selectTab(MainTab.HOME)

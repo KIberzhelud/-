@@ -36,6 +36,7 @@ import com.example.model.MediaPlayerState
 import com.example.model.MediaQueueTrack
 import com.example.model.MediaSessionUi
 import com.example.model.MusicStreamMatch
+import com.example.model.RepeatMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,9 +71,19 @@ object MediaGuardRuntime {
     var lastUserPausedAtMs: Long = 0L
 
     @Volatile
+    var isScreenOff: Boolean = false
+
+    @Volatile
+    var visibleWindowPackages: Set<String> = emptySet()
+
+    @Volatile
     var onUnexpectedPauseDetected: ((packageName: String) -> Unit)? = null
 
     private val wasPlayingPackages = ConcurrentHashMap<String, Boolean>()
+
+    fun updateVisibleWindows(pkgs: Set<String>) {
+        visibleWindowPackages = pkgs
+    }
 
     fun recordUserPause(packageName: String) {
         lastUserPausedPackage = packageName
@@ -93,6 +104,10 @@ object MediaGuardRuntime {
         if (!isGuardEnabled || !guardedPackages.contains(packageName)) return
 
         if (prevPlaying && state == PlaybackState.STATE_PAUSED) {
+            // Respect manual pause inside YouTube PiP / visible foreground window when screen is on
+            if (!isScreenOff && visibleWindowPackages.contains(packageName)) {
+                return
+            }
             val elapsedSinceUserPause = SystemClock.elapsedRealtime() - lastUserPausedAtMs
             val isIntentionalUserPause = lastUserPausedPackage == packageName && elapsedSinceUserPause < 4500L
             if (!isIntentionalUserPause) {
@@ -144,19 +159,53 @@ class MediaControlRepository(private val context: Context) {
     private var localDurationMs: Long = 0L
     private var localPositionMs: Long = 0L
     private var localPositionUpdatedAtMs: Long = 0L
+    private var localPlaybackSpeed: Float = 1.0f
+    private var localRepeatMode: RepeatMode = RepeatMode.OFF
+    private var localShuffleEnabled: Boolean = false
+
+    val dspController = AudioDspController()
 
     private var activeBrowser: MediaBrowser? = null
     private var activeBrowserPackage: String? = null
     private val recentTrackHistory = LinkedHashMap<String, MediaQueueTrack>()
 
+    @Volatile
+    var onTrackHistoryUpdated: ((List<MediaQueueTrack>) -> Unit)? = null
+
+    fun loadPersistedHistory(saved: List<MediaQueueTrack>) {
+        if (saved.isEmpty()) return
+        var added = false
+        saved.asReversed().forEach { item ->
+            val key = "${item.packageName}|${item.title}|${item.subtitle}"
+            if (!recentTrackHistory.containsKey(key) && item.title.isNotBlank()) {
+                recentTrackHistory[key] = item.copy(isActive = false)
+                added = true
+            }
+        }
+        while (recentTrackHistory.size > 40) {
+            val first = recentTrackHistory.keys.firstOrNull() ?: break
+            recentTrackHistory.remove(first)
+        }
+        if (added) {
+            val reversed = recentTrackHistory.values.toList().reversed()
+            _mediaState.update { it.copy(recentTracks = reversed) }
+        }
+    }
+
     fun startObserving() {
         refreshListenerStatusAndSessions()
+        if (activeBrowser == null) {
+            val preferredPkg = resolveActiveController()?.packageName
+                ?: if (resolveMediaBrowserComponent("ru.yandex.music") != null) "ru.yandex.music" else null
+            connectMediaBrowserForActiveOrPackage(preferredPkg)
+        }
     }
 
     fun stopObserving() {
         clearControllers()
         disconnectMediaBrowser()
         releaseLocalPlayer()
+        dspController.releaseEffects()
         sessionsListener?.let { listener ->
             runCatching { mediaSessionManager?.removeOnActiveSessionsChangedListener(listener) }
         }
@@ -218,6 +267,8 @@ class MediaControlRepository(private val context: Context) {
 
                     val key = "${title.lowercase()}|$dur"
                     val isTgMediaStore = rel.contains("telegram", ignoreCase = true)
+                    val fmtLabel = displayName.substringAfterLast('.', "").uppercase()
+                        .takeIf { it.isNotBlank() && it.length <= 5 } ?: "AUDIO"
                     found.putIfAbsent(
                         key,
                         LocalAudioTrack(
@@ -228,7 +279,10 @@ class MediaControlRepository(private val context: Context) {
                             durationMs = dur,
                             uriString = contentUri,
                             displayPath = if (rel.isNotEmpty()) "${rel.trimEnd('/')}/$displayName" else displayName,
-                            isTelegramAudio = isTgMediaStore
+                            isTelegramAudio = isTgMediaStore,
+                            formatLabel = fmtLabel,
+                            bitrateKbps = if (fmtLabel == "FLAC" || fmtLabel == "WAV") 1000 else 0,
+                            sampleRateHz = if (fmtLabel == "FLAC" || fmtLabel == "WAV") 44100 else 0
                         )
                     )
                 }
@@ -289,11 +343,21 @@ class MediaControlRepository(private val context: Context) {
                                         uriString = Uri.fromFile(child).toString(),
                                         filePath = child.absolutePath,
                                         displayPath = child.absolutePath,
-                                        isTelegramAudio = isTgFile
+                                        isTelegramAudio = isTgFile,
+                                        formatLabel = ext.uppercase(),
+                                        bitrateKbps = meta.fourth,
+                                        sampleRateHz = meta.fifth
                                     )
                                 )
-                            } else if (isTgFile && !existingEntry.value.isTelegramAudio) {
-                                found[existingEntry.key] = existingEntry.value.copy(isTelegramAudio = true)
+                            } else {
+                                var updated = existingEntry.value
+                                if (updated.filePath.isNullOrBlank()) {
+                                    updated = updated.copy(filePath = child.absolutePath)
+                                }
+                                if (isTgFile && !updated.isTelegramAudio) {
+                                    updated = updated.copy(isTelegramAudio = true)
+                                }
+                                found[existingEntry.key] = updated
                             }
                         }
                     }
@@ -306,16 +370,30 @@ class MediaControlRepository(private val context: Context) {
         sorted
     }
 
-    private fun readAudioMetaFast(file: File): Triple<String, String, Long> {
+    private data class AudioMetaResult(
+        val first: String,
+        val second: String,
+        val third: Long,
+        val fourth: Int,
+        val fifth: Int
+    )
+
+    private fun readAudioMetaFast(file: File): AudioMetaResult {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(file.absolutePath)
             val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE).orEmpty().trim()
             val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty().trim()
             val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            Triple(title, artist, dur)
+            val bitrateBps = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull() ?: 0
+            val sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull() ?: 44100
+            } else {
+                44100
+            }
+            AudioMetaResult(title, artist, dur, (bitrateBps / 1000).coerceAtLeast(0), sampleRate)
         } catch (_: Throwable) {
-            Triple("", "", 0L)
+            AudioMetaResult("", "", 0L, 0, 0)
         } finally {
             runCatching { retriever.release() }
         }
@@ -345,19 +423,47 @@ class MediaControlRepository(private val context: Context) {
                     localPositionMs = 0L
                     localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
                     localIsPlaying = true
+                    runCatching { dspController.attachAudioSession(mp.audioSessionId) }
+                    applyLocalPlaybackSpeed(mp, localPlaybackSpeed)
                     mp.start()
                     rebuildSessionsSnapshot(forceSelectId = LOCAL_SESSION_ID)
                 }
                 setOnCompletionListener {
-                    localIsPlaying = false
-                    localPositionMs = localDurationMs
-                    localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
-                    val tracks = _localTracks.value
-                    val currentIdx = tracks.indexOfFirst { it.id == track.id }
-                    if (currentIdx >= 0 && currentIdx + 1 < tracks.size) {
-                        playLocalTrack(tracks[currentIdx + 1])
-                    } else {
-                        rebuildSessionsSnapshot()
+                    when (localRepeatMode) {
+                        RepeatMode.ONE -> {
+                            playLocalTrack(track)
+                        }
+                        RepeatMode.ALL -> {
+                            val tracks = _localTracks.value
+                            if (tracks.isEmpty()) {
+                                localIsPlaying = false
+                                rebuildSessionsSnapshot()
+                            } else if (localShuffleEnabled && tracks.size > 1) {
+                                val next = tracks.filter { it.id != track.id }.randomOrNull() ?: tracks.first()
+                                playLocalTrack(next)
+                            } else {
+                                val currentIdx = tracks.indexOfFirst { it.id == track.id }
+                                val nextIdx = if (currentIdx < 0) 0 else (currentIdx + 1) % tracks.size
+                                playLocalTrack(tracks[nextIdx])
+                            }
+                        }
+                        RepeatMode.OFF -> {
+                            val tracks = _localTracks.value
+                            if (localShuffleEnabled && tracks.size > 1) {
+                                val next = tracks.filter { it.id != track.id }.randomOrNull()
+                                if (next != null) playLocalTrack(next)
+                            } else {
+                                val currentIdx = tracks.indexOfFirst { it.id == track.id }
+                                if (currentIdx >= 0 && currentIdx + 1 < tracks.size) {
+                                    playLocalTrack(tracks[currentIdx + 1])
+                                } else {
+                                    localIsPlaying = false
+                                    localPositionMs = localDurationMs
+                                    localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
+                                    rebuildSessionsSnapshot()
+                                }
+                            }
+                        }
                     }
                 }
                 prepareAsync()
@@ -372,6 +478,44 @@ class MediaControlRepository(private val context: Context) {
         }
     }
 
+    fun setLocalPlaybackSpeed(speed: Float) {
+        val clamped = speed.coerceIn(0.75f, 1.50f)
+        localPlaybackSpeed = clamped
+        dspController.setStateMeta(speed = clamped)
+        localPlayer?.let { mp ->
+            if (localPrepared) {
+                applyLocalPlaybackSpeed(mp, clamped)
+            }
+        }
+        rebuildSessionsSnapshot()
+    }
+
+    fun cycleLocalRepeatMode(): RepeatMode {
+        localRepeatMode = when (localRepeatMode) {
+            RepeatMode.OFF -> RepeatMode.ALL
+            RepeatMode.ALL -> RepeatMode.ONE
+            RepeatMode.ONE -> RepeatMode.OFF
+        }
+        dspController.setStateMeta(repeatMode = localRepeatMode)
+        return localRepeatMode
+    }
+
+    fun toggleLocalShuffle(): Boolean {
+        localShuffleEnabled = !localShuffleEnabled
+        dspController.setStateMeta(shuffle = localShuffleEnabled)
+        return localShuffleEnabled
+    }
+
+    private fun applyLocalPlaybackSpeed(mp: MediaPlayer, speed: Float) {
+        runCatching {
+            val wasPlaying = mp.isPlaying
+            mp.playbackParams = mp.playbackParams.setSpeed(speed)
+            if (!wasPlaying && mp.isPlaying) {
+                mp.pause()
+            }
+        }
+    }
+
     private fun isLocalSessionActive(): Boolean {
         return currentLocalTrack != null && _mediaState.value.activeSession?.id == LOCAL_SESSION_ID
     }
@@ -381,6 +525,35 @@ class MediaControlRepository(private val context: Context) {
         localPlayer = null
         localPrepared = false
         localIsPlaying = false
+    }
+
+    suspend fun deleteLocalTrack(track: LocalAudioTrack): Boolean = withContext(Dispatchers.IO) {
+        if (currentLocalTrack?.id == track.id) {
+            withContext(Dispatchers.Main.immediate) {
+                releaseLocalPlayer()
+                currentLocalTrack = null
+            }
+        }
+
+        val deletedFile = !track.filePath.isNullOrBlank() && runCatching {
+            File(track.filePath).delete()
+        }.getOrDefault(false)
+
+        val deletedUri = if (!deletedFile) {
+            runCatching {
+                context.contentResolver.delete(Uri.parse(track.uriString), null, null) > 0
+            }.getOrDefault(false)
+        } else {
+            false
+        }
+
+        if (deletedFile || deletedUri) {
+            _localTracks.update { list -> list.filterNot { it.id == track.id } }
+            rebuildSessionsSnapshot()
+            true
+        } else {
+            false
+        }
     }
 
     fun refreshListenerStatusAndSessions() {
@@ -409,6 +582,11 @@ class MediaControlRepository(private val context: Context) {
             bindControllers(active)
         }.onFailure {
             _mediaState.update { it.copy(isListenerGranted = granted) }
+        }
+        if (activeBrowser == null) {
+            val preferredPkg = resolveActiveController()?.packageName
+                ?: if (resolveMediaBrowserComponent("ru.yandex.music") != null) "ru.yandex.music" else null
+            connectMediaBrowserForActiveOrPackage(preferredPkg)
         }
     }
 
@@ -508,8 +686,13 @@ class MediaControlRepository(private val context: Context) {
             val tracks = _localTracks.value
             val idx = tracks.indexOfFirst { it.id == currentLocalTrack?.id }
             if (tracks.isNotEmpty()) {
-                val nextIdx = if (idx < 0) 0 else (idx + 1) % tracks.size
-                playLocalTrack(tracks[nextIdx])
+                val target = if (localShuffleEnabled && tracks.size > 1) {
+                    tracks.filter { it.id != currentLocalTrack?.id }.randomOrNull() ?: tracks.first()
+                } else {
+                    val nextIdx = if (idx < 0) 0 else (idx + 1) % tracks.size
+                    tracks[nextIdx]
+                }
+                playLocalTrack(target)
                 return
             }
         }
@@ -618,7 +801,9 @@ class MediaControlRepository(private val context: Context) {
     }
 
     fun triggerMyWave(packageName: String? = null): Boolean {
-        val ctrl = resolveControllerForPackage(packageName)
+        val targetPkg = packageName?.takeIf { it.isNotBlank() }
+            ?: resolveActiveController()?.packageName
+        val ctrl = resolveControllerForPackage(targetPkg)
         if (ctrl != null) {
             val waveAction = ctrl.playbackState?.customActions.orEmpty().firstOrNull { ca ->
                 val hay = "${ca.action.orEmpty()} ${ca.name?.toString().orEmpty()}".lowercase()
@@ -632,13 +817,36 @@ class MediaControlRepository(private val context: Context) {
                 }.getOrDefault(false)
                 if (sent) return true
             }
-            val played = runCatching {
-                ctrl.transportControls.playFromSearch("Моя волна", Bundle.EMPTY)
+        }
+
+        val yandexInstalled = runCatching {
+            context.packageManager.getLaunchIntentForPackage("ru.yandex.music") != null
+        }.getOrDefault(false)
+
+        if (targetPkg == "ru.yandex.music" || (targetPkg == null && yandexInstalled)) {
+            val openedDeepLink = runCatching {
+                val waveIntent = Intent(Intent.ACTION_VIEW, Uri.parse("yandexmusic://radio/user/onyourwave")).apply {
+                    setPackage("ru.yandex.music")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(waveIntent)
                 true
             }.getOrDefault(false)
-            if (played) return true
+            if (openedDeepLink) return true
         }
-        return playFromSearchInStream("Моя волна", packageName)
+
+        if (ctrl != null) {
+            val radioAction = ctrl.playbackState?.customActions.orEmpty().firstOrNull()
+            if (radioAction != null) {
+                val sent = runCatching {
+                    ctrl.transportControls.sendCustomAction(radioAction.action, null)
+                    true
+                }.getOrDefault(false)
+                if (sent) return true
+            }
+            return openActivePlayer()
+        }
+        return false
     }
 
     private fun resolveControllerForPackage(packageName: String?): MediaController? {
@@ -732,10 +940,11 @@ class MediaControlRepository(private val context: Context) {
             )
         }
 
-        // 5. Cross-streaming live search triggers for installed streaming services
+        // 5. Cross-streaming live search triggers for installed streaming services (Yandex Music prioritized first)
         val streamingApps = installedMusicApps
             .filter { isStreamingPackage(it.packageName) }
             .distinctBy { it.packageName }
+            .sortedWith(compareBy<AppEntry> { sortPriorityScore(it.packageName) }.thenBy { it.label.lowercase() })
             .take(6)
 
         streamingApps.forEach { app ->
@@ -1012,7 +1221,10 @@ class MediaControlRepository(private val context: Context) {
                 pm.queryIntentServices(intent, 0)
             }
         }.getOrDefault(emptyList())
-        return services.firstOrNull()?.serviceInfo?.packageName
+        return services
+            .mapNotNull { it.serviceInfo?.packageName }
+            .sortedBy { sortPriorityScore(it) }
+            .firstOrNull()
     }
 
     private fun resolveAppLabel(pkg: String): String {
@@ -1108,10 +1320,12 @@ class MediaControlRepository(private val context: Context) {
         if (selectedId != null && selectedId != LOCAL_SESSION_ID && controllers.containsKey(selectedId)) {
             return controllers[selectedId]
         }
-        val playing = controllers.values.firstOrNull {
-            it.playbackState?.state == PlaybackState.STATE_PLAYING
-        }
-        return playing ?: controllers.values.firstOrNull()
+        val sorted = controllers.values.sortedWith(
+            compareByDescending<MediaController> {
+                it.playbackState?.state == PlaybackState.STATE_PLAYING
+            }.thenBy { sortPriorityScore(it.packageName) }
+        )
+        return sorted.firstOrNull()
     }
 
     private fun bindControllers(newList: List<MediaController>) {
@@ -1189,29 +1403,36 @@ class MediaControlRepository(private val context: Context) {
                 MediaSessionUi(
                     id = LOCAL_SESSION_ID,
                     packageName = context.packageName,
-                    appLabel = "KeyDeck Плеер",
+                    appLabel = "KeyDeck Poweramp",
                     title = local.title,
                     artist = local.artist,
                     album = local.album,
                     isPlaying = localIsPlaying,
                     positionMs = currentPos,
                     durationMs = localDurationMs.coerceAtLeast(local.durationMs),
-                    playbackSpeed = 1f,
+                    playbackSpeed = localPlaybackSpeed,
                     lastUpdateElapsedMs = SystemClock.elapsedRealtime(),
                     artwork = null,
                     canSkipNext = true,
                     canSkipPrev = true,
-                    canSeek = localDurationMs > 0L
+                    canSeek = localDurationMs > 0L,
+                    formatLabel = local.formatLabel.ifBlank {
+                        local.filePath?.substringAfterLast('.', "")?.uppercase().orEmpty()
+                    },
+                    bitrateKbps = local.bitrateKbps,
+                    sampleRateHz = local.sampleRateHz
                 )
             )
         }
 
         val sessions = list.sortedWith(
             compareByDescending<MediaSessionUi> { it.isPlaying }
+                .thenBy { sortPriorityScore(it.packageName) }
                 .thenBy { it.appLabel.lowercase() }
         )
 
         val recentReversed = recentTrackHistory.values.toList().reversed()
+        onTrackHistoryUpdated?.invoke(recentReversed)
 
         _mediaState.update { state ->
             val nextSelected = selectPreferredSessionId(
@@ -1303,7 +1524,8 @@ class MediaControlRepository(private val context: Context) {
             canPlayFromSearch = (actions and PlaybackState.ACTION_PLAY_FROM_SEARCH) != 0L || actions == 0L,
             activeQueueItemId = activeQueueId,
             queue = queueItems,
-            customActions = customActions
+            customActions = customActions,
+            formatLabel = if (isStreamingPackage(pkg)) "STREAM" else "MEDIA"
         )
     }
 
@@ -1374,6 +1596,15 @@ class MediaControlRepository(private val context: Context) {
                 return current.id
             }
             return sessions.firstOrNull { it.isPlaying }?.id ?: sessions.firstOrNull()?.id
+        }
+
+        fun sortPriorityScore(packageName: String): Int {
+            val pkg = packageName.lowercase()
+            return when {
+                pkg == "ru.yandex.music" || pkg.contains("yandex.music") -> 0
+                pkg.contains("shazam") || pkg.contains("vk") -> 2
+                else -> 1
+            }
         }
 
         fun isStreamingPackage(packageName: String): Boolean {

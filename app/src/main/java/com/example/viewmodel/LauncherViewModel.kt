@@ -4,57 +4,80 @@ import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.AdaptationCommand
 import com.example.data.AndroidOptimizerManager
-import com.example.data.AppAdaptationRuntime
+import com.example.data.AppPreviewCache
 import com.example.data.AppsRepository
 import com.example.data.AutoCloseManager
 import com.example.data.BackgroundMediaGuardService
 import com.example.data.CallsContactsRepository
 import com.example.data.KeyboardSearchMatcher
+import com.example.data.KeyDeckAccessibilityService
 import com.example.data.LauncherPreferencesRepository
+import com.example.data.LinuxPackagesRepository
 import com.example.data.MediaControlBus
 import com.example.data.MediaControlRepository
 import com.example.data.MediaGuardRuntime
+import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.data.NotificationHubRepository
+import com.example.data.DownloadOutcome
 import com.example.data.RecentForegroundTracker
 import com.example.data.ShizukuBridge
+import com.example.data.StreamAudioCaptureRuntime
+import com.example.data.StreamAudioCaptureService
 import com.example.data.UniversalSearchRepository
 import com.example.data.WallpaperThemeHelper
-import com.example.model.AdaptedAppSnapshot
+import com.example.data.WeatherRepository
+import com.example.model.AlbumExpectedTrack
 import com.example.model.AlphabetMode
 import com.example.model.AndroidOptimizationStats
-import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
 import com.example.model.AppIconOverride
 import com.example.model.AppLanguage
+import com.example.model.AudioCaptureState
 import com.example.model.CallLogEntry
 import com.example.model.CallsSubTab
+import com.example.model.ConsensusWeatherReport
 import com.example.model.ContactEntry
+import com.example.model.CustomColorPalette
 import com.example.model.DeviceSearchFile
-import com.example.model.GlobalSearchMode
+import com.example.model.EqualizerPreset
+import com.example.model.EqualizerState
 import com.example.model.HubCategory
+import com.example.model.HubChatMessage
 import com.example.model.HubNotificationItem
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
+import com.example.model.LinuxPackageEntry
 import com.example.model.LocalAudioTrack
+import com.example.model.LockedChatThread
 import com.example.model.MainTab
 import com.example.model.MediaBrowserTrack
 import com.example.model.MediaPlayerState
 import com.example.model.MusicDrawerTab
+import com.example.model.MusicSourceKind
 import com.example.model.MusicStreamMatch
 import com.example.model.PlayerCoverStyle
+import com.example.model.PowerampTab
 import com.example.model.RecentAppFrame
 import com.example.model.SearchResultKind
 import com.example.model.ShizukuState
+import com.example.model.SmartAlbum
+import com.example.model.SourceSelectionMode
+import com.example.model.TrackLyricsData
+import com.example.model.TrackSourceCandidate
 import com.example.model.UiThemeColor
+import com.example.model.UnifiedMusicSearchResult
 import com.example.model.WallpaperPaletteData
+import com.example.model.WeatherCityResult
+import com.example.model.WorkspaceCell
+import com.example.model.WorkspaceGridState
 import com.example.model.WriterSubTab
 import com.example.ui.LockScreenActivity
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +94,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+data class PendingStreamCaptureRequest(
+    val title: String,
+    val artist: String,
+    val packageName: String,
+    val appLabel: String,
+    val targetAlbumId: String? = null,
+    val requestId: Long = System.currentTimeMillis()
+)
+
 data class LauncherUiState(
     val activeTab: MainTab = MainTab.HOME,
     val callsSubTab: CallsSubTab = CallsSubTab.LOG,
@@ -85,6 +117,8 @@ data class LauncherUiState(
     val appSearchQuery: String = "",
     val searchImages: List<DeviceSearchFile> = emptyList(),
     val searchFiles: List<DeviceSearchFile> = emptyList(),
+    val chatSearchResults: List<LockedChatThread> = emptyList(),
+    val linuxSearchResults: List<LinuxPackageEntry> = emptyList(),
     val isSearchingDevice: Boolean = false,
     val indexedFolderCount: Int = 0,
     val focusedAppIndex: Int = 0,
@@ -113,25 +147,26 @@ data class LauncherUiState(
     val localAudioTracks: List<LocalAudioTrack> = emptyList(),
     val localTrackSearchQuery: String = "",
     val musicDrawerTab: MusicDrawerTab = MusicDrawerTab.STREAMING,
+    val isPlayerCollapsed: Boolean = false,
     val showMusicSheet: Boolean = false,
     val showShortcutsDialog: Boolean = false,
     val showAddLinkDialog: Boolean = false,
     val showAppearanceDialog: Boolean = false,
     val showAutoKillDialog: Boolean = false,
     val showOptimizationDialog: Boolean = false,
-    val showAdaptationDialog: Boolean = false,
     val showBackgroundWebAudioDialog: Boolean = false,
+    val showLinuxCatalogDialog: Boolean = false,
     val uiThemeColor: UiThemeColor = UiThemeColor.BLUE,
     val wallpaperBitmap: ImageBitmap? = null,
     val wallpaperPalette: WallpaperPaletteData? = null,
     val hasWallpaper: Boolean = false,
+    val savedPalettes: List<CustomColorPalette> = emptyList(),
+    val activeCustomPaletteId: String? = null,
     val autoKillEnabled: Boolean = true,
     val autoKillPackages: Set<String> = emptySet(),
     val optimizationStats: AndroidOptimizationStats = AndroidOptimizationStats(),
     val backgroundSpoofEnabled: Boolean = false,
     val backgroundSpoofPackages: Set<String> = emptySet(),
-    val appAdaptationEnabled: Boolean = false,
-    val appAdaptationModes: Map<String, AppAdaptationMode> = emptyMap(),
     val appLanguage: AppLanguage = AppLanguage.RU,
     val uiScale: Float = 1.0f,
     val playerCoverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
@@ -139,15 +174,46 @@ data class LauncherUiState(
     val recentFrames: List<RecentAppFrame> = emptyList(),
     val focusedRecentIndex: Int = 0,
     val pinnedRecentPackages: Set<String> = emptySet(),
-    val embeddedSnapshot: AdaptedAppSnapshot? = null,
-    val messengerSearchMode: GlobalSearchMode = GlobalSearchMode.APPS_AND_FILES,
+    val workspaceGrid: WorkspaceGridState = WorkspaceGridState(),
+    val showWorkspaceSpace: Boolean = false,
+    val workspaceActionFeedback: String? = null,
+    val lockedChatThread: LockedChatThread? = null,
+    val linuxPackages: List<LinuxPackageEntry> = emptyList(),
+    val isTermuxInstalled: Boolean = false,
+    val weatherReport: ConsensusWeatherReport? = null,
+    val isWeatherLoading: Boolean = false,
+    val weatherCityResults: List<WeatherCityResult> = emptyList(),
+    val selectedWeatherCity: WeatherCityResult = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY,
     val musicSearchResults: List<MusicStreamMatch> = emptyList(),
+    val streamSearchHistory: List<String> = emptyList(),
+    val showFullPowerampPlayer: Boolean = false,
+    val powerampTab: PowerampTab = PowerampTab.PLAYER,
+    val sourceSelectionMode: SourceSelectionMode = SourceSelectionMode.AUTO,
+    val unifiedMusicQuery: String = "",
+    val unifiedMusicResults: List<UnifiedMusicSearchResult> = emptyList(),
+    val isSearchingMusicOnline: Boolean = false,
+    val sourcePickerTarget: UnifiedMusicSearchResult? = null,
+    val sourcePickerActionDownload: Boolean = false,
+    val currentLyrics: TrackLyricsData? = null,
+    val isFetchingLyrics: Boolean = false,
+    val equalizerState: EqualizerState = EqualizerState(),
+    val audioCaptureState: AudioCaptureState = AudioCaptureState(),
+    val pendingStreamCaptureRequest: PendingStreamCaptureRequest? = null,
+    val smartAlbums: List<SmartAlbum> = emptyList(),
+    val selectedAlbumId: String? = null,
+    val showWeatherInHubOther: Boolean = true,
+    val showWeatherInHomeTile: Boolean = false,
+    val showWeatherForecastDialog: Boolean = false,
+    val showWeatherCityPickerDialog: Boolean = false,
     val contextMenuApp: AppEntry? = null,
     val contextMenuFile: DeviceSearchFile? = null,
     val renameTargetApp: AppEntry? = null,
     val iconPickerTargetApp: AppEntry? = null,
     val statusToast: String? = null
-)
+) {
+    val activeCustomPalette: CustomColorPalette?
+        get() = activeCustomPaletteId?.let { id -> savedPalettes.firstOrNull { it.id == id } }
+}
 
 class LauncherViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -159,6 +225,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val autoCloseManager = AutoCloseManager(application, shizukuBridge)
     private val optimizerManager = AndroidOptimizerManager(application, shizukuBridge)
     private val universalSearchRepo = UniversalSearchRepository(application, shizukuBridge)
+    private val linuxRepo = LinuxPackagesRepository(application, shizukuBridge)
 
     private val _allApps = MutableStateFlow<List<AppEntry>>(emptyList())
     private val _isLoadingApps = MutableStateFlow(true)
@@ -184,8 +251,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _showAppearanceDialog = MutableStateFlow(false)
     private val _showAutoKillDialog = MutableStateFlow(false)
     private val _showOptimizationDialog = MutableStateFlow(false)
-    private val _showAdaptationDialog = MutableStateFlow(false)
     private val _showBackgroundWebAudioDialog = MutableStateFlow(false)
+    private val _showLinuxCatalogDialog = MutableStateFlow(false)
     private val _optimizationStats = MutableStateFlow(AndroidOptimizationStats())
     private val _wallpaperState = MutableStateFlow<Pair<ImageBitmap?, WallpaperPaletteData?>>(null to null)
     private val _contextMenuApp = MutableStateFlow<AppEntry?>(null)
@@ -202,12 +269,37 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _showRecentsOverlay = MutableStateFlow(false)
     private val _recentFrames = MutableStateFlow<List<RecentAppFrame>>(emptyList())
     private val _focusedRecentIndex = MutableStateFlow(0)
-    private val _messengerSearchMode = MutableStateFlow(GlobalSearchMode.APPS_AND_FILES)
     private val _musicSearchResults = MutableStateFlow<List<MusicStreamMatch>>(emptyList())
+    private val _lockedChatThread = MutableStateFlow<LockedChatThread?>(null)
+    private val _showWorkspaceSpace = MutableStateFlow(false)
+    private val _workspaceActionFeedback = MutableStateFlow<String?>(null)
+    private val _linuxPackages = MutableStateFlow<List<LinuxPackageEntry>>(emptyList())
+    private val _linuxSearchResults = MutableStateFlow<List<LinuxPackageEntry>>(emptyList())
+    private val _isTermuxInstalled = MutableStateFlow(linuxRepo.isTermuxInstalled())
+    private val _weatherReport = MutableStateFlow<ConsensusWeatherReport?>(null)
+    private val _isWeatherLoading = MutableStateFlow(false)
+    private val _weatherCityResults = MutableStateFlow<List<WeatherCityResult>>(emptyList())
+    private val _showWeatherForecastDialog = MutableStateFlow(false)
+    private val _showWeatherCityPickerDialog = MutableStateFlow(false)
+    private val _showFullPowerampPlayer = MutableStateFlow(false)
+    private val _powerampTab = MutableStateFlow(PowerampTab.PLAYER)
+    private val _unifiedMusicQuery = MutableStateFlow("")
+    private val _unifiedMusicResults = MutableStateFlow<List<UnifiedMusicSearchResult>>(emptyList())
+    private val _isSearchingMusicOnline = MutableStateFlow(false)
+    private val _sourcePickerTarget = MutableStateFlow<Pair<UnifiedMusicSearchResult?, Boolean>>(null to false)
+    private val _currentLyrics = MutableStateFlow<TrackLyricsData?>(null)
+    private val _isFetchingLyrics = MutableStateFlow(false)
+    private val _pendingStreamCaptureRequest = MutableStateFlow<PendingStreamCaptureRequest?>(null)
+    private val _selectedAlbumId = MutableStateFlow<String?>(null)
 
     @Volatile
     private var wasPausedSinceResume: Boolean = false
+    private var searchDebounceJob: Job? = null
     private var deviceSearchJob: Job? = null
+    private var weatherSearchJob: Job? = null
+    private var onlineMusicSearchJob: Job? = null
+    private var lyricsFetchJob: Job? = null
+    private var lastLoadedLyricsKey: String = ""
     private var musicAppRotationIndex: Int = -1
 
     @Volatile
@@ -262,7 +354,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         KeyboardSearchMatcher.matchScore(it.originalLabel, query)
                     )
                 }
-            letterFilter != null -> updatedApps.filter { it.initialChar == letterFilter }
+            letterFilter != null -> updatedApps.filter {
+                KeyboardSearchMatcher.matchesInitialWithTranslit(it.label, it.initialChar, letterFilter)
+            }
             else -> updatedApps
         }
         Triple(updatedApps, filtered, updatedApps.filter { it.isPinned })
@@ -288,7 +382,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 KeyboardSearchMatcher.matches(it.name, query) ||
                     it.number.contains(query.trim(), ignoreCase = true)
             }
-            letterFilter != null -> contacts.filter { it.initialChar == letterFilter }
+            letterFilter != null -> contacts.filter {
+                KeyboardSearchMatcher.matchesInitialWithTranslit(it.name, it.initialChar, letterFilter)
+            }
             else -> contacts
         }
         val starred = contacts.filter { it.isStarred }.distinctBy { it.id }
@@ -320,34 +416,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val appSearchQuery: String
     )
 
-    private val focusIndicesFlow = combine(
-        _focusedAppIndex,
-        _focusedCallLogIndex,
-        _focusedContactIndex,
-        _focusedHubIndex
-    ) { appIdx, callIdx, contactIdx, hubIdx ->
-        FocusBundle(appIdx, callIdx, contactIdx, hubIdx)
-    }
-
-    private data class FocusBundle(
-        val appIdx: Int,
-        val callIdx: Int,
-        val contactIdx: Int,
-        val hubIdx: Int
-    )
-
     private val uiOverlaysFlow = combine(
-        focusIndicesFlow,
+        combine(_focusedAppIndex, _focusedCallLogIndex, _focusedContactIndex, _focusedHubIndex) { a, c, co, h ->
+            intArrayOf(a, c, co, h)
+        },
         _activeScrubLetter,
         _highlightedLetter,
         _showMusicSheet,
         _showShortcutsDialog
-    ) { focus, scrub, highlight, musicSheet, shortcuts ->
-        OverlayBundle(focus, scrub, highlight, musicSheet, shortcuts)
+    ) { focusArr, scrub, highlight, musicSheet, shortcuts ->
+        OverlayBundle(focusArr[0], focusArr[1], focusArr[2], focusArr[3], scrub, highlight, musicSheet, shortcuts)
     }
 
     private data class OverlayBundle(
-        val focus: FocusBundle,
+        val appIdx: Int,
+        val callIdx: Int,
+        val contactIdx: Int,
+        val hubIdx: Int,
         val scrub: Char?,
         val highlight: Char?,
         val musicSheet: Boolean,
@@ -374,13 +459,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             )
         }
     ) { notifications, shizuku, writerPair, searchBundle ->
-        HubWriterSearchBundle(
-            notifications = notifications,
-            shizuku = shizuku,
-            writerOpen = writerPair.first,
-            writerSubTab = writerPair.second,
-            searchBundle = searchBundle
-        )
+        HubWriterSearchBundle(notifications, shizuku, writerPair.first, writerPair.second, searchBundle)
     }
 
     private data class SearchBundle(
@@ -411,9 +490,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             },
             _storageAccessState,
             mediaRepo.localTracks,
-            _localTrackSearchQuery
-        ) { extras, storageAccess, tracks, trackQuery ->
-            arrayOf<Any?>(extras[0], extras[1], extras[2], extras[3], storageAccess, tracks, trackQuery)
+            _localTrackSearchQuery,
+            prefsRepo.isPlayerCollapsed
+        ) { extras, storageAccess, tracks, trackQuery, collapsed ->
+            arrayOf<Any?>(extras[0], extras[1], extras[2], extras[3], storageAccess, tracks, trackQuery, collapsed)
         }
     ) { media, livePos, links, callsQuery, extras ->
         @Suppress("UNCHECKED_CAST")
@@ -442,7 +522,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             hasAllFiles = storagePair.first,
             hasAudioAccess = storagePair.second,
             localTracks = filteredTracks,
-            localTrackSearchQuery = trackQuery
+            localTrackSearchQuery = trackQuery,
+            isPlayerCollapsed = extras[7] as Boolean
         )
     }
 
@@ -458,7 +539,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val hasAllFiles: Boolean,
         val hasAudioAccess: Boolean,
         val localTracks: List<LocalAudioTrack>,
-        val localTrackSearchQuery: String
+        val localTrackSearchQuery: String,
+        val isPlayerCollapsed: Boolean
     )
 
     private val customizationPrefsFlow = combine(
@@ -466,19 +548,28 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _wallpaperState,
         prefsRepo.autoKillEnabled,
         prefsRepo.autoKillPackages,
-        combine(_showAppearanceDialog, _showAutoKillDialog, _musicDrawerTab) { appDlg, killDlg, mTab ->
-            Triple(appDlg, killDlg, mTab)
+        combine(
+            _showAppearanceDialog,
+            _showAutoKillDialog,
+            _musicDrawerTab,
+            prefsRepo.savedPalettes,
+            prefsRepo.activeCustomPaletteId
+        ) { appDlg, killDlg, mTab, palettes, activePalId ->
+            arrayOf<Any?>(appDlg, killDlg, mTab, palettes, activePalId)
         }
-    ) { themeColor, wallpaperPair, autoKillOn, autoKillPkgs, uiTriple ->
+    ) { themeColor, wallpaperPair, autoKillOn, autoKillPkgs, uiArr ->
+        @Suppress("UNCHECKED_CAST")
         CustomizationBundle(
             themeColor = themeColor,
             wallpaperBitmap = wallpaperPair.first,
             wallpaperPalette = wallpaperPair.second,
             autoKillEnabled = autoKillOn,
             autoKillPackages = autoKillPkgs,
-            showAppearanceDialog = uiTriple.first,
-            showAutoKillDialog = uiTriple.second,
-            musicDrawerTab = uiTriple.third
+            showAppearanceDialog = uiArr[0] as Boolean,
+            showAutoKillDialog = uiArr[1] as Boolean,
+            musicDrawerTab = uiArr[2] as MusicDrawerTab,
+            savedPalettes = uiArr[3] as List<CustomColorPalette>,
+            activeCustomPaletteId = uiArr[4] as String?
         )
     }
 
@@ -490,43 +581,76 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val autoKillPackages: Set<String>,
         val showAppearanceDialog: Boolean,
         val showAutoKillDialog: Boolean,
-        val musicDrawerTab: MusicDrawerTab
+        val musicDrawerTab: MusicDrawerTab,
+        val savedPalettes: List<CustomColorPalette>,
+        val activeCustomPaletteId: String?
     )
 
     private data class SystemFeatureBundle(
         val optimizationStats: AndroidOptimizationStats,
         val showOptimizationDialog: Boolean,
-        val showAdaptationDialog: Boolean,
         val showBackgroundWebAudioDialog: Boolean,
+        val showLinuxCatalogDialog: Boolean,
         val backgroundSpoofEnabled: Boolean,
         val backgroundSpoofPackages: Set<String>,
-        val appAdaptationEnabled: Boolean,
-        val appAdaptationModes: Map<String, AppAdaptationMode>
+        val linuxPackages: List<LinuxPackageEntry>,
+        val linuxSearchResults: List<LinuxPackageEntry>,
+        val isTermuxInstalled: Boolean
     )
 
     private val systemFeatureFlow = combine(
         prefsRepo.backgroundSpoofEnabled,
         prefsRepo.backgroundSpoofPackages,
-        prefsRepo.appAdaptationEnabled,
-        prefsRepo.appAdaptationModes,
-        combine(
-            _optimizationStats,
-            _showOptimizationDialog,
-            _showAdaptationDialog,
-            _showBackgroundWebAudioDialog
-        ) { stats, optDlg, adaptDlg, webDlg ->
-            arrayOf<Any?>(stats, optDlg, adaptDlg, webDlg)
+        combine(_optimizationStats, _showOptimizationDialog, _showBackgroundWebAudioDialog, _showLinuxCatalogDialog) { s, o, w, l ->
+            arrayOf<Any?>(s, o, w, l)
+        },
+        combine(_linuxPackages, _linuxSearchResults, _isTermuxInstalled) { allL, searchL, termux ->
+            Triple(allL, searchL, termux)
         }
-    ) { bgEnabled, bgPkgs, adaptEnabled, adaptModes, uiArr ->
+    ) { bgEnabled, bgPkgs, uiArr, linuxTriple ->
         SystemFeatureBundle(
             optimizationStats = uiArr[0] as AndroidOptimizationStats,
             showOptimizationDialog = uiArr[1] as Boolean,
-            showAdaptationDialog = uiArr[2] as Boolean,
-            showBackgroundWebAudioDialog = uiArr[3] as Boolean,
+            showBackgroundWebAudioDialog = uiArr[2] as Boolean,
+            showLinuxCatalogDialog = uiArr[3] as Boolean,
             backgroundSpoofEnabled = bgEnabled,
             backgroundSpoofPackages = bgPkgs,
-            appAdaptationEnabled = adaptEnabled,
-            appAdaptationModes = adaptModes
+            linuxPackages = linuxTriple.first,
+            linuxSearchResults = linuxTriple.second,
+            isTermuxInstalled = linuxTriple.third
+        )
+    }
+
+    private data class WorkspaceAndWeatherBundle(
+        val workspaceGrid: WorkspaceGridState,
+        val showWorkspaceSpace: Boolean,
+        val workspaceFeedback: String?,
+        val lockedChat: LockedChatThread?,
+        val weatherReport: ConsensusWeatherReport?,
+        val isWeatherLoading: Boolean,
+        val weatherCityResults: List<WeatherCityResult>,
+        val selectedWeatherCity: WeatherCityResult
+    )
+
+    private val workspaceAndWeatherFlow = combine(
+        prefsRepo.workspaceGridState,
+        _showWorkspaceSpace,
+        _workspaceActionFeedback,
+        _lockedChatThread,
+        combine(_weatherReport, _isWeatherLoading, _weatherCityResults, prefsRepo.selectedWeatherCity) { r, load, cities, selected ->
+            arrayOf<Any?>(r, load, cities, selected)
+        }
+    ) { wsGrid, showWs, wsFb, locked, wArr ->
+        @Suppress("UNCHECKED_CAST")
+        WorkspaceAndWeatherBundle(
+            workspaceGrid = wsGrid,
+            showWorkspaceSpace = showWs,
+            workspaceFeedback = wsFb,
+            lockedChat = locked,
+            weatherReport = wArr[0] as ConsensusWeatherReport?,
+            isWeatherLoading = wArr[1] as Boolean,
+            weatherCityResults = wArr[2] as List<WeatherCityResult>,
+            selectedWeatherCity = wArr[3] as WeatherCityResult
         )
     }
 
@@ -538,9 +662,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val recentFrames: List<RecentAppFrame>,
         val focusedRecentIndex: Int,
         val pinnedRecentPackages: Set<String>,
-        val embeddedSnapshot: AdaptedAppSnapshot?,
-        val messengerSearchMode: GlobalSearchMode,
-        val musicSearchResults: List<MusicStreamMatch>
+        val musicSearchResults: List<MusicStreamMatch>,
+        val streamSearchHistory: List<String>
     )
 
     private val recentsAndUiPrefsFlow = combine(
@@ -548,37 +671,100 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             prefsRepo.appLanguage,
             prefsRepo.uiScale,
             prefsRepo.playerCoverStyle,
-            prefsRepo.pinnedRecentPackages
-        ) { lang, scale, coverStyle, pinnedRecents ->
-            arrayOf<Any?>(lang, scale, coverStyle, pinnedRecents)
+            prefsRepo.pinnedRecentPackages,
+            prefsRepo.streamSearchHistory
+        ) { lang, scale, coverStyle, pinnedRecents, streamHist ->
+            arrayOf<Any?>(lang, scale, coverStyle, pinnedRecents, streamHist)
         },
         combine(
             _showRecentsOverlay,
             _recentFrames,
-            _focusedRecentIndex
-        ) { showRec, frames, recIdx ->
-            Triple(showRec, frames, recIdx)
-        },
-        combine(
-            AppAdaptationRuntime.embeddedSnapshot,
-            _messengerSearchMode,
+            _focusedRecentIndex,
             _musicSearchResults
-        ) { emb, msgMode, musicRes ->
-            Triple(emb, msgMode, musicRes)
+        ) { showRec, frames, recIdx, musicRes ->
+            arrayOf<Any?>(showRec, frames, recIdx, musicRes)
         }
-    ) { prefsArr, recTriple, adaptTriple ->
+    ) { prefsArr, recArr ->
         @Suppress("UNCHECKED_CAST")
         RecentsAndUiPrefsBundle(
             appLanguage = prefsArr[0] as AppLanguage,
             uiScale = prefsArr[1] as Float,
             playerCoverStyle = prefsArr[2] as PlayerCoverStyle,
             pinnedRecentPackages = prefsArr[3] as Set<String>,
-            showRecentsOverlay = recTriple.first,
-            recentFrames = recTriple.second,
-            focusedRecentIndex = recTriple.third,
-            embeddedSnapshot = adaptTriple.first,
-            messengerSearchMode = adaptTriple.second,
-            musicSearchResults = adaptTriple.third
+            streamSearchHistory = prefsArr[4] as List<String>,
+            showRecentsOverlay = recArr[0] as Boolean,
+            recentFrames = recArr[1] as List<RecentAppFrame>,
+            focusedRecentIndex = recArr[2] as Int,
+            musicSearchResults = recArr[3] as List<MusicStreamMatch>
+        )
+    }
+
+    private data class PowerampBundle(
+        val showFull: Boolean,
+        val tab: PowerampTab,
+        val sourceMode: SourceSelectionMode,
+        val unifiedQuery: String,
+        val unifiedResults: List<UnifiedMusicSearchResult>,
+        val isSearchingOnline: Boolean,
+        val sourcePicker: Pair<UnifiedMusicSearchResult?, Boolean>,
+        val lyrics: TrackLyricsData?,
+        val isFetchingLyrics: Boolean,
+        val eqState: EqualizerState,
+        val captureState: AudioCaptureState,
+        val pendingCapture: PendingStreamCaptureRequest?,
+        val smartAlbums: List<SmartAlbum>,
+        val selectedAlbumId: String?,
+        val weatherInHubOther: Boolean,
+        val weatherInHomeTile: Boolean,
+        val showWeatherForecast: Boolean,
+        val showWeatherCityPicker: Boolean
+    )
+
+    private val powerampMusicFlow = combine(
+        combine(_showFullPowerampPlayer, _powerampTab, prefsRepo.musicSourceMode, _unifiedMusicQuery) { s, t, m, q ->
+            arrayOf<Any?>(s, t, m, q)
+        },
+        combine(_unifiedMusicResults, _isSearchingMusicOnline, _sourcePickerTarget, _currentLyrics, _isFetchingLyrics) { r, load, pick, lyr, fl ->
+            arrayOf<Any?>(r, load, pick, lyr, fl)
+        },
+        combine(
+            mediaRepo.dspController.state,
+            StreamAudioCaptureRuntime.captureState,
+            _pendingStreamCaptureRequest,
+            prefsRepo.smartAlbums,
+            _selectedAlbumId
+        ) { eq, cap, pend, albums, selAlb ->
+            arrayOf<Any?>(eq, cap, pend, albums, selAlb)
+        },
+        combine(
+            prefsRepo.showWeatherInHubOther,
+            prefsRepo.showWeatherInHomeTile,
+            _showWeatherForecastDialog,
+            _showWeatherCityPickerDialog
+        ) { wHub, wHome, wFc, wCity ->
+            arrayOf<Any?>(wHub, wHome, wFc, wCity)
+        }
+    ) { a, b, c, d ->
+        @Suppress("UNCHECKED_CAST")
+        PowerampBundle(
+            showFull = a[0] as Boolean,
+            tab = a[1] as PowerampTab,
+            sourceMode = a[2] as SourceSelectionMode,
+            unifiedQuery = a[3] as String,
+            unifiedResults = b[0] as List<UnifiedMusicSearchResult>,
+            isSearchingOnline = b[1] as Boolean,
+            sourcePicker = b[2] as Pair<UnifiedMusicSearchResult?, Boolean>,
+            lyrics = b[3] as TrackLyricsData?,
+            isFetchingLyrics = b[4] as Boolean,
+            eqState = c[0] as EqualizerState,
+            captureState = c[1] as AudioCaptureState,
+            pendingCapture = c[2] as PendingStreamCaptureRequest?,
+            smartAlbums = c[3] as List<SmartAlbum>,
+            selectedAlbumId = c[4] as String?,
+            weatherInHubOther = d[0] as Boolean,
+            weatherInHomeTile = d[1] as Boolean,
+            showWeatherForecast = d[2] as Boolean,
+            showWeatherCityPicker = d[3] as Boolean
         )
     }
 
@@ -588,25 +774,35 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         navFlow,
         uiOverlaysFlow,
         combine(
-            combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> Pair(m, hw) },
-            combine(customizationPrefsFlow, systemFeatureFlow, recentsAndUiPrefsFlow) { cust, sys, rec ->
-                Triple(cust, sys, rec)
+            combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> m to hw },
+            combine(customizationPrefsFlow, systemFeatureFlow, recentsAndUiPrefsFlow, workspaceAndWeatherFlow, powerampMusicFlow) { cust, sys, rec, wsw, pw ->
+                arrayOf<Any?>(cust, sys, rec, wsw, pw)
             }
-        ) { mh, csr -> mh to csr }
-    ) { appsTriple, calls, nav, overlays, rightTriple ->
-        val mediaBundle = rightTriple.first.first
-        val hw = rightTriple.first.second
-        val cust = rightTriple.second.first
-        val sys = rightTriple.second.second
-        val rec = rightTriple.second.third
+        ) { mh, right -> mh to right }
+    ) { appsTriple, calls, nav, overlays, rightPair ->
+        val mediaBundle = rightPair.first.first
+        val hw = rightPair.first.second
+        val cust = rightPair.second[0] as CustomizationBundle
+        val sys = rightPair.second[1] as SystemFeatureBundle
+        val rec = rightPair.second[2] as RecentsAndUiPrefsBundle
+        val wsw = rightPair.second[3] as WorkspaceAndWeatherBundle
+        val pw = rightPair.second[4] as PowerampBundle
+
         val (updatedAll, filtered, pinned) = appsTriple
-        val coercedAppFocus = if (filtered.isEmpty()) 0 else overlays.focus.appIdx.coerceIn(0, filtered.lastIndex)
-        val coercedLogFocus = if (calls.logs.isEmpty()) 0 else overlays.focus.callIdx.coerceIn(0, calls.logs.lastIndex)
-        val coercedContactFocus = if (calls.contacts.isEmpty()) 0 else overlays.focus.contactIdx.coerceIn(0, calls.contacts.lastIndex)
+        val coercedAppFocus = if (filtered.isEmpty()) 0 else overlays.appIdx.coerceIn(0, filtered.lastIndex)
+        val coercedLogFocus = if (calls.logs.isEmpty()) 0 else overlays.callIdx.coerceIn(0, calls.logs.lastIndex)
+        val coercedContactFocus = if (calls.contacts.isEmpty()) 0 else overlays.contactIdx.coerceIn(0, calls.contacts.lastIndex)
         val coercedRecentFocus = if (rec.recentFrames.isEmpty()) 0 else rec.focusedRecentIndex.coerceIn(0, rec.recentFrames.lastIndex)
 
         val images = hw.searchBundle.results.filter { it.kind == SearchResultKind.IMAGE }
         val files = hw.searchBundle.results.filter { it.kind == SearchResultKind.FILE }
+        val chatApps = updatedAll.filter { it.hubCategory == HubCategory.CHAT }
+        val chatMatches = buildChatSearchResults(
+            query = nav.appSearchQuery,
+            notifications = hw.notifications,
+            contacts = calls.contacts,
+            chatApps = chatApps
+        )
 
         LauncherUiState(
             activeTab = nav.activeTab,
@@ -617,17 +813,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             filteredApps = filtered,
             favoriteApps = pinned,
             musicApps = updatedAll.filter { it.hubCategory == HubCategory.MUSIC },
-            chatApps = updatedAll.filter { it.hubCategory == HubCategory.CHAT },
+            chatApps = chatApps,
             newsApps = updatedAll.filter { it.hubCategory == HubCategory.NEWS },
             appSearchQuery = nav.appSearchQuery,
             searchImages = images,
             searchFiles = files,
+            chatSearchResults = chatMatches,
+            linuxSearchResults = sys.linuxSearchResults,
             isSearchingDevice = hw.searchBundle.isSearching,
             indexedFolderCount = hw.searchBundle.indexedTreeCount,
             focusedAppIndex = coercedAppFocus,
             focusedCallLogIndex = coercedLogFocus,
             focusedContactIndex = coercedContactFocus,
-            focusedHubIndex = overlays.focus.hubIdx,
+            focusedHubIndex = overlays.hubIdx,
             activeScrubLetter = overlays.scrub,
             highlightedLetter = overlays.highlight,
             isLoadingApps = mediaBundle.loading,
@@ -650,25 +848,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             localAudioTracks = mediaBundle.localTracks,
             localTrackSearchQuery = mediaBundle.localTrackSearchQuery,
             musicDrawerTab = cust.musicDrawerTab,
+            isPlayerCollapsed = mediaBundle.isPlayerCollapsed,
             showMusicSheet = overlays.musicSheet,
             showShortcutsDialog = overlays.shortcuts,
             showAddLinkDialog = mediaBundle.addLink,
             showAppearanceDialog = cust.showAppearanceDialog,
             showAutoKillDialog = cust.showAutoKillDialog,
             showOptimizationDialog = sys.showOptimizationDialog,
-            showAdaptationDialog = sys.showAdaptationDialog,
             showBackgroundWebAudioDialog = sys.showBackgroundWebAudioDialog,
+            showLinuxCatalogDialog = sys.showLinuxCatalogDialog,
             uiThemeColor = cust.themeColor,
             wallpaperBitmap = cust.wallpaperBitmap,
             wallpaperPalette = cust.wallpaperPalette,
             hasWallpaper = cust.wallpaperBitmap != null,
+            savedPalettes = cust.savedPalettes,
+            activeCustomPaletteId = cust.activeCustomPaletteId,
             autoKillEnabled = cust.autoKillEnabled,
             autoKillPackages = cust.autoKillPackages,
             optimizationStats = sys.optimizationStats,
             backgroundSpoofEnabled = sys.backgroundSpoofEnabled,
             backgroundSpoofPackages = sys.backgroundSpoofPackages,
-            appAdaptationEnabled = sys.appAdaptationEnabled,
-            appAdaptationModes = sys.appAdaptationModes,
             appLanguage = rec.appLanguage,
             uiScale = rec.uiScale,
             playerCoverStyle = rec.playerCoverStyle,
@@ -676,9 +875,37 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             recentFrames = rec.recentFrames,
             focusedRecentIndex = coercedRecentFocus,
             pinnedRecentPackages = rec.pinnedRecentPackages,
-            embeddedSnapshot = rec.embeddedSnapshot,
-            messengerSearchMode = rec.messengerSearchMode,
+            workspaceGrid = wsw.workspaceGrid,
+            showWorkspaceSpace = wsw.showWorkspaceSpace,
+            workspaceActionFeedback = wsw.workspaceFeedback,
+            lockedChatThread = wsw.lockedChat,
+            linuxPackages = sys.linuxPackages,
+            isTermuxInstalled = sys.isTermuxInstalled,
+            weatherReport = wsw.weatherReport,
+            isWeatherLoading = wsw.isWeatherLoading,
+            weatherCityResults = wsw.weatherCityResults,
+            selectedWeatherCity = wsw.selectedWeatherCity,
             musicSearchResults = rec.musicSearchResults,
+            streamSearchHistory = rec.streamSearchHistory,
+            showFullPowerampPlayer = pw.showFull,
+            powerampTab = pw.tab,
+            sourceSelectionMode = pw.sourceMode,
+            unifiedMusicQuery = pw.unifiedQuery,
+            unifiedMusicResults = pw.unifiedResults,
+            isSearchingMusicOnline = pw.isSearchingOnline,
+            sourcePickerTarget = pw.sourcePicker.first,
+            sourcePickerActionDownload = pw.sourcePicker.second,
+            currentLyrics = pw.lyrics,
+            isFetchingLyrics = pw.isFetchingLyrics,
+            equalizerState = pw.eqState,
+            audioCaptureState = pw.captureState,
+            pendingStreamCaptureRequest = pw.pendingCapture,
+            smartAlbums = pw.smartAlbums,
+            selectedAlbumId = pw.selectedAlbumId,
+            showWeatherInHubOther = pw.weatherInHubOther,
+            showWeatherInHomeTile = pw.weatherInHomeTile,
+            showWeatherForecastDialog = pw.showWeatherForecast,
+            showWeatherCityPickerDialog = pw.showWeatherCityPicker,
             contextMenuApp = mediaBundle.ctxApp,
             contextMenuFile = hw.searchBundle.contextMenuFile,
             renameTargetApp = hw.searchBundle.renameTargetApp,
@@ -698,11 +925,62 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     .mapNotNull { it.customFilePath }
                     .forEach { appsRepo.resolveCustomBitmap(it) }
             }
+            val savedHistory = runCatching { prefsRepo.streamingHistory.first() }.getOrDefault(emptyList())
+            mediaRepo.loadPersistedHistory(savedHistory)
+            runCatching { prefsRepo.equalizerConfig.first() }.getOrNull()?.let { eqCfg ->
+                mediaRepo.dspController.applySaved(
+                    enabled = eqCfg.enabled,
+                    preset = eqCfg.preset,
+                    bandsMb = eqCfg.bandsMb,
+                    bass = eqCfg.bassBoost,
+                    virt = eqCfg.virtualizer
+                )
+            }
         }
+        mediaRepo.onTrackHistoryUpdated = { tracks ->
+            viewModelScope.launch {
+                prefsRepo.saveStreamingHistory(tracks)
+            }
+        }
+
+        viewModelScope.launch {
+            StreamAudioCaptureRuntime.completedCaptures.collect { captured ->
+                val refreshed = mediaRepo.refreshLocalTracks()
+                val newTrack = refreshed.firstOrNull { it.filePath == captured.filePath }
+                if (newTrack != null && captured.targetAlbumId != null) {
+                    val albums = prefsRepo.smartAlbums.first()
+                    val updated = albums.map { alb ->
+                        if (alb.id == captured.targetAlbumId) {
+                            MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                                alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + newTrack.id).distinct()),
+                                refreshed
+                            )
+                        } else alb
+                    }
+                    prefsRepo.saveSmartAlbums(updated)
+                }
+                showToast("Захват сохранён: ${captured.title} (WAV)")
+            }
+        }
+
+        viewModelScope.launch {
+            mediaRepo.mediaState.collect { mState ->
+                val active = mState.activeSession
+                if (active != null && active.title.isNotBlank()) {
+                    val key = MusicCatalogAndLyricsRepository.buildTrackKey(active.title, active.artist)
+                    if (key != lastLoadedLyricsKey) {
+                        lastLoadedLyricsKey = key
+                        loadLyricsForCurrentTrack(forceRefresh = false)
+                    }
+                }
+            }
+        }
+
         refreshInstalledApps()
         refreshCallsAndContacts()
         refreshStorageAndAudioAccess()
         refreshOptimizationStats()
+        refreshLinuxCatalog()
         mediaRepo.startObserving()
         shizukuBridge.startObserving()
 
@@ -715,29 +993,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             combine(
                 prefsRepo.backgroundSpoofEnabled,
-                prefsRepo.backgroundSpoofPackages
-            ) { enabled, pkgs -> enabled to pkgs }.collect { (enabled, pkgs) ->
-                MediaGuardRuntime.isGuardEnabled = enabled
+                prefsRepo.backgroundSpoofPackages,
+                prefsRepo.interceptLockScreenEnabled
+            ) { bgEnabled, pkgs, lockEnabled ->
+                Triple(bgEnabled, pkgs, lockEnabled)
+            }.collect { (bgEnabled, pkgs, lockEnabled) ->
+                MediaGuardRuntime.isGuardEnabled = bgEnabled
                 MediaGuardRuntime.guardedPackages = pkgs
-                BackgroundMediaGuardService.syncServiceState(getApplication(), enabled)
+                BackgroundMediaGuardService.syncServiceState(getApplication(), bgEnabled || lockEnabled)
             }
-        }
-
-        viewModelScope.launch {
-            combine(
-                prefsRepo.appAdaptationEnabled,
-                prefsRepo.appAdaptationModes,
-                _allApps
-            ) { enabled, modes, apps -> Triple(enabled, modes, apps) }
-                .collect { (enabled, modes, apps) ->
-                    AppAdaptationRuntime.isAdaptationEnabled = enabled
-                    val labels = apps.associate { it.packageName to it.label }
-                    AppAdaptationRuntime.updateModes(modes, labels)
-                }
-        }
-
-        AppAdaptationRuntime.onDisablePackageCallback = { pkg ->
-            setAppAdaptationMode(pkg, AppAdaptationMode.DISABLED)
         }
 
         viewModelScope.launch {
@@ -747,6 +1011,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 prefsRepo.oemGestureBypassEnabled
             ) { shade, lock, oem -> Triple(shade, lock, oem) }.collect { (shade, lock, oem) ->
                 shizukuBridge.updateInterceptFlags(shade, lock, oem)
+            }
+        }
+
+        viewModelScope.launch {
+            prefsRepo.selectedWeatherCity.collect { city ->
+                refreshWeatherForCity(city)
             }
         }
 
@@ -765,6 +1035,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
 
         viewModelScope.launch {
+            NotificationHubRepository.notifications.collect { list ->
+                val cur = _lockedChatThread.value ?: return@collect
+                val updated = list.firstOrNull {
+                    it.key == cur.key || (it.packageName == cur.packageName && it.title == cur.contactName)
+                }
+                if (updated != null) {
+                    _lockedChatThread.value = notificationToLockedThread(updated)
+                }
+            }
+        }
+
+        viewModelScope.launch {
             while (isActive) {
                 val active = mediaRepo.mediaState.value.activeSession
                 _livePositionMs.value = if (active != null) {
@@ -779,6 +1061,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     override fun onCleared() {
         super.onCleared()
+        mediaRepo.onTrackHistoryUpdated = null
         mediaRepo.stopObserving()
         shizukuBridge.stopObserving()
     }
@@ -788,6 +1071,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onResumeRefresh() {
+        KeyDeckAccessibilityService.hideDockedWorkspaceBar()
         mediaRepo.refreshListenerStatusAndSessions()
         NotificationHubRepository.refreshFromAttachedService()
         shizukuBridge.refreshStatus()
@@ -804,17 +1088,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     .map { it.packageName }
                     .toSet()
                 viewModelScope.launch {
-                    val closedCount = autoCloseManager.terminateExitedOneTimeApps(
+                    autoCloseManager.terminateExitedOneTimeApps(
                         configuredPackages = state.autoKillPackages,
                         activeMediaPackages = activeAudioPkgs
                     )
-                    if (closedCount > 0) {
-                        val shizukuActive = state.shizukuState.isBinderAlive && state.shizukuState.isPermissionGranted
-                        showToast(
-                            if (shizukuActive) "Одноразовые приложения завершены (Shizuku: $closedCount)"
-                            else "Одноразовые процессы очищены ($closedCount)"
-                        )
-                    }
                 }
             }
         }
@@ -843,6 +1120,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val loaded = appsRepo.loadInstalledApps(emptySet())
             _allApps.value = loaded
             _isLoadingApps.value = false
+            _isTermuxInstalled.value = linuxRepo.isTermuxInstalled()
             val defaults = autoCloseManager.discoverDefaultOneTimePackages(loaded)
             prefsRepo.initDefaultAutoKillPackagesIfNeeded(defaults)
 
@@ -851,11 +1129,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 .filter { MediaGuardRuntime.isDefaultSpoilerCandidate(it) }
                 .toSet()
             prefsRepo.initDefaultBackgroundSpoofPackagesIfNeeded(defaultSpoofPkgs)
-
-            val defaultAdaptationModes = loaded
-                .associate { it.packageName to AppAdaptationRuntime.recommendedDefaultMode(it.packageName, it.originalLabel) }
-                .filterValues { it != AppAdaptationMode.DISABLED }
-            prefsRepo.initDefaultAdaptationModesIfNeeded(defaultAdaptationModes)
         }
     }
 
@@ -866,17 +1139,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _permissionsState.value = Triple(hasLog, hasContacts, hasCall)
 
         viewModelScope.launch {
-            if (hasLog) {
-                _callLogs.value = callsRepo.loadCallLogs()
-            }
-            if (hasContacts) {
-                _contacts.value = callsRepo.loadContacts()
-            }
+            if (hasLog) _callLogs.value = callsRepo.loadCallLogs()
+            if (hasContacts) _contacts.value = callsRepo.loadContacts()
         }
     }
 
     fun selectTab(tab: MainTab) {
         _isWriterModeOpen.value = false
+        if (tab != MainTab.HOME) {
+            _showWorkspaceSpace.value = false
+        }
         if (_activeTab.value != tab) {
             _highlightedLetter.value = null
             _activeScrubLetter.value = null
@@ -895,9 +1167,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     // Writer / Book Studio Mode
     fun openWriterMode(subTab: WriterSubTab? = null) {
-        if (subTab != null) {
-            _writerInitialSubTab.value = subTab
-        }
+        if (subTab != null) _writerInitialSubTab.value = subTab
         _isWriterModeOpen.value = true
     }
 
@@ -924,8 +1194,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appSearchQuery.value = query
         _focusedAppIndex.value = 0
         _highlightedLetter.value = null
-        _musicSearchResults.value = mediaRepo.searchStreamingAndLocalCatalog(query, uiState.value.musicApps)
-        triggerDeviceSearch(query)
+        searchDebounceJob?.cancel()
+        if (query.trim().length < 2) {
+            _musicSearchResults.value = emptyList()
+            _deviceSearchResults.value = emptyList()
+            _linuxSearchResults.value = emptyList()
+            _isSearchingDevice.value = false
+            return
+        }
+        searchDebounceJob = viewModelScope.launch {
+            delay(180L)
+            _musicSearchResults.value = mediaRepo.searchStreamingAndLocalCatalog(query, uiState.value.musicApps)
+            triggerDeviceSearch(query)
+            triggerLinuxSearch(query)
+        }
     }
 
     private fun triggerDeviceSearch(query: String) {
@@ -943,6 +1225,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val found = universalSearchRepo.searchDevice(trimmed, trees)
             _deviceSearchResults.value = found
             _isSearchingDevice.value = false
+        }
+    }
+
+    private fun triggerLinuxSearch(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            _linuxSearchResults.value = emptyList()
+            return
+        }
+        viewModelScope.launch {
+            _linuxSearchResults.value = linuxRepo.scanLinuxPackages(trimmed)
         }
     }
 
@@ -964,9 +1257,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             prefsRepo.addSearchTreeUri(uri.toString())
             showToast("Папка подключена к универсальному поиску")
             val q = _appSearchQuery.value
-            if (q.trim().length >= 2) {
-                triggerDeviceSearch(q)
-            }
+            if (q.trim().length >= 2) triggerDeviceSearch(q)
         }
     }
 
@@ -1002,6 +1293,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         showToast("Путь скопирован: ${file.displayPath}")
     }
 
+    fun copySearchFileToClipboard(file: DeviceSearchFile) {
+        _contextMenuFile.value = null
+        if (universalSearchRepo.copyFileToClipboard(file)) {
+            showToast("Скопировано в буфер (Ctrl+C): ${file.name}")
+        } else {
+            universalSearchRepo.copyPath(file)
+            showToast("Путь скопирован: ${file.name}")
+        }
+    }
+
+    fun pasteClipboardAction() {
+        if (KeyDeckAccessibilityService.performGlobalPaste()) {
+            showToast("Вставка (Ctrl+V)")
+        } else {
+            val shizuku = uiState.value.shizukuState
+            if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
+                viewModelScope.launch {
+                    shizukuBridge.pasteClipboardViaInputKeyEvent()
+                }
+            }
+        }
+    }
+
     fun deleteSearchFile(file: DeviceSearchFile) {
         _contextMenuFile.value = null
         viewModelScope.launch {
@@ -1013,6 +1327,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 showToast("Не удалось удалить ${file.name} (ограничение Android)")
             }
         }
+    }
+
+    fun resolveShareableUri(file: DeviceSearchFile): Uri =
+        universalSearchRepo.resolveShareableUri(file)
+
+    fun sendFileToWorkspaceAppOrChat(file: DeviceSearchFile) {
+        val state = uiState.value
+        val activeChat = state.lockedChatThread
+        if (activeChat != null) {
+            val uri = universalSearchRepo.resolveShareableUri(file)
+            if (activeChat.canReplyInline && activeChat.key.startsWith("contact:").not()) {
+                replyLockedChat("", uri, file.mimeType)
+            } else {
+                universalSearchRepo.sendFileToPackage(file, activeChat.packageName)
+            }
+            return
+        }
+        val activeCell = state.workspaceGrid.activeCell
+        if (!activeCell.isHome && !activeCell.packageName.isNullOrBlank()) {
+            universalSearchRepo.sendFileToPackage(file, activeCell.packageName)
+            return
+        }
+        shareSearchFile(file)
     }
 
     fun searchOnWeb(query: String, engine: String = "google") {
@@ -1028,15 +1365,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         openUrl(url)
     }
 
-    fun appendAppSearchChar(char: Char) {
-        updateAppSearchQuery(_appSearchQuery.value + char)
-    }
+    fun appendAppSearchChar(char: Char) = updateAppSearchQuery(_appSearchQuery.value + char)
 
     fun backspaceAppSearch() {
         val current = _appSearchQuery.value
-        if (current.isNotEmpty()) {
-            updateAppSearchQuery(current.dropLast(1))
-        }
+        if (current.isNotEmpty()) updateAppSearchQuery(current.dropLast(1))
     }
 
     fun updateCallsSearchQuery(query: String) {
@@ -1045,15 +1378,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _focusedContactIndex.value = 0
     }
 
-    fun appendCallsSearchChar(char: Char) {
-        updateCallsSearchQuery(_callsSearchQuery.value + char)
-    }
+    fun appendCallsSearchChar(char: Char) = updateCallsSearchQuery(_callsSearchQuery.value + char)
 
     fun backspaceCallsSearch() {
         val current = _callsSearchQuery.value
-        if (current.isNotEmpty()) {
-            updateCallsSearchQuery(current.dropLast(1))
-        }
+        if (current.isNotEmpty()) updateCallsSearchQuery(current.dropLast(1))
     }
 
     fun clearAllSearchOrHighlights() {
@@ -1062,6 +1391,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _appSearchQuery.value = ""
                 _deviceSearchResults.value = emptyList()
                 _musicSearchResults.value = emptyList()
+                _linuxSearchResults.value = emptyList()
                 _isSearchingDevice.value = false
                 _highlightedLetter.value = null
                 _activeScrubLetter.value = null
@@ -1085,21 +1415,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (letter == null) return
 
         if (_activeTab.value == MainTab.CALLS && _callsSubTab.value == CallsSubTab.CONTACTS) {
-            if (_callsSearchQuery.value.isNotEmpty()) {
-                _callsSearchQuery.value = ""
-            }
+            if (_callsSearchQuery.value.isNotEmpty()) _callsSearchQuery.value = ""
             _highlightedLetter.value = letter
             _focusedContactIndex.value = 0
             _scrollContactIndexEvents.tryEmit(0)
             return
         }
 
-        if (_activeTab.value != MainTab.HOME) {
-            _activeTab.value = MainTab.HOME
-        }
-        if (_appSearchQuery.value.isNotEmpty()) {
-            updateAppSearchQuery("")
-        }
+        if (_activeTab.value != MainTab.HOME) _activeTab.value = MainTab.HOME
+        if (_appSearchQuery.value.isNotEmpty()) updateAppSearchQuery("")
         _highlightedLetter.value = letter
         _focusedAppIndex.value = 0
         _scrollAppIndexEvents.tryEmit(0)
@@ -1130,7 +1454,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 _focusedAppIndex.value = target
                 _scrollAppIndexEvents.tryEmit(target)
             }
-
             MainTab.CALLS -> {
                 if (state.callsSubTab == CallsSubTab.CONTACTS) {
                     val list = state.contacts
@@ -1149,7 +1472,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _scrollCallLogIndexEvents.tryEmit(target)
                 }
             }
-
             MainTab.HUB -> {
                 val listCount = state.hubNotifications.count { it.subTab == state.hubSubTab }
                 val totalCount = when (state.hubSubTab) {
@@ -1168,23 +1490,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun computeNextGridIndex(
-        current: Int,
-        dx: Int,
-        dy: Int,
-        columns: Int,
-        size: Int
-    ): Int {
+    private fun computeNextGridIndex(current: Int, dx: Int, dy: Int, columns: Int, size: Int): Int {
         if (size <= 0) return 0
-        val next = current + dx + dy * columns
-        return next.coerceIn(0, size - 1)
+        return (current + dx + dy * columns).coerceIn(0, size - 1)
     }
 
     fun setFocusedAppIndex(index: Int) {
         val list = uiState.value.filteredApps
-        if (list.isNotEmpty()) {
-            _focusedAppIndex.value = index.coerceIn(0, list.lastIndex)
-        }
+        if (list.isNotEmpty()) _focusedAppIndex.value = index.coerceIn(0, list.lastIndex)
     }
 
     fun activateFocusedItem() {
@@ -1193,10 +1506,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             MainTab.HOME -> {
                 if (state.filteredApps.isNotEmpty()) {
                     launchFocusedApp()
+                } else if (state.chatSearchResults.isNotEmpty()) {
+                    openLockedChat(state.chatSearchResults.first())
                 } else if (state.searchFiles.isNotEmpty()) {
                     openSearchFile(state.searchFiles.first())
                 } else if (state.searchImages.isNotEmpty()) {
                     openSearchFile(state.searchImages.first())
+                } else if (state.linuxSearchResults.isNotEmpty()) {
+                    installOrRunLinuxPackage(state.linuxSearchResults.first())
                 } else if (state.appSearchQuery.isNotBlank()) {
                     searchOnWeb(state.appSearchQuery, "google")
                 }
@@ -1227,7 +1544,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         when (remIdx) {
                             0 -> setShowAppearanceDialog(true)
                             1 -> setShowOptimizationDialog(true)
-                            2 -> setShowAdaptationDialog(true)
+                            2 -> setShowLinuxCatalogDialog(true)
                             3 -> setShowAutoKillDialog(true)
                             4 -> openDefaultLauncherSettings()
                             5 -> openNotificationListenerSettings()
@@ -1239,9 +1556,327 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                             11 -> openAllFilesAccessSettings()
                         }
                     }
-                    HubSubTab.OTHER -> Unit
-                    HubSubTab.CHATS -> Unit
+                    HubSubTab.OTHER, HubSubTab.CHATS -> Unit
                 }
+            }
+        }
+    }
+
+    // Isolated Locked Single Chat & Search
+    private fun buildChatSearchResults(
+        query: String,
+        notifications: List<HubNotificationItem>,
+        contacts: List<ContactEntry>,
+        chatApps: List<AppEntry>
+    ): List<LockedChatThread> {
+        val clean = query.trim()
+        if (clean.length < 2) return emptyList()
+
+        val result = mutableListOf<LockedChatThread>()
+        val seenKeys = HashSet<String>()
+
+        notifications
+            .filter {
+                it.subTab == HubSubTab.CHATS && (
+                    KeyboardSearchMatcher.matches(it.title, clean) ||
+                        KeyboardSearchMatcher.matches(it.appName, clean) ||
+                        KeyboardSearchMatcher.matches(it.text, clean) ||
+                        KeyboardSearchMatcher.matches(it.bigText, clean)
+                    )
+            }
+            .take(10)
+            .forEach { n ->
+                val dedup = "${n.packageName}:${n.title.lowercase()}"
+                if (seenKeys.add(dedup)) {
+                    result.add(notificationToLockedThread(n))
+                }
+            }
+
+        NotificationHubRepository.searchArchivedThreads(getApplication(), clean)
+            .forEach { archived ->
+                val dedup = "${archived.packageName}:${archived.contactName.lowercase()}"
+                if (seenKeys.add(dedup)) {
+                    result.add(archived)
+                }
+            }
+
+        val smsApp = chatApps.firstOrNull { NotificationHubRepository.isSmsPackage(it.packageName) }
+        contacts
+            .filter {
+                KeyboardSearchMatcher.matches(it.name, clean) ||
+                    it.number.contains(clean, ignoreCase = true)
+            }
+            .take(8)
+            .forEach { contact ->
+                val dedup = "contact:${contact.name.lowercase()}"
+                if (seenKeys.add(dedup) && result.none { it.contactName.equals(contact.name, ignoreCase = true) }) {
+                    result.add(
+                        LockedChatThread(
+                            key = "contact:${contact.id}",
+                            packageName = smsApp?.packageName ?: "com.android.mms",
+                            appName = smsApp?.label ?: "SMS / Контакт",
+                            contactName = contact.name,
+                            messages = listOf(
+                                HubChatMessage(
+                                    sender = contact.name,
+                                    text = "Тел: ${contact.number}",
+                                    timestamp = System.currentTimeMillis()
+                                )
+                            ),
+                            canReplyInline = false,
+                            supportsMediaReply = false,
+                            lastTimestamp = 0L,
+                            timeFormatted = contact.number,
+                            fallbackPhoneNumber = contact.number,
+                            appIcon = smsApp?.icon
+                        )
+                    )
+                }
+            }
+        return result
+    }
+
+    private fun notificationToLockedThread(n: HubNotificationItem): LockedChatThread {
+        val msgs = if (n.messages.isNotEmpty()) {
+            n.messages
+        } else {
+            val body = n.bigText.ifBlank { n.text }
+            if (body.isNotBlank()) listOf(HubChatMessage(n.title, body, n.postTime)) else emptyList()
+        }
+        return LockedChatThread(
+            key = n.key,
+            packageName = n.packageName,
+            appName = n.appName,
+            contactName = n.title.ifBlank { n.appName },
+            messages = msgs,
+            canReplyInline = n.canReplyInline,
+            supportsMediaReply = n.supportsMediaReply,
+            lastTimestamp = n.postTime,
+            timeFormatted = n.timeFormatted,
+            appIcon = n.appIcon
+        )
+    }
+
+    fun openLockedChat(thread: LockedChatThread) {
+        _lockedChatThread.value = thread
+        _isWriterModeOpen.value = false
+        _activeTab.value = MainTab.HOME
+    }
+
+    fun openLockedChatInMessenger(thread: LockedChatThread) {
+        if (!NotificationHubRepository.openChatThreadInMessenger(getApplication(), thread)) {
+            if (!NotificationHubRepository.isSmsPackage(thread.packageName)) {
+                launchPackage(thread.packageName)
+            } else {
+                showToast("Не удалось открыть чат в ${thread.appName}")
+            }
+        }
+    }
+
+    fun closeLockedChat() {
+        _lockedChatThread.value = null
+    }
+
+    fun replyLockedChat(
+        text: String,
+        attachmentUri: Uri? = null,
+        attachmentMimeType: String? = null
+    ): Boolean {
+        val active = _lockedChatThread.value ?: return false
+        val isContactSms = active.key.startsWith("contact:") ||
+            NotificationHubRepository.isSmsPackage(active.packageName)
+        if (isContactSms && !active.fallbackPhoneNumber.isNullOrBlank()) {
+            val smsIntent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${active.fallbackPhoneNumber}")).apply {
+                if (text.isNotBlank()) putExtra("sms_body", text)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            return runCatching {
+                getApplication<Application>().startActivity(smsIntent)
+                showToast("Открыто SMS для ${active.contactName}")
+                true
+            }.getOrDefault(false)
+        }
+        if (active.canReplyInline && !active.key.startsWith("archive:")) {
+            val ok = replyToHubNotification(active.key, text, attachmentUri, attachmentMimeType)
+            if (ok && text.isNotBlank()) {
+                val newMsg = HubChatMessage(
+                    sender = "Вы",
+                    text = text,
+                    timestamp = System.currentTimeMillis()
+                )
+                _lockedChatThread.value = active.copy(messages = (active.messages + newMsg).takeLast(12))
+            }
+            if (ok) return true
+        }
+        val openedMessenger = NotificationHubRepository.openChatThreadInMessenger(
+            context = getApplication(),
+            thread = active,
+            messageText = text
+        )
+        if (openedMessenger) {
+            showToast("Открыто в ${active.appName}")
+        } else {
+            showToast("Откройте чат в ${active.appName} для ответа")
+        }
+        return openedMessenger
+    }
+
+    // 2D Multi-Workspace Separate Space
+    fun openWorkspaceSpace() {
+        _isWriterModeOpen.value = false
+        _activeTab.value = MainTab.HOME
+        _showWorkspaceSpace.value = true
+    }
+
+    fun closeWorkspaceSpace() {
+        _showWorkspaceSpace.value = false
+        KeyDeckAccessibilityService.hideDockedWorkspaceBar()
+    }
+
+    fun swipeToWorkspaceSpace() {
+        _isWriterModeOpen.value = false
+        _activeTab.value = MainTab.HOME
+        _showWorkspaceSpace.value = true
+        val current = uiState.value.workspaceGrid
+        if (current.isOnHome) {
+            val existingNonHome = current.cells.firstOrNull { !it.isHome }
+            if (existingNonHome != null) {
+                viewModelScope.launch {
+                    prefsRepo.saveWorkspaceGridState(
+                        current.copy(activeX = existingNonHome.x, activeY = existingNonHome.y)
+                    )
+                }
+            } else {
+                navigateWorkspace(+1, 0)
+            }
+        }
+    }
+
+    fun navigateWorkspace(dx: Int, dy: Int) {
+        if (dx == 0 && dy == 0) return
+        _showWorkspaceSpace.value = true
+        viewModelScope.launch {
+            val current = uiState.value.workspaceGrid
+            val tx = current.activeX + dx
+            val ty = current.activeY + dy
+            val exists = current.cells.any { it.x == tx && it.y == ty }
+            val nextCells = if (exists) current.cells else current.cells + WorkspaceCell(tx, ty)
+            val nextState = current.copy(cells = nextCells, activeX = tx, activeY = ty)
+            prefsRepo.saveWorkspaceGridState(nextState)
+            _workspaceActionFeedback.value = if (tx == 0 && ty == 0) {
+                "Главный рабочий стол (0, 0)"
+            } else {
+                "Рабочий стол ($tx, $ty)"
+            }
+        }
+    }
+
+    fun createWorkspaceWithApp(app: AppEntry, dx: Int = 1, dy: Int = 0) {
+        viewModelScope.launch {
+            val current = uiState.value.workspaceGrid
+            var step = 1
+            var targetX = current.activeX + dx
+            var targetY = current.activeY + dy
+            while (current.cells.any { it.x == targetX && it.y == targetY } || (targetX == 0 && targetY == 0)) {
+                step++
+                targetX = current.activeX + dx * step
+                targetY = current.activeY + dy * step
+            }
+            val newCell = WorkspaceCell(
+                x = targetX,
+                y = targetY,
+                packageName = app.packageName,
+                activityName = app.activityName,
+                label = app.label
+            )
+            val nextState = current.copy(
+                cells = current.cells + newCell,
+                activeX = targetX,
+                activeY = targetY
+            )
+            prefsRepo.saveWorkspaceGridState(nextState)
+            _contextMenuApp.value = null
+            _isWriterModeOpen.value = false
+            _activeTab.value = MainTab.HOME
+            _appSearchQuery.value = ""
+            _showWorkspaceSpace.value = true
+            showToast("Стол ($targetX, $targetY): ${app.label}")
+        }
+    }
+
+    fun assignAppToCurrentWorkspace(app: AppEntry) {
+        viewModelScope.launch {
+            val current = uiState.value.workspaceGrid
+            if (current.isOnHome) return@launch
+            val updatedCells = current.cells.filterNot { it.x == current.activeX && it.y == current.activeY } +
+                WorkspaceCell(
+                    x = current.activeX,
+                    y = current.activeY,
+                    packageName = app.packageName,
+                    activityName = app.activityName,
+                    label = app.label
+                )
+            prefsRepo.saveWorkspaceGridState(current.copy(cells = updatedCells))
+            showToast("Назначено на стол (${current.activeX}, ${current.activeY}): ${app.label}")
+        }
+    }
+
+    fun deleteWorkspace(x: Int = uiState.value.workspaceGrid.activeX, y: Int = uiState.value.workspaceGrid.activeY) {
+        if (x == 0 && y == 0) {
+            showToast("Главный стол (0, 0) удалить нельзя")
+            return
+        }
+        viewModelScope.launch {
+            val current = uiState.value.workspaceGrid
+            val remaining = current.cells.filterNot { it.x == x && it.y == y }
+            prefsRepo.saveWorkspaceGridState(
+                current.copy(cells = remaining, activeX = 0, activeY = 0)
+            )
+            _showWorkspaceSpace.value = false
+            KeyDeckAccessibilityService.hideDockedWorkspaceBar()
+            showToast("Рабочий стол ($x, $y) удалён")
+        }
+    }
+
+    fun openHomeWorkspace() {
+        _showWorkspaceSpace.value = false
+        KeyDeckAccessibilityService.hideDockedWorkspaceBar()
+        viewModelScope.launch {
+            val current = uiState.value.workspaceGrid
+            if (!current.isOnHome) {
+                prefsRepo.saveWorkspaceGridState(current.copy(activeX = 0, activeY = 0))
+            }
+        }
+    }
+
+    fun launchCurrentWorkspaceAppInBounds(bounds: Rect) {
+        val state = uiState.value
+        val cell = state.workspaceGrid.activeCell
+        val pkg = cell.packageName ?: return
+        val app = state.allApps.firstOrNull {
+            it.packageName == pkg && (cell.activityName == null || it.activityName == cell.activityName)
+        } ?: state.allApps.firstOrNull { it.packageName == pkg }
+
+        autoCloseManager.recordLaunchedPackage(pkg)
+        val wsTitle = "${cell.label ?: app?.label ?: "Стол"} (${cell.x},${cell.y})"
+        KeyDeckAccessibilityService.showDockedWorkspaceBar(wsTitle)
+
+        if (app != null) {
+            appsRepo.launchAppInBounds(app, bounds)
+        } else {
+            appsRepo.launchPackage(pkg)
+        }
+        val shizuku = state.shizukuState
+        if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
+            viewModelScope.launch {
+                shizukuBridge.launchAppInBoundsViaShizuku(
+                    packageName = pkg,
+                    activityName = app?.activityName ?: cell.activityName,
+                    left = bounds.left,
+                    top = bounds.top,
+                    right = bounds.right,
+                    bottom = bounds.bottom
+                )
             }
         }
     }
@@ -1330,8 +1965,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             prefsRepo.setInterceptLockScreenEnabled(target)
             showToast(
-                if (target) "Symbian-экран блокировки включён"
-                else "Symbian-экран блокировки выключен"
+                if (target) "Экран блокировки KeyDeck включён"
+                else "Экран блокировки KeyDeck выключен"
             )
         }
     }
@@ -1345,17 +1980,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun launchFocusedApp() {
         val list = uiState.value.filteredApps
-        val idx = _focusedAppIndex.value
-        val target = list.getOrNull(idx) ?: list.firstOrNull() ?: return
+        val target = list.getOrNull(_focusedAppIndex.value) ?: list.firstOrNull() ?: return
         launchApp(target)
     }
 
     fun launchApp(app: AppEntry) {
         autoCloseManager.recordLaunchedPackage(app.packageName)
-        val ok = appsRepo.launchApp(app)
-        if (!ok) {
-            showToast("Не удалось открыть ${app.label}")
-        }
+        if (!appsRepo.launchApp(app)) showToast("Не удалось открыть ${app.label}")
     }
 
     fun launchPackage(packageName: String) {
@@ -1366,8 +1997,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun togglePinApp(app: AppEntry) {
         viewModelScope.launch {
             prefsRepo.togglePinApp(app.id)
-            val msg = if (app.isPinned) "${app.label} убран из избранного" else "${app.label} добавлен в избранное"
-            showToast(msg)
+            showToast(if (app.isPinned) "${app.label} убран из избранного" else "${app.label} добавлен в избранное")
         }
     }
 
@@ -1431,10 +2061,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppIconSymbian(app: AppEntry, symbianKey: String) {
         _iconPickerTargetApp.value = null
         viewModelScope.launch {
-            prefsRepo.setAppIconOverride(
-                app.id,
-                AppIconOverride(mode = AppIconMode.SYMBIAN, symbianKey = symbianKey)
-            )
+            prefsRepo.setAppIconOverride(app.id, AppIconOverride(mode = AppIconMode.SYMBIAN, symbianKey = symbianKey))
             showToast("Установлена иконка Symbian для «${app.label}»")
         }
     }
@@ -1442,12 +2069,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppIconCustomFromUri(app: AppEntry, sourceUri: Uri) {
         _iconPickerTargetApp.value = null
         viewModelScope.launch {
-            val res = appsRepo.importCustomAppIcon(app.id, sourceUri)
-            res.onSuccess { path ->
-                prefsRepo.setAppIconOverride(
-                    app.id,
-                    AppIconOverride(mode = AppIconMode.CUSTOM, customFilePath = path)
-                )
+            appsRepo.importCustomAppIcon(app.id, sourceUri).onSuccess { path ->
+                prefsRepo.setAppIconOverride(app.id, AppIconOverride(mode = AppIconMode.CUSTOM, customFilePath = path))
                 showToast("Своя иконка установлена для «${app.label}»")
             }.onFailure { err ->
                 showToast(err.message ?: "Не удалось загрузить изображение")
@@ -1461,8 +2084,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _contextMenuApp.value = null
         showToast("Подготовка APK: ${app.label}…")
         viewModelScope.launch {
-            val result = appsRepo.shareAppAsApk(app)
-            result.onFailure { err ->
+            appsRepo.shareAppAsApk(app).onFailure { err ->
                 showToast(err.message ?: "Не удалось поделиться APK")
             }
         }
@@ -1474,8 +2096,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _contextMenuApp.value = null
         showToast("Сохранение APK: ${app.label}…")
         viewModelScope.launch {
-            val result = appsRepo.saveAppApkToUri(app, destUri)
-            result.onSuccess {
+            appsRepo.saveAppApkToUri(app, destUri).onSuccess {
                 showToast("APK сохранён: ${app.originalLabel}.apk")
             }.onFailure { err ->
                 showToast(err.message ?: "Не удалось сохранить APK")
@@ -1491,17 +2112,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun uninstallApp(app: AppEntry) {
         _contextMenuApp.value = null
         if (appsRepo.canBeUninstalled(app.packageName)) {
-            if (!appsRepo.uninstallApp(app.packageName)) {
-                showToast("Не удалось открыть системное окно удаления")
-            }
+            if (!appsRepo.uninstallApp(app.packageName)) showToast("Не удалось открыть системное окно удаления")
             return
         }
         val state = uiState.value.shizukuState
         val hasPrivileged = (state.isBinderAlive && state.isPermissionGranted) || state.isRootAvailable
         if (hasPrivileged) {
             viewModelScope.launch {
-                val res = appsRepo.uninstallPackagePrivileged(app.packageName, shizukuBridge)
-                res.onSuccess {
+                appsRepo.uninstallPackagePrivileged(app.packageName, shizukuBridge).onSuccess {
                     showToast("Удалено через Shizuku/Root: ${app.label}")
                     refreshInstalledApps()
                 }.onFailure {
@@ -1519,19 +2137,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         uiState.value.allApps
             .filter { AutoCloseManager.isHeuristicOneTimeApp(it.packageName, it.originalLabel) }
             .forEach { autoCloseManager.recordLaunchedPackage(it.packageName) }
-        val ok = appsRepo.launchCamera()
-        if (!ok) {
-            showToast("Камера не найдена на устройстве")
-        }
+        if (!appsRepo.launchCamera()) showToast("Камера не найдена на устройстве")
     }
 
     fun expandNotificationShade() {
-        if (uiState.value.shizukuState.interceptShadeEnabled) {
+        val shizuku = uiState.value.shizukuState
+        if (shizuku.interceptShadeEnabled) {
+            val svc = KeyDeckAccessibilityService.getInstance()
+            if (svc != null) {
+                svc.showVistaShadeOverlay()
+                viewModelScope.launch {
+                    if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
+                        shizukuBridge.collapseSystemShadeViaShizuku()
+                    }
+                }
+                return
+            }
+            if (_activeTab.value == MainTab.HUB && !_isWriterModeOpen.value) {
+                _activeTab.value = MainTab.HOME
+                return
+            }
             _isWriterModeOpen.value = false
             _activeTab.value = MainTab.HUB
             _hubSubTab.value = HubSubTab.CHATS
             viewModelScope.launch {
-                if (uiState.value.shizukuState.isBinderAlive && uiState.value.shizukuState.isPermissionGranted) {
+                if (shizuku.isBinderAlive && shizuku.isPermissionGranted) {
                     shizukuBridge.collapseSystemShadeViaShizuku()
                 }
             }
@@ -1548,14 +2178,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             .forEach { autoCloseManager.recordLaunchedPackage(it.packageName) }
         val trimmed = numberOrQuery.trim()
         if (trimmed.isEmpty()) {
-            val topLog = uiState.value.callLogs.firstOrNull()
-            val topContact = uiState.value.contacts.firstOrNull()
-            val fallback = topLog?.number ?: topContact?.number.orEmpty()
-            if (fallback.isNotEmpty()) {
-                callsRepo.placeCall(fallback)
-            } else {
-                showToast("Введите номер или выберите контакт")
-            }
+            val fallback = uiState.value.callLogs.firstOrNull()?.number
+                ?: uiState.value.contacts.firstOrNull()?.number.orEmpty()
+            if (fallback.isNotEmpty()) callsRepo.placeCall(fallback)
+            else showToast("Введите номер или выберите контакт")
             return
         }
         val firstContactMatch = uiState.value.contacts.firstOrNull {
@@ -1566,28 +2192,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         } else {
             firstContactMatch?.number ?: trimmed
         }
-        if (!callsRepo.placeCall(dialTarget)) {
-            showToast("Не удалось совершить вызов")
-        }
+        if (!callsRepo.placeCall(dialTarget)) showToast("Не удалось совершить вызов")
     }
 
-    fun openAddContact() {
-        callsRepo.openAddContact(_callsSearchQuery.value)
-    }
+    fun openAddContact() = callsRepo.openAddContact(_callsSearchQuery.value)
 
     fun openUrl(url: String) {
-        if (!appsRepo.openUrl(url)) {
-            showToast("Не найден браузер для открытия ссылки")
-        }
+        if (!appsRepo.openUrl(url)) showToast("Не найден браузер для открытия ссылки")
     }
 
-    fun openDefaultLauncherSettings() {
-        appsRepo.openSystemSettings(Settings.ACTION_HOME_SETTINGS)
-    }
-
-    fun openSystemSettings(action: String) {
-        appsRepo.openSystemSettings(action)
-    }
+    fun openDefaultLauncherSettings() = appsRepo.openSystemSettings(Settings.ACTION_HOME_SETTINGS)
+    fun openSystemSettings(action: String) = appsRepo.openSystemSettings(action)
 
     fun setShowAddLinkDialog(show: Boolean) {
         _showAddLinkDialog.value = show
@@ -1603,12 +2218,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun removeHubQuickLink(id: String) {
+        viewModelScope.launch { prefsRepo.removeHubQuickLink(id) }
+    }
+
+    // Music Controls & Collapsible Mini-Player
+    fun setPlayerCollapsed(collapsed: Boolean) {
         viewModelScope.launch {
-            prefsRepo.removeHubQuickLink(id)
+            if (collapsed && _showMusicSheet.value) _showMusicSheet.value = false
+            prefsRepo.setPlayerCollapsed(collapsed)
         }
     }
 
-    // Music Controls & Swipe Source Switching across all active sessions + music-capable apps
+    fun togglePlayerCollapsed() = setPlayerCollapsed(!uiState.value.isPlayerCollapsed)
+
     fun togglePlayPause() = mediaRepo.togglePlayPause()
     fun skipNext() = mediaRepo.skipNext()
     fun skipPrevious() = mediaRepo.skipPrevious()
@@ -1621,14 +2243,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val sessions = state.mediaState.sessions
         if (sessions.size > 1) {
             mediaRepo.cycleSession(direction)
-            val updated = mediaRepo.mediaState.value.activeSession
-            if (updated != null) {
-                showToast("Плеер: ${updated.appLabel}")
-            }
+            mediaRepo.mediaState.value.activeSession?.let { showToast("Плеер: ${it.appLabel}") }
             return
         }
-
-        // Fallback when <= 1 active session: cycle through installed music-capable apps
         val musicApps = state.musicApps
         val candidates = if (sessions.size == 1) {
             val activePkg = sessions.first().packageName
@@ -1647,18 +2264,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         launchApp(targetApp)
     }
 
-    fun cycleMediaSession() {
-        swipeMusicSource(+1)
-    }
+    fun cycleMediaSession() = swipeMusicSource(+1)
 
     fun openActivePlayer() {
         if (!mediaRepo.openActivePlayer()) {
             val firstMusicApp = uiState.value.musicApps.firstOrNull()
-            if (firstMusicApp != null) {
-                launchApp(firstMusicApp)
-            } else {
-                showToast("Музыкальный плеер не найден")
-            }
+            if (firstMusicApp != null) launchApp(firstMusicApp)
+            else showToast("Музыкальный плеер не найден")
         }
     }
 
@@ -1676,23 +2288,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _musicDrawerTab.value = tab
     }
 
-    fun skipToQueueItem(queueId: Long) {
-        mediaRepo.skipToQueueItem(queueId)
-    }
-
-    fun invokeMediaCustomAction(action: String) {
-        mediaRepo.invokeCustomAction(action)
-    }
+    fun skipToQueueItem(queueId: Long) = mediaRepo.skipToQueueItem(queueId)
+    fun invokeMediaCustomAction(action: String) = mediaRepo.invokeCustomAction(action)
 
     fun playBrowserTrack(track: MediaBrowserTrack) {
-        if (!mediaRepo.playBrowserTrack(track)) {
-            showToast("Не удалось запустить «${track.title}»")
-        }
+        if (!mediaRepo.playBrowserTrack(track)) showToast("Не удалось запустить «${track.title}»")
     }
 
     fun searchAndPlayInActiveStream(query: String, packageName: String? = null) {
         val targetQuery = query.trim()
         if (targetQuery.isEmpty()) return
+        viewModelScope.launch { prefsRepo.addStreamSearchHistory(targetQuery) }
         if (mediaRepo.playFromSearchInStream(targetQuery, packageName)) {
             showToast("Поиск в стриминге: «$targetQuery»")
         } else {
@@ -1701,27 +2307,48 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun connectBrowserForPackage(packageName: String?) {
-        mediaRepo.connectMediaBrowserForActiveOrPackage(packageName)
-    }
+    fun connectBrowserForPackage(packageName: String?) = mediaRepo.connectMediaBrowserForActiveOrPackage(packageName)
 
     fun playLocalAudioTrack(track: LocalAudioTrack) {
         mediaRepo.playLocalTrack(track)
         showToast("Воспроизведение: ${track.title}")
     }
 
+    fun deleteLocalAudioTrack(track: LocalAudioTrack) {
+        viewModelScope.launch {
+            val deleted = mediaRepo.deleteLocalTrack(track)
+            if (deleted) {
+                val refreshed = mediaRepo.localTracks.value
+                reconcileAllSmartAlbumsWithTracks(refreshed)
+            }
+            showToast(
+                if (deleted) "Файл удалён: ${track.title}"
+                else "Не удалось удалить «${track.title}» (ограничение доступа)"
+            )
+        }
+    }
+
+    fun deleteActiveTrackIfLocal() {
+        val currentId = uiState.value.mediaState.currentLocalTrackId
+        val localTrack = currentId?.let { id -> uiState.value.localAudioTracks.firstOrNull { it.id == id } }
+        if (localTrack != null) {
+            deleteLocalAudioTrack(localTrack)
+        } else {
+            showToast("Удаление файла доступно для локальных и скачанных треков")
+        }
+    }
+
     fun refreshLocalAudioTracks() {
         viewModelScope.launch {
-            mediaRepo.refreshLocalTracks()
+            val tracks = mediaRepo.refreshLocalTracks()
+            reconcileAllSmartAlbumsWithTracks(tracks)
             mediaRepo.connectMediaBrowserForActiveOrPackage(
                 mediaRepo.mediaState.value.activeSession?.packageName
             )
         }
     }
 
-    fun toggleMusicDrawer() {
-        setShowMusicSheet(!_showMusicSheet.value)
-    }
+    fun toggleMusicDrawer() = setShowMusicSheet(!_showMusicSheet.value)
 
     fun setShowMusicSheet(show: Boolean) {
         _showMusicSheet.value = show
@@ -1731,314 +2358,609 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Appearance, Wallpaper & Vista Theme
-    fun setShowAppearanceDialog(show: Boolean) {
-        _showAppearanceDialog.value = show
+    fun expandMusicStep() {
+        val state = uiState.value
+        when {
+            state.isPlayerCollapsed -> setPlayerCollapsed(false)
+            !state.showMusicSheet -> setShowMusicSheet(true)
+            else -> openFullPowerampPlayer(PowerampTab.PLAYER)
+        }
     }
 
-    fun setUiThemeColor(color: UiThemeColor) {
+    fun openFullPowerampPlayer(tab: PowerampTab? = null) {
+        if (tab != null) _powerampTab.value = tab
+        _showMusicSheet.value = false
+        _showFullPowerampPlayer.value = true
+        mediaRepo.refreshListenerStatusAndSessions()
+        refreshStorageAndAudioAccess()
+        loadLyricsForCurrentTrack(forceRefresh = false)
+    }
+
+    fun closeFullPowerampPlayer() {
+        _showFullPowerampPlayer.value = false
+        _sourcePickerTarget.value = null to false
+    }
+
+    fun selectPowerampTab(tab: PowerampTab) {
+        _powerampTab.value = tab
+        if (tab == PowerampTab.LYRICS && _currentLyrics.value == null) {
+            loadLyricsForCurrentTrack(forceRefresh = false)
+        }
+    }
+
+    fun setMusicSourceMode(mode: SourceSelectionMode) {
         viewModelScope.launch {
-            prefsRepo.setUiThemeColor(color)
-            showToast("Цвет интерфейса: ${color.title}")
+            prefsRepo.setMusicSourceMode(mode)
+            showToast("Выбор источника: ${mode.title}")
         }
     }
 
-    fun setWallpaperFromUri(uri: Uri) {
-        viewModelScope.launch {
-            val res = WallpaperThemeHelper.importWallpaperFromUri(getApplication(), uri)
-            res.onSuccess { path ->
-                prefsRepo.setWallpaperPath(path)
-                _wallpaperState.value = WallpaperThemeHelper.loadWallpaperAndPalette(path)
-                showToast("Обои применены • Включён стеклянный режим Aero")
-            }.onFailure { err ->
-                showToast(err.message ?: "Не удалось установить обои")
-            }
+    fun toggleMusicSourceMode() {
+        val next = if (uiState.value.sourceSelectionMode == SourceSelectionMode.AUTO) {
+            SourceSelectionMode.PICK
+        } else {
+            SourceSelectionMode.AUTO
         }
+        setMusicSourceMode(next)
     }
 
-    fun clearWallpaper() {
-        viewModelScope.launch {
-            val oldPath = prefsRepo.wallpaperPath.first()
-            prefsRepo.setWallpaperPath(null)
-            WallpaperThemeHelper.deleteWallpaperFile(oldPath)
-            _wallpaperState.value = null to null
-            showToast("Обои убраны • Классический непрозрачный вид")
-        }
+    fun openSourcePicker(result: UnifiedMusicSearchResult?, forDownload: Boolean = false) {
+        _sourcePickerTarget.value = result to forDownload
     }
 
-    // One-Time Auto-Close Apps Settings
-    fun setShowAutoKillDialog(show: Boolean) {
-        _showAutoKillDialog.value = show
-    }
-
-    fun toggleAutoKillEnabled() {
-        val next = !uiState.value.autoKillEnabled
-        viewModelScope.launch {
-            prefsRepo.setAutoKillEnabled(next)
-            showToast(
-                if (next) "Автозавершение одноразовых приложений включено"
-                else "Автозавершение одноразовых приложений выключено"
-            )
-        }
-    }
-
-    fun toggleAutoKillPackage(packageName: String) {
-        viewModelScope.launch {
-            val existed = uiState.value.autoKillPackages.contains(packageName)
-            prefsRepo.toggleAutoKillPackage(packageName)
-            showToast(
-                if (existed) "Убрано из автозавершения"
-                else "Добавлено в одноразовые (будет закрываться при выходе)"
-            )
-        }
-    }
-
-    // Android Optimization, Background Playback Spoofing & App UI Adaptation
-    fun setShowOptimizationDialog(show: Boolean) {
-        _showOptimizationDialog.value = show
-        if (show) {
-            refreshOptimizationStats()
-            shizukuBridge.refreshStatus()
-        }
-    }
-
-    fun setShowAdaptationDialog(show: Boolean) {
-        _showAdaptationDialog.value = show
-        if (show) {
-            shizukuBridge.refreshStatus()
-        }
-    }
-
-    fun setShowBackgroundWebAudioDialog(show: Boolean) {
-        _showBackgroundWebAudioDialog.value = show
-        if (show) {
-            BackgroundMediaGuardService.syncServiceState(getApplication(), true)
-        } else if (!uiState.value.backgroundSpoofEnabled) {
-            BackgroundMediaGuardService.syncServiceState(getApplication(), false)
-        }
-    }
-
-    fun refreshOptimizationStats() {
-        val prev = _optimizationStats.value
-        _optimizationStats.value = optimizerManager.readRamStats(
-            phantomPatched = prev.phantomKillerPatched,
-            lastSummary = prev.lastCleanupSummary
-        )
-    }
-
-    fun optimizeAndroidSystem() {
-        viewModelScope.launch {
-            val state = uiState.value
-            val protected = buildSet {
-                addAll(state.backgroundSpoofPackages)
-                addAll(state.mediaState.sessions.filter { it.isPlaying }.map { it.packageName })
-            }
-            val updated = optimizerManager.optimizeMemoryAndProcesses(
-                allApps = state.allApps,
-                protectedPackages = protected
-            )
-            _optimizationStats.value = updated
-            showToast(updated.lastCleanupSummary ?: "Система оптимизирована")
-        }
-    }
-
-    fun disablePhantomKillerViaShizuku() {
-        viewModelScope.launch {
-            val res = optimizerManager.disablePhantomProcessKillerViaShizuku()
-            res.onSuccess {
-                _optimizationStats.value = _optimizationStats.value.copy(
-                    phantomKillerPatched = true,
-                    lastCleanupSummary = "Phantom Process Killer отключён через Shizuku"
-                )
-                showToast("Phantom Process Killer отключён")
-            }.onFailure { err ->
-                showToast(err.message ?: "Нужно разрешение Shizuku")
-            }
-        }
-    }
-
-    fun boostAppForBackgroundViaShizuku(packageName: String) {
-        viewModelScope.launch {
-            val res = optimizerManager.boostAppAndProtectFromDoze(packageName)
-            res.onSuccess {
-                showToast("Фоновый звук и Doze-защита выданы для $packageName")
-            }.onFailure { err ->
-                showToast(err.message ?: "Не удалось применить через Shizuku")
-            }
-        }
-    }
-
-    fun toggleBackgroundSpoofEnabled() {
-        val next = !uiState.value.backgroundSpoofEnabled
-        viewModelScope.launch {
-            prefsRepo.setBackgroundSpoofEnabled(next)
-            showToast(
-                if (next) "Фоновый обход паузы включён"
-                else "Фоновый обход паузы отключён"
-            )
-        }
-    }
-
-    fun toggleBackgroundSpoofPackage(packageName: String) {
-        viewModelScope.launch {
-            val existed = uiState.value.backgroundSpoofPackages.contains(packageName)
-            prefsRepo.toggleBackgroundSpoofPackage(packageName)
-            if (!existed && !uiState.value.backgroundSpoofEnabled) {
-                prefsRepo.setBackgroundSpoofEnabled(true)
-            }
-            showToast(
-                if (existed) "Убрано из фонового обхода"
-                else "Добавлено в фоновый обход паузы"
-            )
-        }
-    }
-
-    fun toggleCurrentSessionBackgroundSpoof() {
-        val pkg = uiState.value.mediaState.activeSession?.packageName
-        if (pkg.isNullOrBlank() || pkg == getApplication<Application>().packageName) {
-            toggleBackgroundSpoofEnabled()
+    fun searchMusicEverywhere(query: String) {
+        _unifiedMusicQuery.value = query
+        onlineMusicSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            _unifiedMusicResults.value = emptyList()
+            _isSearchingMusicOnline.value = false
             return
         }
-        toggleBackgroundSpoofPackage(pkg)
+        onlineMusicSearchJob = viewModelScope.launch {
+            _isSearchingMusicOnline.value = true
+            delay(220L)
+            val state = uiState.value
+            val found = MusicCatalogAndLyricsRepository.searchAllSources(
+                query = trimmed,
+                localTracks = state.localAudioTracks,
+                mediaState = state.mediaState,
+                installedMusicApps = state.musicApps
+            )
+            _unifiedMusicResults.value = found
+            _isSearchingMusicOnline.value = false
+        }
     }
 
-    fun toggleAppAdaptationEnabled() {
-        val next = !uiState.value.appAdaptationEnabled
+    fun handleUnifiedTrackAction(result: UnifiedMusicSearchResult, downloadAction: Boolean) {
+        val mode = uiState.value.sourceSelectionMode
+        if (mode == SourceSelectionMode.PICK && result.hasMultipleSources) {
+            openSourcePicker(result, forDownload = downloadAction)
+            return
+        }
+        val best = result.primaryCandidate
+        if (downloadAction) {
+            viewModelScope.launch {
+                val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
+                    context = getApplication(),
+                    title = result.title,
+                    artist = result.artist,
+                    candidates = result.candidates,
+                    installedMusicApps = uiState.value.musicApps
+                )
+                handleDownloadOutcome(outcome, albumId = null)
+            }
+        } else if (best != null) {
+            playTrackSourceCandidate(best)
+        }
+    }
+
+    fun playTrackSourceCandidate(candidate: TrackSourceCandidate) {
+        _sourcePickerTarget.value = null to false
+        when {
+            candidate.localTrack != null -> playLocalAudioTrack(candidate.localTrack)
+            candidate.queueItemId != null && !candidate.packageName.isNullOrBlank() -> {
+                val targetSession = uiState.value.mediaState.sessions.firstOrNull { it.packageName == candidate.packageName }
+                if (targetSession != null) {
+                    mediaRepo.selectSession(targetSession.id)
+                    mediaRepo.skipToQueueItem(candidate.queueItemId)
+                } else {
+                    searchAndPlayInActiveStream(candidate.title, candidate.packageName)
+                }
+            }
+            candidate.mediaBrowserTrack != null -> playBrowserTrack(candidate.mediaBrowserTrack)
+            candidate.sourceKind == MusicSourceKind.STREAMING_PAID && !candidate.packageName.isNullOrBlank() -> {
+                val query = listOf(candidate.artist, candidate.title).filter { it.isNotBlank() }.joinToString(" ")
+                if (!mediaRepo.playFromSearchInStream(query, candidate.packageName)) {
+                    launchPackage(candidate.packageName)
+                    showToast("Открыт ${candidate.sourceLabel}: «$query»")
+                } else {
+                    showToast("Запуск в ${candidate.sourceLabel}: «${candidate.title}»")
+                }
+            }
+            !candidate.downloadUrl.isNullOrBlank() -> {
+                downloadTrackSourceCandidate(candidate, autoPlay = true)
+            }
+            else -> searchAndPlayInActiveStream(candidate.title, candidate.packageName)
+        }
+    }
+
+    fun downloadTrackSourceCandidate(
+        candidate: TrackSourceCandidate,
+        autoPlay: Boolean = false,
+        attachToAlbumId: String? = null
+    ) {
+        _sourcePickerTarget.value = null to false
         viewModelScope.launch {
-            prefsRepo.setAppAdaptationEnabled(next)
-            showToast(
-                if (next) "Адаптация интерфейса приложений включена"
-                else "Адаптация интерфейса приложений выключена"
+            if (candidate.sourceKind == MusicSourceKind.STREAMING_PAID && !candidate.packageName.isNullOrBlank()) {
+                requestStreamCaptureForTrack(
+                    title = candidate.title,
+                    artist = candidate.artist,
+                    packageName = candidate.packageName,
+                    appLabel = candidate.sourceLabel,
+                    albumId = attachToAlbumId
+                )
+                return@launch
+            }
+            if (candidate.localTrack != null) {
+                if (autoPlay) playLocalAudioTrack(candidate.localTrack)
+                else showToast("Трек уже на устройстве: ${candidate.localTrack.title}")
+                return@launch
+            }
+            showToast("Скачивание ${candidate.formatBadge}: ${candidate.title}…")
+            val saved = MusicCatalogAndLyricsRepository.downloadDirectCandidate(getApplication(), candidate)
+            if (saved != null) {
+                val tracks = mediaRepo.refreshLocalTracks()
+                val syncedSaved = tracks.firstOrNull { it.filePath == saved.filePath } ?: saved
+                if (attachToAlbumId != null) {
+                    attachLocalTracksToAlbum(attachToAlbumId, listOf(syncedSaved.id))
+                }
+                if (autoPlay) playLocalAudioTrack(syncedSaved)
+                else showToast("Скачано (${candidate.formatBadge}): ${syncedSaved.title}")
+            } else {
+                showToast("Источник не отдал файл, пробуем резервный поиск…")
+                val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
+                    context = getApplication(),
+                    title = candidate.title,
+                    artist = candidate.artist,
+                    candidates = listOf(candidate),
+                    installedMusicApps = uiState.value.musicApps
+                )
+                handleDownloadOutcome(outcome, albumId = attachToAlbumId)
+            }
+        }
+    }
+
+    private suspend fun handleDownloadOutcome(outcome: DownloadOutcome, albumId: String?) {
+        when (outcome) {
+            is DownloadOutcome.DownloadedFile -> {
+                val tracks = mediaRepo.refreshLocalTracks()
+                val matched = tracks.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
+                if (albumId != null) {
+                    attachLocalTracksToAlbum(albumId, listOf(matched.id))
+                }
+                showToast(outcome.message)
+            }
+            is DownloadOutcome.NeedsStreamingCapture -> {
+                requestStreamCaptureForTrack(
+                    title = outcome.title,
+                    artist = outcome.artist,
+                    packageName = outcome.packageName,
+                    appLabel = outcome.appLabel,
+                    albumId = albumId
+                )
+            }
+            is DownloadOutcome.Failed -> showToast(outcome.reason)
+        }
+    }
+
+    fun requestStreamCaptureForTrack(
+        title: String,
+        artist: String,
+        packageName: String,
+        appLabel: String,
+        albumId: String? = null
+    ) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            showToast("Захват звука стриминга доступен с Android 10+")
+            return
+        }
+        _pendingStreamCaptureRequest.value = PendingStreamCaptureRequest(
+            title = title,
+            artist = artist,
+            packageName = packageName,
+            appLabel = appLabel,
+            targetAlbumId = albumId
+        )
+    }
+
+    fun clearPendingStreamCaptureRequest() {
+        _pendingStreamCaptureRequest.value = null
+    }
+
+    fun onMediaProjectionResult(resultCode: Int, data: Intent?) {
+        val req = _pendingStreamCaptureRequest.value
+        _pendingStreamCaptureRequest.value = null
+        if (req == null) return
+        if (resultCode != android.app.Activity.RESULT_OK || data == null) {
+            showToast("Захват потока отменён")
+            return
+        }
+        StreamAudioCaptureService.startCapture(
+            context = getApplication(),
+            resultCode = resultCode,
+            data = data,
+            title = req.title,
+            artist = req.artist,
+            packageName = req.packageName,
+            targetAlbumId = req.targetAlbumId
+        )
+        val searchQ = listOf(req.artist, req.title).filter { it.isNotBlank() }.joinToString(" ")
+        if (!mediaRepo.playFromSearchInStream(searchQ, req.packageName)) {
+            if (req.packageName.isNotBlank()) launchPackage(req.packageName)
+        }
+        showToast("Идёт захват ${req.appLabel} → WAV: «${req.title}»")
+    }
+
+    fun stopStreamCapture() {
+        StreamAudioCaptureService.stopCapture(getApplication())
+        showToast("Захват потока остановлен, сохраняем WAV…")
+    }
+
+    // Synced LRC Lyrics + In-App Editor
+    fun loadLyricsForCurrentTrack(forceRefresh: Boolean = false) {
+        val session = uiState.value.mediaState.activeSession ?: return
+        if (session.title.isBlank() || session.title == session.appLabel) return
+        val key = MusicCatalogAndLyricsRepository.buildTrackKey(session.title, session.artist)
+        val localTrack = uiState.value.mediaState.currentLocalTrackId?.let { id ->
+            uiState.value.localAudioTracks.firstOrNull { it.id == id }
+        }
+
+        lyricsFetchJob?.cancel()
+        lyricsFetchJob = viewModelScope.launch {
+            _isFetchingLyrics.value = true
+            val overrides = runCatching { prefsRepo.lyricsOverrides.first() }.getOrDefault(emptyMap())
+            val saved = overrides[key]
+            if (!forceRefresh && saved != null) {
+                _currentLyrics.value = if (saved.isDeleted) null else saved
+                _isFetchingLyrics.value = false
+                return@launch
+            }
+            val fetched = MusicCatalogAndLyricsRepository.fetchSyncedLyrics(
+                title = session.title,
+                artist = session.artist,
+                durationMs = session.durationMs,
+                localFilePath = localTrack?.filePath
+            )
+            _currentLyrics.value = fetched
+            _isFetchingLyrics.value = false
+        }
+    }
+
+    fun saveEditedLyrics(rawLrcOrText: String) {
+        val session = uiState.value.mediaState.activeSession ?: return
+        val key = MusicCatalogAndLyricsRepository.buildTrackKey(session.title, session.artist)
+        val trimmed = rawLrcOrText.trim()
+        val parsed = MusicCatalogAndLyricsRepository.parseLrc(trimmed)
+        val plain = if (parsed.isNotEmpty()) parsed.joinToString("\n") { it.text } else trimmed
+        val entry = TrackLyricsData(
+            trackKey = key,
+            title = session.title,
+            artist = session.artist,
+            syncedLines = parsed,
+            plainText = plain,
+            rawLrc = trimmed,
+            sourceLabel = "Редактор KeyDeck",
+            isDeleted = false,
+            isCustomEdited = true
+        )
+        _currentLyrics.value = entry
+        val localTrack = uiState.value.mediaState.currentLocalTrackId?.let { id ->
+            uiState.value.localAudioTracks.firstOrNull { it.id == id }
+        }
+        viewModelScope.launch {
+            prefsRepo.saveLyricsOverride(entry)
+            if (localTrack?.filePath != null && trimmed.isNotEmpty()) {
+                MusicCatalogAndLyricsRepository.saveSidecarLrc(localTrack.filePath, trimmed)
+            }
+            showToast(if (parsed.isNotEmpty()) "Синхронный текст (.lrc) сохранён" else "Текст трека сохранён")
+        }
+    }
+
+    fun deleteCurrentLyrics() {
+        val session = uiState.value.mediaState.activeSession ?: return
+        val key = MusicCatalogAndLyricsRepository.buildTrackKey(session.title, session.artist)
+        val localTrack = uiState.value.mediaState.currentLocalTrackId?.let { id ->
+            uiState.value.localAudioTracks.firstOrNull { it.id == id }
+        }
+        _currentLyrics.value = null
+        viewModelScope.launch {
+            MusicCatalogAndLyricsRepository.deleteSidecarLrc(localTrack?.filePath)
+            prefsRepo.saveLyricsOverride(
+                TrackLyricsData(
+                    trackKey = key,
+                    title = session.title,
+                    artist = session.artist,
+                    isDeleted = true
+                )
+            )
+            showToast("Текст трека удалён")
+        }
+    }
+
+    fun autoPickLyricsAgain() {
+        loadLyricsForCurrentTrack(forceRefresh = true)
+        showToast("Повторный автопоиск текста…")
+    }
+
+    // Poweramp DSP Equalizer & Playback Controls
+    private fun persistEqualizerState() {
+        val eq = mediaRepo.dspController.state.value
+        viewModelScope.launch {
+            prefsRepo.saveEqualizerConfig(
+                LauncherPreferencesRepository.SavedEqualizerConfig(
+                    enabled = eq.enabled,
+                    preset = eq.preset,
+                    bandsMb = eq.bands.map { it.levelMb },
+                    bassBoost = eq.bassBoostStrength,
+                    virtualizer = eq.virtualizerStrength
+                )
             )
         }
     }
 
-    fun setAppAdaptationMode(packageName: String, mode: AppAdaptationMode) {
-        viewModelScope.launch {
-            prefsRepo.setAppAdaptationMode(packageName, mode)
-            if (mode != AppAdaptationMode.DISABLED && !uiState.value.appAdaptationEnabled) {
-                prefsRepo.setAppAdaptationEnabled(true)
-            }
-            showToast("Адаптация: ${mode.title}")
-        }
+    fun setEqualizerEnabled(enabled: Boolean) {
+        mediaRepo.dspController.setEnabled(enabled)
+        persistEqualizerState()
     }
 
-    fun cycleAppAdaptationMode(packageName: String) {
-        val cur = uiState.value.appAdaptationModes[packageName] ?: AppAdaptationMode.DISABLED
-        val next = when (cur) {
-            AppAdaptationMode.DISABLED -> AppAdaptationMode.STANDARD
-            AppAdaptationMode.STANDARD -> AppAdaptationMode.MESSENGER
-            AppAdaptationMode.MESSENGER -> AppAdaptationMode.DISABLED
-        }
-        setAppAdaptationMode(packageName, next)
+    fun applyEqualizerPreset(preset: EqualizerPreset) {
+        mediaRepo.dspController.applyPreset(preset)
+        persistEqualizerState()
+        showToast("Эквалайзер: ${preset.title}")
     }
 
-    fun grantOverlayAndAccessibilityViaShizuku() {
-        viewModelScope.launch {
-            val res = shizukuBridge.grantOverlayAndAccessibilityViaShizuku()
-            res.onSuccess {
-                showToast("Спец. возможности и Поверх окон включены через Shizuku")
-            }.onFailure { err ->
-                showToast(err.message ?: "Запустите Shizuku и повторите")
-            }
-        }
+    fun setEqualizerBandLevel(bandIndex: Int, levelMb: Int) {
+        mediaRepo.dspController.setBandLevel(bandIndex, levelMb)
+        persistEqualizerState()
     }
 
-    fun openAccessibilitySettings() {
-        runCatching {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            getApplication<Application>().startActivity(intent)
-        }
+    fun setBassBoostStrength(strength: Int) {
+        mediaRepo.dspController.setBassBoost(strength)
+        persistEqualizerState()
     }
 
-    fun openOverlaySettings() {
-        val ctx = getApplication<Application>()
-        runCatching {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${ctx.packageName}")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            ctx.startActivity(intent)
-        }
+    fun setVirtualizerStrength(strength: Int) {
+        mediaRepo.dspController.setVirtualizer(strength)
+        persistEqualizerState()
     }
 
-    // Streaming quick controls (Like, Dislike, My Wave)
-    fun likeStreamTrack() {
-        val pkg = uiState.value.mediaState.activeSession?.packageName
-        val ok = mediaRepo.triggerStreamingLike(pkg)
-        showToast(
-            if (ok) "Отметка «Нравится» отправлена"
-            else "Действие «Нравится» не поддерживается текущей сессией"
+    fun setLocalPlaybackSpeed(speed: Float) {
+        mediaRepo.setLocalPlaybackSpeed(speed)
+        showToast("Скорость: ${"%.2f".format(speed)}x")
+    }
+
+    fun cycleLocalRepeatMode() {
+        val next = mediaRepo.cycleLocalRepeatMode()
+        showToast("Повтор: ${next.title}")
+    }
+
+    fun toggleLocalShuffle() {
+        val enabled = mediaRepo.toggleLocalShuffle()
+        showToast(if (enabled) "Перемешивание включено" else "Перемешивание выключено")
+    }
+
+    // Smart Album Builder (Auto Tracklist Comparison, Cover Change & Missing Track Downloads)
+    fun selectSmartAlbum(albumId: String?) {
+        _selectedAlbumId.value = albumId
+    }
+
+    fun createSmartAlbum(title: String, artistHint: String) {
+        val cleanTitle = title.trim()
+        if (cleanTitle.isEmpty()) return
+        val newId = "alb_${System.currentTimeMillis()}"
+        val placeholder = SmartAlbum(
+            id = newId,
+            title = cleanTitle,
+            artist = artistHint.trim(),
+            isFetchingOnline = true,
+            statusMessage = "Поиск официального треклиста и обложки…"
         )
-    }
-
-    fun dislikeStreamTrack() {
-        val pkg = uiState.value.mediaState.activeSession?.packageName
-        val ok = mediaRepo.triggerStreamingDislike(pkg)
-        showToast(
-            if (ok) "Отметка «Не нравится» отправлена"
-            else "Действие «Не нравится» не поддерживается текущей сессией"
-        )
-    }
-
-    fun startMyWave() {
-        val pkg = uiState.value.mediaState.activeSession?.packageName
-        val ok = mediaRepo.triggerMyWave(pkg)
-        showToast(
-            if (ok) "Запуск «Моя Волна»…"
-            else "Откройте стриминг (Яндекс Музыка / YT Music) для «Моей Волны»"
-        )
-    }
-
-    // Language, UI Scale, Player Cover Style & OEM Gesture Bypass
-    fun setAppLanguage(language: AppLanguage) {
+        _selectedAlbumId.value = newId
         viewModelScope.launch {
-            prefsRepo.setAppLanguage(language)
+            val current = prefsRepo.smartAlbums.first()
+            prefsRepo.saveSmartAlbums(listOf(placeholder) + current)
+            refreshAlbumOnlineMetadata(newId)
         }
     }
 
-    fun setUiScale(scale: Float) {
+    fun refreshAlbumOnlineMetadata(albumId: String) {
         viewModelScope.launch {
-            prefsRepo.setUiScale(scale)
+            val albums = prefsRepo.smartAlbums.first()
+            val target = albums.firstOrNull { it.id == albumId } ?: return@launch
+            val blueprint = MusicCatalogAndLyricsRepository.fetchAlbumBlueprint(target.title, target.artist)
+            val localTracks = uiState.value.localAudioTracks
+            val updatedAlbum = if (blueprint != null) {
+                val updated = target.copy(
+                    title = blueprint.title.ifBlank { target.title },
+                    artist = blueprint.artist.ifBlank { target.artist },
+                    releaseId = blueprint.releaseId,
+                    expectedTrackCount = blueprint.expectedTrackCount,
+                    expectedTracks = blueprint.expectedTracks,
+                    coverUrl = target.coverUrl ?: blueprint.coverUrl,
+                    alternateCoverUrls = blueprint.alternateCoverUrls,
+                    isFetchingOnline = false,
+                    statusMessage = "Треклист получен: ${blueprint.expectedTracks.size} трек(ов)"
+                )
+                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(updated, localTracks)
+            } else {
+                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                    target.copy(
+                        isFetchingOnline = false,
+                        statusMessage = "Не найден точный релиз онлайн — добавляйте треки с устройства"
+                    ),
+                    localTracks
+                )
+            }
+            val latest = prefsRepo.smartAlbums.first()
+            prefsRepo.saveSmartAlbums(latest.map { if (it.id == albumId) updatedAlbum else it })
         }
     }
 
-    fun setPlayerCoverStyle(style: PlayerCoverStyle) {
+    fun attachLocalTracksToAlbum(albumId: String, trackIds: List<String>) {
+        if (trackIds.isEmpty()) return
         viewModelScope.launch {
-            prefsRepo.setPlayerCoverStyle(style)
+            val albums = prefsRepo.smartAlbums.first()
+            val localTracks = uiState.value.localAudioTracks
+            val updated = albums.map { alb ->
+                if (alb.id == albumId) {
+                    val mergedIds = (alb.attachedLocalTrackIds + trackIds).distinct()
+                    MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                        alb.copy(attachedLocalTrackIds = mergedIds),
+                        localTracks
+                    )
+                } else alb
+            }
+            prefsRepo.saveSmartAlbums(updated)
+            showToast("Треки добавлены в альбом и сверены")
         }
     }
 
-    fun toggleOemGestureBypass() {
-        val target = !uiState.value.shizukuState.oemGestureBypassEnabled
+    fun detachTrackFromAlbum(albumId: String, trackId: String) {
         viewModelScope.launch {
-            prefsRepo.setOemGestureBypassEnabled(target)
-            shizukuBridge.applyOemGestureBypass(target)
+            val albums = prefsRepo.smartAlbums.first()
+            val localTracks = uiState.value.localAudioTracks
+            val updated = albums.map { alb ->
+                if (alb.id == albumId) {
+                    val remaining = alb.attachedLocalTrackIds.filterNot { it == trackId }
+                    MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                        alb.copy(attachedLocalTrackIds = remaining),
+                        localTracks
+                    )
+                } else alb
+            }
+            prefsRepo.saveSmartAlbums(updated)
+        }
+    }
+
+    fun setAlbumCoverFromUri(albumId: String, uri: Uri) {
+        viewModelScope.launch {
+            MusicCatalogAndLyricsRepository.importCustomCoverFromUri(getApplication(), albumId, uri)
+                .onSuccess { savedPath ->
+                    val albums = prefsRepo.smartAlbums.first()
+                    prefsRepo.saveSmartAlbums(
+                        albums.map { if (it.id == albumId) it.copy(customCoverPath = savedPath) else it }
+                    )
+                    showToast("Обложка альбома обновлена")
+                }
+                .onFailure { err ->
+                    showToast(err.message ?: "Не удалось загрузить обложку")
+                }
+        }
+    }
+
+    fun setAlbumCoverUrl(albumId: String, coverUrl: String) {
+        viewModelScope.launch {
+            val albums = prefsRepo.smartAlbums.first()
+            prefsRepo.saveSmartAlbums(
+                albums.map { if (it.id == albumId) it.copy(coverUrl = coverUrl, customCoverPath = null) else it }
+            )
+            showToast("Выбрана новая обложка из каталога")
+        }
+    }
+
+    fun deleteSmartAlbum(albumId: String) {
+        viewModelScope.launch {
+            val albums = prefsRepo.smartAlbums.first().filterNot { it.id == albumId }
+            prefsRepo.saveSmartAlbums(albums)
+            if (_selectedAlbumId.value == albumId) _selectedAlbumId.value = null
+            showToast("Альбом удалён")
+        }
+    }
+
+    fun downloadExpectedTrackForAlbum(album: SmartAlbum, expectedTrack: AlbumExpectedTrack) {
+        viewModelScope.launch {
+            val artist = expectedTrack.artist.ifBlank { album.artist }
+            showToast("Поиск «${expectedTrack.title}» (FLAC → Стриминг)…")
+            val grouped = MusicCatalogAndLyricsRepository.searchAllSources(
+                query = "$artist ${expectedTrack.title}".trim(),
+                localTracks = uiState.value.localAudioTracks,
+                mediaState = uiState.value.mediaState,
+                installedMusicApps = uiState.value.musicApps
+            )
+            val candidates = grouped.firstOrNull()?.candidates ?: emptyList()
+            val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
+                context = getApplication(),
+                title = expectedTrack.title,
+                artist = artist,
+                candidates = candidates,
+                installedMusicApps = uiState.value.musicApps
+            )
+            handleDownloadOutcome(outcome, albumId = album.id)
+        }
+    }
+
+    fun downloadMissingAlbumTracks(albumId: String) {
+        viewModelScope.launch {
+            val album = prefsRepo.smartAlbums.first().firstOrNull { it.id == albumId } ?: return@launch
+            val missing = album.missingTracks
+            if (missing.isEmpty()) {
+                showToast("Все треки альбома уже на устройстве!")
+                return@launch
+            }
+            var downloadedCount = 0
+            for (slot in missing) {
+                val artist = slot.artist.ifBlank { album.artist }
+                val grouped = MusicCatalogAndLyricsRepository.searchAllSources(
+                    query = "$artist ${slot.title}".trim(),
+                    localTracks = uiState.value.localAudioTracks,
+                    mediaState = uiState.value.mediaState,
+                    installedMusicApps = uiState.value.musicApps
+                )
+                val candidates = grouped.firstOrNull()?.candidates ?: emptyList()
+                val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
+                    context = getApplication(),
+                    title = slot.title,
+                    artist = artist,
+                    candidates = candidates,
+                    installedMusicApps = uiState.value.musicApps
+                )
+                when (outcome) {
+                    is DownloadOutcome.DownloadedFile -> {
+                        downloadedCount++
+                        val tracks = mediaRepo.refreshLocalTracks()
+                        val matched = tracks.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
+                        attachLocalTracksToAlbum(album.id, listOf(matched.id))
+                    }
+                    is DownloadOutcome.NeedsStreamingCapture -> {
+                        requestStreamCaptureForTrack(
+                            title = outcome.title,
+                            artist = outcome.artist,
+                            packageName = outcome.packageName,
+                            appLabel = outcome.appLabel,
+                            albumId = album.id
+                        )
+                        showToast(
+                            if (downloadedCount > 0) "Скачано $downloadedCount; далее захват «${outcome.title}» из ${outcome.appLabel}"
+                            else "Для «${outcome.title}» нужен захват потока из ${outcome.appLabel}"
+                        )
+                        return@launch
+                    }
+                    is DownloadOutcome.Failed -> Unit
+                }
+            }
             showToast(
-                if (target) "Обход блокировки жестов OEM включён"
-                else "Обход блокировки жестов OEM выключен"
+                if (downloadedCount > 0) "Докачано треков в альбом: $downloadedCount"
+                else "Не удалось автоматически скачать недостающие треки"
             )
         }
     }
 
-    // Embedded Adaptation & Messenger Dual-Search
-    fun toggleMessengerSearchMode() {
-        val next = if (_messengerSearchMode.value == GlobalSearchMode.APPS_AND_FILES) {
-            GlobalSearchMode.MESSENGER_SEARCH
-        } else {
-            GlobalSearchMode.APPS_AND_FILES
-        }
-        _messengerSearchMode.value = next
-    }
-
-    fun sendFileToMessenger(file: DeviceSearchFile, targetPackage: String) {
-        if (!universalSearchRepo.sendFileToPackage(file, targetPackage)) {
-            showToast("Не удалось отправить ${file.name}")
-        }
+    private suspend fun reconcileAllSmartAlbumsWithTracks(tracks: List<LocalAudioTrack>) {
+        val current = prefsRepo.smartAlbums.first()
+        if (current.isEmpty()) return
+        val updated = current.map { MusicCatalogAndLyricsRepository.reconcileAlbumTracks(it, tracks) }
+        prefsRepo.saveSmartAlbums(updated)
     }
 
     fun launchMusicSearchMatch(match: MusicStreamMatch) {
@@ -2069,21 +2991,364 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         searchAndPlayInActiveStream(_appSearchQuery.value, match.packageName)
     }
 
-    fun sendAdaptationCommand(cmd: AdaptationCommand) {
-        AppAdaptationRuntime.sendCommand(cmd)
+    // Appearance, Wallpaper & Custom Palettes
+    fun setShowAppearanceDialog(show: Boolean) {
+        _showAppearanceDialog.value = show
     }
 
-    fun disableEmbeddedAdaptation(packageName: String) {
-        AppAdaptationRuntime.sendCommand(AdaptationCommand.DisablePackage(packageName))
-        showToast("Перерисовка отключена для $packageName")
+    fun setUiThemeColor(color: UiThemeColor) {
+        viewModelScope.launch {
+            prefsRepo.setActiveCustomPaletteId(null)
+            prefsRepo.setUiThemeColor(color)
+            showToast("Цвет интерфейса: ${color.title}")
+        }
     }
 
-    fun restoreAdaptedApp(packageName: String) {
-        launchPackage(packageName)
+    fun setWallpaperFromUri(uri: Uri) {
+        viewModelScope.launch {
+            WallpaperThemeHelper.importWallpaperFromUri(getApplication(), uri).onSuccess { path ->
+                prefsRepo.setWallpaperPath(path)
+                val loaded = WallpaperThemeHelper.loadWallpaperAndPalette(path)
+                _wallpaperState.value = loaded
+                loaded.second?.let { pal ->
+                    prefsRepo.saveCustomPalette(
+                        CustomColorPalette(
+                            id = "wall_${System.currentTimeMillis()}",
+                            name = "Обои ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}",
+                            dominantDarkArgb = pal.dominantDarkArgb,
+                            accentArgb = pal.accentArgb,
+                            highlightArgb = pal.highlightArgb,
+                            isFromWallpaper = true
+                        ),
+                        activate = true
+                    )
+                }
+                showToast("Обои применены • Стеклянный режим Aero")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось установить обои")
+            }
+        }
     }
 
-    fun dismissEmbeddedSnapshot() {
-        AppAdaptationRuntime.updateEmbeddedSnapshot(null)
+    fun clearWallpaper() {
+        viewModelScope.launch {
+            val oldPath = prefsRepo.wallpaperPath.first()
+            prefsRepo.setWallpaperPath(null)
+            WallpaperThemeHelper.deleteWallpaperFile(oldPath)
+            _wallpaperState.value = null to null
+            showToast("Обои убраны • Палитра сохранена")
+        }
+    }
+
+    fun saveCurrentWallpaperPalette(name: String) {
+        val pal = uiState.value.wallpaperPalette ?: return
+        val cleanName = name.trim().ifBlank { "Палитра обоев" }
+        viewModelScope.launch {
+            prefsRepo.saveCustomPalette(
+                CustomColorPalette(
+                    id = "pal_${System.currentTimeMillis()}",
+                    name = cleanName,
+                    dominantDarkArgb = pal.dominantDarkArgb,
+                    accentArgb = pal.accentArgb,
+                    highlightArgb = pal.highlightArgb,
+                    isFromWallpaper = true
+                ),
+                activate = true
+            )
+            showToast("Палитра «$cleanName» сохранена")
+        }
+    }
+
+    fun createAndSaveCustomPalette(name: String, darkArgb: Long, accentArgb: Long, highlightArgb: Long) {
+        val cleanName = name.trim().ifBlank { "Своя тема" }
+        viewModelScope.launch {
+            prefsRepo.saveCustomPalette(
+                CustomColorPalette(
+                    id = "custom_${System.currentTimeMillis()}",
+                    name = cleanName,
+                    dominantDarkArgb = darkArgb,
+                    accentArgb = accentArgb,
+                    highlightArgb = highlightArgb,
+                    isFromWallpaper = false
+                ),
+                activate = true
+            )
+            showToast("Своя палитра «$cleanName» применена")
+        }
+    }
+
+    fun selectCustomPalette(paletteId: String?) {
+        viewModelScope.launch {
+            prefsRepo.setActiveCustomPaletteId(paletteId)
+            showToast(if (paletteId == null) "Сброшено на стандартную схему" else "Палитра применена")
+        }
+    }
+
+    fun deleteCustomPalette(paletteId: String) {
+        viewModelScope.launch {
+            prefsRepo.deleteCustomPalette(paletteId)
+            showToast("Палитра удалена")
+        }
+    }
+
+    // Auto-Close, System Optimization, Linux Packages & Weather
+    fun setShowAutoKillDialog(show: Boolean) {
+        _showAutoKillDialog.value = show
+    }
+
+    fun toggleAutoKillEnabled() {
+        val next = !uiState.value.autoKillEnabled
+        viewModelScope.launch {
+            prefsRepo.setAutoKillEnabled(next)
+            showToast(
+                if (next) "Автозавершение одноразовых приложений включено"
+                else "Автозавершение одноразовых приложений выключено"
+            )
+        }
+    }
+
+    fun toggleAutoKillPackage(packageName: String) {
+        viewModelScope.launch {
+            val existed = uiState.value.autoKillPackages.contains(packageName)
+            prefsRepo.toggleAutoKillPackage(packageName)
+            showToast(if (existed) "Убрано из автозавершения" else "Добавлено в одноразовые")
+        }
+    }
+
+    fun setShowOptimizationDialog(show: Boolean) {
+        _showOptimizationDialog.value = show
+        if (show) {
+            refreshOptimizationStats()
+            shizukuBridge.refreshStatus()
+        }
+    }
+
+    fun setShowBackgroundWebAudioDialog(show: Boolean) {
+        _showBackgroundWebAudioDialog.value = show
+    }
+
+    fun setShowLinuxCatalogDialog(show: Boolean) {
+        _showLinuxCatalogDialog.value = show
+        if (show) refreshLinuxCatalog()
+    }
+
+    fun refreshLinuxCatalog() {
+        viewModelScope.launch {
+            _isTermuxInstalled.value = linuxRepo.isTermuxInstalled()
+            _linuxPackages.value = linuxRepo.scanLinuxPackages("")
+        }
+    }
+
+    fun installOrRunLinuxPackage(entry: LinuxPackageEntry) {
+        viewModelScope.launch {
+            linuxRepo.installOrRunPackage(entry).onSuccess { msg ->
+                showToast(msg)
+            }.onFailure { err ->
+                showToast(err.message ?: "Нужен Termux или Shizuku")
+            }
+        }
+    }
+
+    fun openTermuxDownload() {
+        if (!linuxRepo.openTermuxDownloadPage()) {
+            showToast("Откройте F-Droid и установите Termux")
+        }
+    }
+
+    fun refreshWeather() {
+        refreshWeatherForCity(uiState.value.selectedWeatherCity)
+    }
+
+    private fun refreshWeatherForCity(city: WeatherCityResult) {
+        viewModelScope.launch {
+            _isWeatherLoading.value = true
+            WeatherRepository.fetchConsensusWeather(city).onSuccess { report ->
+                _weatherReport.value = report
+            }
+            _isWeatherLoading.value = false
+        }
+    }
+
+    fun searchWeatherCities(query: String) {
+        weatherSearchJob?.cancel()
+        if (query.trim().length < 2) {
+            _weatherCityResults.value = emptyList()
+            return
+        }
+        weatherSearchJob = viewModelScope.launch {
+            delay(250L)
+            _weatherCityResults.value = WeatherRepository.searchCities(query)
+        }
+    }
+
+    fun selectWeatherCity(city: WeatherCityResult) {
+        _weatherCityResults.value = emptyList()
+        _showWeatherCityPickerDialog.value = false
+        viewModelScope.launch {
+            prefsRepo.setSelectedWeatherCity(city)
+            showToast("Город погоды: ${city.name}")
+        }
+    }
+
+    fun toggleWeatherInHubOther() {
+        val next = !uiState.value.showWeatherInHubOther
+        viewModelScope.launch {
+            prefsRepo.setShowWeatherInHubOther(next)
+            showToast(if (next) "Виджет погоды показан в Хабе → Прочее" else "Виджет погоды скрыт из Хаба → Прочее")
+        }
+    }
+
+    fun toggleWeatherInHomeTile() {
+        val next = !uiState.value.showWeatherInHomeTile
+        viewModelScope.launch {
+            prefsRepo.setShowWeatherInHomeTile(next)
+            showToast(if (next) "Виджет погоды добавлен плиткой на рабочий стол" else "Плитка погоды убрана с рабочего стола")
+        }
+    }
+
+    fun setShowWeatherForecastDialog(show: Boolean) {
+        _showWeatherForecastDialog.value = show
+    }
+
+    fun setShowWeatherCityPickerDialog(show: Boolean) {
+        _showWeatherCityPickerDialog.value = show
+    }
+
+    fun refreshOptimizationStats() {
+        val prev = _optimizationStats.value
+        _optimizationStats.value = optimizerManager.readRamStats(
+            phantomPatched = prev.phantomKillerPatched,
+            lastSummary = prev.lastCleanupSummary
+        )
+    }
+
+    fun optimizeAndroidSystem() {
+        viewModelScope.launch {
+            val state = uiState.value
+            val protected = buildSet {
+                addAll(state.backgroundSpoofPackages)
+                addAll(state.mediaState.sessions.filter { it.isPlaying }.map { it.packageName })
+            }
+            val updated = optimizerManager.optimizeMemoryAndProcesses(state.allApps, protected)
+            _optimizationStats.value = updated
+            showToast(updated.lastCleanupSummary ?: "Система оптимизирована")
+        }
+    }
+
+    fun disablePhantomKillerViaShizuku() {
+        viewModelScope.launch {
+            optimizerManager.disablePhantomProcessKillerViaShizuku().onSuccess {
+                _optimizationStats.value = _optimizationStats.value.copy(
+                    phantomKillerPatched = true,
+                    lastCleanupSummary = "Phantom Process Killer отключён через Shizuku"
+                )
+                showToast("Phantom Process Killer отключён")
+            }.onFailure { err ->
+                showToast(err.message ?: "Нужно разрешение Shizuku")
+            }
+        }
+    }
+
+    fun boostAppForBackgroundViaShizuku(packageName: String) {
+        viewModelScope.launch {
+            optimizerManager.boostAppAndProtectFromDoze(packageName).onSuccess {
+                showToast("Фоновый звук и Doze-защита выданы для $packageName")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось применить через Shizuku")
+            }
+        }
+    }
+
+    fun toggleBackgroundSpoofEnabled() {
+        val next = !uiState.value.backgroundSpoofEnabled
+        viewModelScope.launch {
+            prefsRepo.setBackgroundSpoofEnabled(next)
+            showToast(if (next) "Фоновый обход паузы включён" else "Фоновый обход паузы отключён")
+        }
+    }
+
+    fun toggleBackgroundSpoofPackage(packageName: String) {
+        viewModelScope.launch {
+            val existed = uiState.value.backgroundSpoofPackages.contains(packageName)
+            prefsRepo.toggleBackgroundSpoofPackage(packageName)
+            if (!existed && !uiState.value.backgroundSpoofEnabled) {
+                prefsRepo.setBackgroundSpoofEnabled(true)
+            }
+            showToast(if (existed) "Убрано из фонового обхода" else "Добавлено в фоновый обход паузы")
+        }
+    }
+
+    fun toggleCurrentSessionBackgroundSpoof() {
+        val pkg = uiState.value.mediaState.activeSession?.packageName
+        if (pkg.isNullOrBlank() || pkg == getApplication<Application>().packageName) {
+            toggleBackgroundSpoofEnabled()
+            return
+        }
+        toggleBackgroundSpoofPackage(pkg)
+    }
+
+    fun grantOverlayAndAccessibilityViaShizuku() {
+        viewModelScope.launch {
+            shizukuBridge.grantOverlayAndAccessibilityViaShizuku().onSuccess {
+                showToast("Спец. возможности и Поверх окон включены через Shizuku")
+            }.onFailure { err ->
+                showToast(err.message ?: "Запустите Shizuku и повторите")
+            }
+        }
+    }
+
+    fun openAccessibilitySettings() {
+        runCatching {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            getApplication<Application>().startActivity(intent)
+        }
+    }
+
+    fun openOverlaySettings() {
+        val ctx = getApplication<Application>()
+        runCatching {
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
+                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            ctx.startActivity(intent)
+        }
+    }
+
+    // Streaming quick controls
+    fun likeStreamTrack() {
+        val ok = mediaRepo.triggerStreamingLike(uiState.value.mediaState.activeSession?.packageName)
+        showToast(if (ok) "Отметка «Нравится» отправлена" else "Действие «Нравится» не поддерживается сессией")
+    }
+
+    fun dislikeStreamTrack() {
+        val ok = mediaRepo.triggerStreamingDislike(uiState.value.mediaState.activeSession?.packageName)
+        showToast(if (ok) "Отметка «Не нравится» отправлена" else "Действие «Не нравится» не поддерживается сессией")
+    }
+
+    fun startMyWave() {
+        val ok = mediaRepo.triggerMyWave(uiState.value.mediaState.activeSession?.packageName)
+        showToast(if (ok) "Запуск «Моя Волна»…" else "Откройте Яндекс Музыку для «Моей Волны»")
+    }
+
+    // Language, UI Scale, Player Cover Style & OEM Gesture Bypass
+    fun setAppLanguage(language: AppLanguage) {
+        viewModelScope.launch { prefsRepo.setAppLanguage(language) }
+    }
+
+    fun setUiScale(scale: Float) {
+        viewModelScope.launch { prefsRepo.setUiScale(scale) }
+    }
+
+    fun setPlayerCoverStyle(style: PlayerCoverStyle) {
+        viewModelScope.launch { prefsRepo.setPlayerCoverStyle(style) }
+    }
+
+    fun toggleOemGestureBypass() {
+        val target = !uiState.value.shizukuState.oemGestureBypassEnabled
+        viewModelScope.launch {
+            prefsRepo.setOemGestureBypassEnabled(target)
+            shizukuBridge.applyOemGestureBypass(target)
+            showToast(if (target) "Обход блокировки жестов OEM включён" else "Обход блокировки жестов OEM выключен")
+        }
     }
 
     // BlackBerry OS 10 / KEY2 Active Frames Recents System
@@ -2098,11 +3363,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun toggleRecentsOverlay() {
-        if (_showRecentsOverlay.value) {
-            closeRecentsOverlay()
-        } else {
-            openRecentsOverlay()
-        }
+        if (_showRecentsOverlay.value) closeRecentsOverlay() else openRecentsOverlay()
     }
 
     fun moveRecentsFocus(dx: Int, dy: Int, columns: Int) {
@@ -2124,7 +3385,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val pinned = state.pinnedRecentPackages
             val history = RecentForegroundTracker.snapshotRecentHistory()
             val historyMap = history.toMap()
-            val privilegedPkgs = shizukuBridge.queryRecentPackagesViaPrivilegedOrRoot()
+            val shizuku = state.shizukuState
+            val privilegedActive = (shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable
+            val privilegedPkgs = if (privilegedActive) {
+                shizukuBridge.queryRecentPackagesViaPrivilegedOrRoot()
+            } else {
+                emptyList()
+            }
 
             val orderedPkgs = linkedSetOf<String>()
             pinned.forEach { orderedPkgs.add(it) }
@@ -2135,12 +3402,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 .filter { it.isNotBlank() && it != getApplication<Application>().packageName }
                 .forEach { orderedPkgs.add(it) }
 
+            val aliveProcesses = if (privilegedActive && orderedPkgs.isNotEmpty()) {
+                shizukuBridge.findRunningPackagesViaShizuku(orderedPkgs)
+            } else {
+                emptySet()
+            }
+
             val appsByPkg = state.allApps.associateBy { it.packageName }
             val frames = orderedPkgs.mapNotNull { pkg ->
                 if (pkg == getApplication<Application>().packageName) return@mapNotNull null
-                val app = appsByPkg[pkg]
+                if (!pinned.contains(pkg) && RecentForegroundTracker.isRecentlyDismissed(pkg)) {
+                    return@mapNotNull null
+                }
                 val session = state.mediaState.sessions.firstOrNull { it.packageName == pkg }
+                if (privilegedActive &&
+                    !pinned.contains(pkg) &&
+                    session == null &&
+                    !privilegedPkgs.contains(pkg) &&
+                    !aliveProcesses.contains(pkg)
+                ) {
+                    return@mapNotNull null
+                }
+                val app = appsByPkg[pkg]
                 val notif = state.hubNotifications.firstOrNull { it.packageName == pkg }
+                val cachedPreview = AppPreviewCache.get(pkg)
                 val label = app?.label ?: session?.appLabel ?: notif?.appName ?: return@mapNotNull null
                 val previewTitle = when {
                     session != null -> session.title
@@ -2157,6 +3442,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     activityName = app?.activityName,
                     appLabel = label,
                     icon = app?.icon,
+                    previewBitmap = cachedPreview ?: session?.artwork,
                     lastActiveMs = historyMap[pkg] ?: notif?.postTime ?: 0L,
                     previewTitle = previewTitle,
                     previewSubtitle = previewSub,
@@ -2170,11 +3456,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     .thenByDescending { it.lastActiveMs }
             )
             _recentFrames.value = frames
-            if (frames.isEmpty()) {
-                _focusedRecentIndex.value = 0
-            } else {
-                _focusedRecentIndex.value = _focusedRecentIndex.value.coerceIn(0, frames.lastIndex)
-            }
+            _focusedRecentIndex.value = if (frames.isEmpty()) 0 else _focusedRecentIndex.value.coerceIn(0, frames.lastIndex)
         }
     }
 
@@ -2199,17 +3481,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun closeRecentFrame(frame: RecentAppFrame) {
         viewModelScope.launch {
             RecentForegroundTracker.removeFromHistory(frame.packageName)
+            AppPreviewCache.remove(frame.packageName)
             val am = getApplication<Application>().getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             runCatching { am?.killBackgroundProcesses(frame.packageName) }
             val shizuku = uiState.value.shizukuState
-            if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
-                shizukuBridge.forceStopPackagesViaShizuku(listOf(frame.packageName))
-            }
-            if (uiState.value.embeddedSnapshot?.packageName == frame.packageName) {
-                AppAdaptationRuntime.updateEmbeddedSnapshot(null)
+            val privilegedActive = (shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable
+            if (privilegedActive) {
+                shizukuBridge.forceStopAndRemoveTasksViaShizuku(listOf(frame.packageName))
             }
             _recentFrames.value = _recentFrames.value.filterNot { it.packageName == frame.packageName }
-            showToast("Закрыто: ${frame.appLabel}")
+            showToast(
+                if (privilegedActive) "Полностью закрыто: ${frame.appLabel}"
+                else "Убрано и остановлено в фоне: ${frame.appLabel}"
+            )
         }
     }
 
@@ -2218,13 +3502,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val pinned = uiState.value.pinnedRecentPackages
             val targets = _recentFrames.value.map { it.packageName }.filterNot { pinned.contains(it) }
             RecentForegroundTracker.clearHistoryExcept(pinned)
+            targets.forEach { AppPreviewCache.remove(it) }
             val am = getApplication<Application>().getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             targets.forEach { pkg -> runCatching { am?.killBackgroundProcesses(pkg) } }
             val shizuku = uiState.value.shizukuState
             if (targets.isNotEmpty() && ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable)) {
-                shizukuBridge.forceStopPackagesViaShizuku(targets)
+                shizukuBridge.forceStopAndRemoveTasksViaShizuku(targets)
             }
-            refreshRecentFrames()
+            _recentFrames.value = _recentFrames.value.filter { pinned.contains(it.packageName) }
             showToast(
                 if (pinned.isNotEmpty()) "Очищено (закреплённые сохранены: ${pinned.size})"
                 else "Недавние приложения очищены"

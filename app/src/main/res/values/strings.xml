@@ -22,7 +22,7 @@
     <string name="music_panel_title">Управление музыкой</string>
     <string name="favorites_empty">Удерживайте или Ctrl+D</string>
     <string name="keyboard_shortcuts_title">Горячие клавиши</string>
-    <string name="accessibility_service_label">KeyDeck Адаптация и Перерисовка</string>
-    <string name="accessibility_service_description">Перерисовывает выбранные приложения и мессенджеры в стиле Symbian/Vista, включает переключение вкладок по F1–F6 и стрелкам, а также отслеживает выход из одноразовых приложений.</string>
+    <string name="accessibility_service_label">KeyDeck Жесты и Оптимизация</string>
+    <string name="accessibility_service_description">Обеспечивает жестовую навигацию (домой, назад, недавние), перехват системной шторки в Хаб, автозакрытие одноразовых приложений и превью активных окон.</string>
     <string name="background_guard_channel_name">Фоновый аудио-обход плееров</string>
 </resources>

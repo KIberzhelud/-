@@ -59,12 +59,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.material.icons.rounded.AddToQueue
 import androidx.compose.material.icons.rounded.Headset
-import androidx.compose.material.icons.rounded.ViewQuilt
 import com.example.R
 import com.example.data.SymbianIconMapper
 import com.example.data.UniversalSearchRepository
-import com.example.model.AppAdaptationMode
 import com.example.model.AppEntry
 import com.example.model.AppIconMode
 import com.example.model.DeviceSearchFile
@@ -88,13 +87,12 @@ import com.example.ui.theme.vistaWindowFrame
 fun AppContextDialog(
     app: AppEntry,
     isAutoKill: Boolean,
-    adaptationMode: AppAdaptationMode = AppAdaptationMode.DISABLED,
     isBackgroundSpoofed: Boolean = false,
     onDismiss: () -> Unit,
     onLaunch: () -> Unit,
+    onCreateWorkspace: () -> Unit = {},
     onTogglePin: () -> Unit,
     onToggleAutoKill: () -> Unit,
-    onCycleAdaptationMode: () -> Unit = {},
     onToggleBackgroundSpoof: () -> Unit = {},
     onRename: () -> Unit,
     onChooseIcon: () -> Unit,
@@ -161,6 +159,16 @@ fun AppContextDialog(
                     }
                 )
                 ContextActionRow(
+                    icon = Icons.Rounded.AddToQueue,
+                    label = "Создать рабочий стол",
+                    tint = theme.focusBorder,
+                    onClick = {
+                        onDismiss()
+                        onCreateWorkspace()
+                    },
+                    modifier = Modifier.testTag("context_create_workspace")
+                )
+                ContextActionRow(
                     icon = if (app.isPinned) Icons.Rounded.Star else Icons.Rounded.StarOutline,
                     label = if (app.isPinned) "Убрать из избранного (Ctrl+D)" else "Закрепить в избранном (Ctrl+D)",
                     tint = MusicSourceAmber,
@@ -183,15 +191,6 @@ fun AppContextDialog(
                         onDismiss()
                     },
                     modifier = Modifier.testTag("context_toggle_autokill")
-                )
-                ContextActionRow(
-                    icon = Icons.Rounded.ViewQuilt,
-                    label = "Адаптация UI: ${adaptationMode.shortTitle}",
-                    tint = if (adaptationMode != AppAdaptationMode.DISABLED) CallIncomingGreen else theme.accent,
-                    onClick = {
-                        onCycleAdaptationMode()
-                    },
-                    modifier = Modifier.testTag("context_cycle_adaptation")
                 )
                 ContextActionRow(
                     icon = Icons.Rounded.Headset,
@@ -719,11 +718,12 @@ fun KeyboardShortcutsDialog(
         "F4" to "Редактор книг (план, главы, .docx) и заметок (.txt)",
         "F5" to "Выдвижная панель плеера и треков",
         "F6" to "Быстрый запуск Камеры",
-        "F1–F6 (внешнее приложение)" to "Переключение вкладок в режиме адаптации приложений",
-        "Стрелки / D-Pad" to "Навигация по плиткам (и по элементам в адаптированных приложениях)",
-        "Enter / Пробел" to "Запуск выбранного приложения / контакта / элемента",
+        "Свайп от края / Зажатие" to "Переход на соседний 2D рабочий стол или создание нового",
+        "Свайп вверх по плееру" to "Свернуть плеер в компактную полосу; вниз — развернуть",
+        "Стрелки / D-Pad" to "Навигация по плиткам, звонкам и элементам Хаба",
+        "Enter / Пробел" to "Запуск выбранного приложения / чата / файла",
         "Ctrl + R / Щипок внутрь/наружу" to "Недавние приложения в стиле BlackBerry OS 10 / KEY2",
-        "Буквы / *apk / .pdf" to "Универсальный поиск: приложения, файлы (*расширение), музыка, фото, сеть",
+        "Буквы / *apk / *deb" to "Универсальный поиск: приложения, чаты, файлы, пакеты Linux, музыка, сеть",
         "Esc" to "Сброс поиска, выход из книг/недавних, закрытие окон",
         "Alt + Буква" to "Переход к букве в алфавите Niagara",
         "Alt + L" to "Переключить алфавит (A-Z / А-Я)",

@@ -22,6 +22,7 @@ import java.util.LinkedHashSet
 object RecentForegroundTracker {
     private val visitedPackages = Collections.synchronizedSet(LinkedHashSet<String>())
     private val recentHistory = Collections.synchronizedMap(LinkedHashMap<String, Long>())
+    private val dismissedAtMs = Collections.synchronizedMap(HashMap<String, Long>())
 
     @Volatile
     var currentForegroundPackage: String? = null
@@ -37,10 +38,12 @@ object RecentForegroundTracker {
         ) {
             return
         }
+        val now = System.currentTimeMillis()
         visitedPackages.add(packageName)
+        dismissedAtMs.remove(packageName)
         synchronized(recentHistory) {
             recentHistory.remove(packageName)
-            recentHistory[packageName] = System.currentTimeMillis()
+            recentHistory[packageName] = now
             while (recentHistory.size > 18) {
                 val oldest = recentHistory.keys.firstOrNull() ?: break
                 recentHistory.remove(oldest)
@@ -62,18 +65,31 @@ object RecentForegroundTracker {
         }
     }
 
+    fun isRecentlyDismissed(packageName: String, recentWindowMs: Long = 120_000L): Boolean {
+        val ts = dismissedAtMs[packageName] ?: return false
+        return (System.currentTimeMillis() - ts) < recentWindowMs
+    }
+
     fun removeFromHistory(packageName: String) {
+        dismissedAtMs[packageName] = System.currentTimeMillis()
         synchronized(recentHistory) {
             recentHistory.remove(packageName)
         }
         visitedPackages.remove(packageName)
+        AppPreviewCache.remove(packageName)
     }
 
     fun clearHistoryExcept(pinned: Set<String>) {
+        val now = System.currentTimeMillis()
         synchronized(recentHistory) {
             val it = recentHistory.keys.iterator()
             while (it.hasNext()) {
-                if (!pinned.contains(it.next())) it.remove()
+                val pkg = it.next()
+                if (!pinned.contains(pkg)) {
+                    dismissedAtMs[pkg] = now
+                    it.remove()
+                    AppPreviewCache.remove(pkg)
+                }
             }
         }
     }
@@ -82,6 +98,45 @@ object RecentForegroundTracker {
         if (currentForegroundPackage != launcherPackage) {
             currentForegroundPackage = launcherPackage
         }
+    }
+}
+
+/**
+ * Lightweight bounded LRU cache for captured recent app screenshots / thumbnails.
+ */
+object AppPreviewCache {
+    private const val MAX_PREVIEWS = 14
+    private val cache = object : LinkedHashMap<String, androidx.compose.ui.graphics.ImageBitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, androidx.compose.ui.graphics.ImageBitmap>?
+        ): Boolean = size > MAX_PREVIEWS
+    }
+    private val lastCaptureMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    fun put(packageName: String, bitmap: androidx.compose.ui.graphics.ImageBitmap) {
+        if (packageName.isBlank()) return
+        synchronized(cache) {
+            cache[packageName] = bitmap
+        }
+        lastCaptureMs[packageName] = System.currentTimeMillis()
+    }
+
+    fun get(packageName: String): androidx.compose.ui.graphics.ImageBitmap? {
+        synchronized(cache) {
+            return cache[packageName]
+        }
+    }
+
+    fun shouldCapture(packageName: String, minIntervalMs: Long = 2200L): Boolean {
+        val prev = lastCaptureMs[packageName] ?: 0L
+        return (System.currentTimeMillis() - prev) >= minIntervalMs
+    }
+
+    fun remove(packageName: String) {
+        synchronized(cache) {
+            cache.remove(packageName)
+        }
+        lastCaptureMs.remove(packageName)
     }
 }
 
