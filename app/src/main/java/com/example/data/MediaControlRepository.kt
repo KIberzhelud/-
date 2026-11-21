@@ -289,24 +289,31 @@ class MediaControlRepository(private val context: Context) {
             }
         }
 
-        // 2. Supplement: Telegram Audio & Music/Download folder scan
-        if (UniversalSearchRepository.hasAllFilesAccess(context)) {
-            val root = runCatching { Environment.getExternalStorageDirectory() }.getOrNull()
-            val dirs = listOfNotNull(
-                root?.let { File(it, "Telegram/Telegram Audio") },
-                root?.let { File(it, "Telegram/Telegram Documents") },
-                root?.let { File(it, "Music/Telegram") },
-                root?.let { File(it, "Download/Telegram") },
-                root?.let { File(it, "Android/media/org.telegram.messenger/Telegram/Telegram Audio") },
-                root?.let { File(it, "Android/media/com.exteragram.messenger/Telegram/Telegram Audio") },
-                root?.let { File(it, "Android/media/tw.nekomimi.nekogram/Telegram/Telegram Audio") },
-                root?.let { File(it, "Android/media/com.radolyn.ayugram/Telegram/Telegram Audio") },
-                root?.let { File(it, "Music") },
-                root?.let { File(it, "Download") },
-                root?.let { File(it, "Audio") },
-                File(context.filesDir, "music")
-            ).filter { it.exists() && it.isDirectory }
+        // 2. Supplement: Always scan app-local & KeyDeck download folders; full external storage when permitted
+        val hasAllFiles = UniversalSearchRepository.hasAllFilesAccess(context)
+        val root = runCatching { Environment.getExternalStorageDirectory() }.getOrNull()
+        val keyDeckPublicMusic = runCatching {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)?.let { File(it, "KeyDeck") }
+        }.getOrNull()
+        val dirs = buildList {
+            add(File(context.filesDir, "music"))
+            if (keyDeckPublicMusic != null) add(keyDeckPublicMusic)
+            if (hasAllFiles && root != null) {
+                add(File(root, "Telegram/Telegram Audio"))
+                add(File(root, "Telegram/Telegram Documents"))
+                add(File(root, "Music/Telegram"))
+                add(File(root, "Download/Telegram"))
+                add(File(root, "Android/media/org.telegram.messenger/Telegram/Telegram Audio"))
+                add(File(root, "Android/media/com.exteragram.messenger/Telegram/Telegram Audio"))
+                add(File(root, "Android/media/tw.nekomimi.nekogram/Telegram/Telegram Audio"))
+                add(File(root, "Android/media/com.radolyn.ayugram/Telegram/Telegram Audio"))
+                add(File(root, "Music"))
+                add(File(root, "Download"))
+                add(File(root, "Audio"))
+            }
+        }.distinctBy { it.absolutePath }.filter { it.exists() && it.isDirectory }
 
+        if (dirs.isNotEmpty()) {
             val audioExts = setOf("mp3", "flac", "ogg", "m4a", "wav", "aac", "opus", "wma")
             val queue = ArrayDeque<File>(dirs)
             var visited = 0
@@ -554,6 +561,15 @@ class MediaControlRepository(private val context: Context) {
         } else {
             false
         }
+    }
+
+    fun registerDownloadedTrack(track: LocalAudioTrack) {
+        _localTracks.update { current ->
+            listOf(track) + current.filterNot {
+                it.id == track.id || (!track.filePath.isNullOrBlank() && it.filePath == track.filePath)
+            }
+        }
+        rebuildSessionsSnapshot()
     }
 
     fun refreshListenerStatusAndSessions() {

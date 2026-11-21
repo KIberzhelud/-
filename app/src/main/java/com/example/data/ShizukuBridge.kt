@@ -343,6 +343,9 @@ class ShizukuBridge(private val context: Context) {
         return found.toList()
     }
 
+    @Volatile
+    private var freeformBootConfigured = false
+
     suspend fun launchAppInBoundsViaShizuku(
         packageName: String,
         activityName: String?,
@@ -355,15 +358,26 @@ class ShizukuBridge(private val context: Context) {
         if (!safePkg.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$"""))) {
             return Result.failure(IllegalArgumentException("Некорректный пакет"))
         }
-        val component = if (!activityName.isNullOrBlank()) "$safePkg/$activityName" else null
-        val launchPart = if (component != null) {
-            "am start -n $component --windowingMode 5"
+        val prepCmd = if (!freeformBootConfigured) {
+            freeformBootConfigured = true
+            "settings put global enable_freeform_support 1 2>/dev/null; settings put global force_resizable_activities 1 2>/dev/null; "
         } else {
-            "monkey -p $safePkg -c android.intent.category.LAUNCHER 1"
+            ""
+        }
+        val launchPart = if (!activityName.isNullOrBlank()) {
+            "am start -n $safePkg/$activityName --windowingMode 5"
+        } else {
+            "comp=\$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER $safePkg 2>/dev/null | tail -n 1); " +
+                "if [ -n \"\$comp\" ] && echo \"\$comp\" | grep -q \"/\"; then " +
+                "am start -n \"\$comp\" --windowingMode 5; " +
+                "else monkey -p $safePkg -c android.intent.category.LAUNCHER 1; fi"
         }
         val resizePart = "tid=\$(dumpsys activity recents 2>/dev/null | grep -B 3 \"$safePkg\" | head -n 8 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
-            "if [ -n \"\$tid\" ]; then am task resize \$tid $left $top $right $bottom 2>/dev/null; fi"
-        return runPrivilegedOrRootShell("$launchPart; sleep 0.25; $resizePart")
+            "if [ -n \"\$tid\" ]; then " +
+            "cmd activity task set-windowing-mode \$tid 5 2>/dev/null; " +
+            "cmd activity task resize \$tid $left $top $right $bottom 2>/dev/null || am task resize \$tid $left $top $right $bottom 2>/dev/null; " +
+            "fi"
+        return runPrivilegedOrRootShell("$prepCmd$launchPart; sleep 0.25; $resizePart")
     }
 
     suspend fun dumpUiTreeXmlViaRoot(): String? {

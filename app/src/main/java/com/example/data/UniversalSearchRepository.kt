@@ -1,5 +1,6 @@
 package com.example.data
 
+import androidx.collection.LruCache
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -59,11 +60,11 @@ class UniversalSearchRepository(
         queryMediaStoreImages(trimmed, results)
         queryMediaStoreFiles(trimmed, results)
 
-        // 5. Privileged Shizuku/Root /sdcard search fallback
+        // 5. Privileged Shizuku/Root /sdcard search fallback (only if All Files Access is missing and results are sparse)
         val shizukuStatus = shizukuBridge.statusState.value
         val canUseShell = (shizukuStatus.isBinderAlive && shizukuStatus.isPermissionGranted) ||
             shizukuStatus.isRootAvailable
-        if (canUseShell && results.size < 45) {
+        if (!hasAllFilesAccess(context) && canUseShell && results.size < 15) {
             searchViaShizuku(trimmed, results)
         }
 
@@ -115,10 +116,6 @@ class UniversalSearchRepository(
                     val shareUri = runCatching {
                         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", child)
                     }.getOrNull() ?: Uri.fromFile(child)
-                    val thumb = if (kind == SearchResultKind.IMAGE && child.canRead()) {
-                        decodeFileThumbnail(child)
-                    } else null
-
                     out.putIfAbsent(
                         path,
                         DeviceSearchFile(
@@ -132,7 +129,7 @@ class UniversalSearchRepository(
                             sizeBytes = child.length(),
                             modifiedMs = child.lastModified(),
                             kind = kind,
-                            thumbnail = thumb
+                            thumbnail = null
                         )
                     )
                 }
@@ -156,10 +153,6 @@ class UniversalSearchRepository(
                     val contentUri = runCatching {
                         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
                     }.getOrNull()
-                    val thumb = if (kind == SearchResultKind.IMAGE) {
-                        decodeFileThumbnail(file)
-                    } else null
-
                     out.putIfAbsent(
                         file.absolutePath,
                         DeviceSearchFile(
@@ -173,7 +166,7 @@ class UniversalSearchRepository(
                             sizeBytes = file.length(),
                             modifiedMs = file.lastModified(),
                             kind = kind,
-                            thumbnail = thumb
+                            thumbnail = null
                         )
                     )
                 }
@@ -233,10 +226,6 @@ class UniversalSearchRepository(
                             val parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
                             val mime = if (rawMime == "*/*") guessMimeType(name) else rawMime
                             val kind = classifyKind(mime, name)
-                            val thumb = if (kind == SearchResultKind.IMAGE) {
-                                decodeUriThumbnail(docUri)
-                            } else null
-
                             val key = docUri.toString()
                             out.putIfAbsent(
                                 key,
@@ -251,7 +240,7 @@ class UniversalSearchRepository(
                                     sizeBytes = size,
                                     modifiedMs = modified,
                                     kind = kind,
-                                    thumbnail = thumb
+                                    thumbnail = null
                                 )
                             )
                         }
@@ -314,7 +303,6 @@ class UniversalSearchRepository(
                     val rel = if (pathCol >= 0) cursor.getString(pathCol).orEmpty() else "Pictures/"
 
                     val contentUri = ContentUris.withAppendedId(uri, id)
-                    val thumb = decodeUriThumbnail(contentUri)
                     val displayPath = if (rel.endsWith(name)) rel else "${rel.trimEnd('/')}/$name"
                     val parent = rel.trimEnd('/')
 
@@ -330,7 +318,7 @@ class UniversalSearchRepository(
                             sizeBytes = size,
                             modifiedMs = mod,
                             kind = SearchResultKind.IMAGE,
-                            thumbnail = thumb
+                            thumbnail = null
                         )
                     )
                     count++
@@ -400,7 +388,7 @@ class UniversalSearchRepository(
                             sizeBytes = size,
                             modifiedMs = mod,
                             kind = kind,
-                            thumbnail = if (kind == SearchResultKind.IMAGE) decodeUriThumbnail(contentUri) else null
+                            thumbnail = null
                         )
                     )
                     count++
@@ -429,9 +417,6 @@ class UniversalSearchRepository(
             val shareUri = runCatching {
                 FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             }.getOrNull() ?: Uri.fromFile(file)
-            val thumb = if (kind == SearchResultKind.IMAGE && file.canRead()) {
-                decodeFileThumbnail(file)
-            } else null
 
             out.putIfAbsent(
                 path,
@@ -446,7 +431,7 @@ class UniversalSearchRepository(
                     sizeBytes = if (file.exists()) file.length() else 0L,
                     modifiedMs = if (file.exists()) file.lastModified() else System.currentTimeMillis(),
                     kind = kind,
-                    thumbnail = thumb
+                    thumbnail = null
                 )
             )
         }
@@ -708,27 +693,45 @@ class UniversalSearchRepository(
         }
     }
 
-    private fun decodeUriThumbnail(uri: Uri): ImageBitmap? {
-        return runCatching {
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-            val maxSide = maxOf(opts.outWidth, opts.outHeight).coerceAtLeast(1)
-            val sample = (maxSide / 140).coerceAtLeast(1)
-            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-            context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, decodeOpts)?.asImageBitmap()
-            }
-        }.getOrNull()
-    }
-
-    private fun decodeFileThumbnail(file: File): ImageBitmap? {
-        return runCatching {
-            val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-            BitmapFactory.decodeFile(file.absolutePath, opts)?.asImageBitmap()
-        }.getOrNull()
-    }
-
     companion object {
+        private val thumbnailCache = object : LruCache<String, ImageBitmap>(64) {}
+
+        suspend fun loadImageThumbnail(context: Context, file: DeviceSearchFile): ImageBitmap? {
+            if (file.thumbnail != null) return file.thumbnail
+            thumbnailCache.get(file.id)?.let { return it }
+            return withContext(Dispatchers.IO) {
+                thumbnailCache.get(file.id)?.let { return@withContext it }
+                val decoded: ImageBitmap? = runCatching {
+                    val localPath = file.localFilePath
+                    if (!localPath.isNullOrBlank()) {
+                        val f = File(localPath)
+                        if (f.exists() && f.canRead()) {
+                            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(f.absolutePath, opts)
+                            val maxSide = maxOf(opts.outWidth, opts.outHeight).coerceAtLeast(1)
+                            val sample = (maxSide / 160).coerceAtLeast(1)
+                            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+                            BitmapFactory.decodeFile(f.absolutePath, decodeOpts)?.asImageBitmap()
+                        } else null
+                    } else {
+                        val uri = Uri.parse(file.uriString)
+                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                        val maxSide = maxOf(opts.outWidth, opts.outHeight).coerceAtLeast(1)
+                        val sample = (maxSide / 160).coerceAtLeast(1)
+                        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+                        context.contentResolver.openInputStream(uri)?.use {
+                            BitmapFactory.decodeStream(it, null, decodeOpts)?.asImageBitmap()
+                        }
+                    }
+                }.getOrNull()
+                if (decoded != null) {
+                    thumbnailCache.put(file.id, decoded)
+                }
+                decoded
+            }
+        }
+
         fun parseWildcardExtension(rawQuery: String): String? {
             val q = rawQuery.trim().lowercase()
             val candidate = when {

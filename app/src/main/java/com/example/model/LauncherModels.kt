@@ -122,7 +122,9 @@ data class AppEntry(
     val isRenamed: Boolean = false,
     val iconMode: AppIconMode = AppIconMode.AUTO,
     val androidIcon: ImageBitmap? = icon,
-    val iconOverride: AppIconOverride? = null
+    val iconOverride: AppIconOverride? = null,
+    val isLinuxTile: Boolean = false,
+    val linuxPackageId: String? = null
 )
 
 data class MediaQueueTrack(
@@ -377,7 +379,9 @@ data class LinuxPackageEntry(
     val description: String,
     val sizeBytes: Long,
     val kind: LinuxPackageKind,
-    val isInstalled: Boolean = false
+    val isInstalled: Boolean = false,
+    val entryCommand: String = "",
+    val installedDirPath: String = ""
 )
 
 data class AndroidOptimizationStats(

@@ -32,6 +32,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -87,6 +88,19 @@ class KeyDeckAccessibilityService : AccessibilityService() {
         fun performGlobalPaste(): Boolean {
             return getInstance()?.performAccessibilityPaste() ?: false
         }
+
+        fun getRecommendedWorkspaceTopPx(context: Context? = null): Int {
+            val inst = getInstance()
+            val res = inst?.resources ?: context?.resources
+            val density = res?.displayMetrics?.density ?: 3f
+            val resId = res?.getIdentifier("status_bar_height", "dimen", "android") ?: 0
+            val statusBarPx = if (resId > 0 && res != null) {
+                res.getDimensionPixelSize(resId)
+            } else {
+                (28f * density).toInt()
+            }
+            return statusBarPx + (116f * density).toInt()
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -102,6 +116,7 @@ class KeyDeckAccessibilityService : AccessibilityService() {
     private var workspaceBarView: View? = null
     private var workspaceBarCollapsed = false
     private var currentWorkspaceLabel: String = "Рабочий стол"
+    private var workspaceBarTickRunnable: Runnable? = null
     private var isTorchOn = false
 
     private var currentForegroundPkg: String? = null
@@ -680,42 +695,111 @@ class KeyDeckAccessibilityService : AccessibilityService() {
             val topMarginPx = getStatusBarHeightPx() + dp(2)
 
             val barContainer = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
                 background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.argb(236, 30, 46, 68), Color.argb(236, 15, 24, 38))
+                    intArrayOf(Color.argb(242, 22, 34, 52), Color.argb(242, 10, 16, 26))
                 ).apply {
                     cornerRadius = dp(6).toFloat()
-                    setStroke(dp(1), Color.argb(200, 102, 182, 246))
+                    setStroke(dp(1), Color.argb(210, 102, 182, 246))
                 }
-                setPadding(dp(6), dp(4), dp(6), dp(4))
+                setPadding(dp(7), dp(5), dp(7), dp(5))
             }
 
             if (workspaceBarCollapsed) {
-                barContainer.addView(createShadePillButton("▼ $currentWorkspaceLabel", Color.rgb(36, 98, 168)) {
+                val collapsedRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                collapsedRow.addView(createShadePillButton("▼ $currentWorkspaceLabel", Color.rgb(36, 98, 168)) {
                     workspaceBarCollapsed = false
                     showOrUpdateWorkspaceBar(currentWorkspaceLabel)
                 })
-                barContainer.addView(spaceView(dp(4)))
-                barContainer.addView(createShadePillButton("✕", Color.rgb(88, 38, 44)) {
+                collapsedRow.addView(spaceView(dp(4)))
+                collapsedRow.addView(createShadePillButton("✕", Color.rgb(88, 38, 44)) {
                     dismissWorkspaceBar()
                 })
+                barContainer.addView(collapsedRow)
             } else {
-                val activeTrack = mediaRepo?.mediaState?.value?.activeSession?.title ?: "Музыка"
-                val trackBtn = createShadePillButton(
-                    text = "♫ ${activeTrack.take(12)}",
-                    bgColor = Color.rgb(32, 54, 82)
+                val activeSession = mediaRepo?.mediaState?.value?.activeSession
+
+                // Row 1: Track Title + Progress Bar + Prev / Play-Pause / Next
+                val musicRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                val trackInfoCol = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener {
+                        mediaRepo?.togglePlayPause() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                    }
+                }
+                val trackTitleTv = TextView(this).apply {
+                    text = activeSession?.let {
+                        val artistPart = if (it.artist.isNotBlank()) " — ${it.artist}" else ""
+                        "♫ ${it.title}$artistPart"
+                    } ?: "♫ $currentWorkspaceLabel"
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    paint.isFakeBoldText = true
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                }
+                val trackProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = 1000
+                    isIndeterminate = false
+                    val dur = activeSession?.durationMs ?: 0L
+                    val pos = if (activeSession != null) MediaControlRepository.currentEstimatedPositionMs(activeSession) else 0L
+                    progress = if (dur > 0L) ((pos * 1000L) / dur).toInt().coerceIn(0, 1000) else 0
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)).apply {
+                        topMargin = dp(3)
+                    }
+                }
+                trackInfoCol.addView(trackTitleTv)
+                trackInfoCol.addView(trackProgress)
+
+                val prevTrackBtn = createShadePillButton("⏮", Color.rgb(38, 52, 72)) {
+                    mediaRepo?.skipPrevious() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                }
+                var playPauseBtn: TextView? = null
+                playPauseBtn = createShadePillButton(
+                    if (activeSession?.isPlaying == true) "⏸" else "▶",
+                    Color.rgb(36, 102, 174)
                 ) {
                     mediaRepo?.togglePlayPause() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                    val nowPlaying = mediaRepo?.mediaState?.value?.activeSession?.isPlaying == true
+                    playPauseBtn?.text = if (nowPlaying) "⏸" else "▶"
                 }
-                val searchBtn = createShadePillButton("🔍", Color.rgb(38, 66, 102)) {
-                    openMainWithAction(EXTRA_OPEN_SEARCH, true)
+                val nextTrackBtn = createShadePillButton("⏭", Color.rgb(38, 52, 72)) {
+                    mediaRepo?.skipNext() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
                 }
-                val pasteBtn = createShadePillButton("Ctrl+V", Color.rgb(42, 84, 118)) {
-                    if (!performAccessibilityPaste()) {
-                        Toast.makeText(this@KeyDeckAccessibilityService, "Поле ввода не выбрано", Toast.LENGTH_SHORT).show()
-                    }
+
+                musicRow.addView(trackInfoCol)
+                musicRow.addView(spaceView(dp(6)))
+                musicRow.addView(prevTrackBtn)
+                musicRow.addView(spaceView(dp(3)))
+                musicRow.addView(playPauseBtn)
+                musicRow.addView(spaceView(dp(3)))
+                musicRow.addView(nextTrackBtn)
+                barContainer.addView(musicRow)
+                barContainer.addView(spaceView(dp(5)))
+
+                // Row 2: Clickable Search Pill + Prev WS + Home + Next WS + Collapse + Close
+                val controlRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                val searchPill = TextView(this).apply {
+                    text = "🔍 Поиск: приложения, чаты, *apk, музыка…"
+                    setTextColor(Color.rgb(175, 205, 236))
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    background = shadeInsetDrawable()
+                    setPadding(dp(8), dp(5), dp(8), dp(5))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener { openMainWithAction(EXTRA_OPEN_SEARCH, true) }
                 }
                 val prevWsBtn = createShadePillButton("◀", Color.rgb(38, 52, 72)) {
                     sendWorkspaceAction(WS_ACTION_PREV)
@@ -735,10 +819,30 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                     dismissWorkspaceBar()
                 }
 
-                listOf(trackBtn, searchBtn, pasteBtn, prevWsBtn, homeWsBtn, nextWsBtn, collapseBtn, closeBtn).forEachIndexed { idx, btn ->
-                    if (idx > 0) barContainer.addView(spaceView(dp(4)))
-                    barContainer.addView(btn)
+                controlRow.addView(searchPill)
+                listOf(prevWsBtn, homeWsBtn, nextWsBtn, collapseBtn, closeBtn).forEach { btn ->
+                    controlRow.addView(spaceView(dp(4)))
+                    controlRow.addView(btn)
                 }
+                barContainer.addView(controlRow)
+
+                val ticker = object : Runnable {
+                    override fun run() {
+                        if (workspaceBarView == null || workspaceBarCollapsed) return
+                        val sess = mediaRepo?.mediaState?.value?.activeSession
+                        trackTitleTv.text = sess?.let {
+                            val artistPart = if (it.artist.isNotBlank()) " — ${it.artist}" else ""
+                            "♫ ${it.title}$artistPart"
+                        } ?: "♫ $currentWorkspaceLabel"
+                        val dur = sess?.durationMs ?: 0L
+                        val pos = if (sess != null) MediaControlRepository.currentEstimatedPositionMs(sess) else 0L
+                        trackProgress.progress = if (dur > 0L) ((pos * 1000L) / dur).toInt().coerceIn(0, 1000) else 0
+                        playPauseBtn?.text = if (sess?.isPlaying == true) "⏸" else "▶"
+                        mainHandler.postDelayed(this, 1000L)
+                    }
+                }
+                workspaceBarTickRunnable = ticker
+                mainHandler.postDelayed(ticker, 1000L)
             }
 
             val widthPx = if (workspaceBarCollapsed) {
@@ -765,6 +869,8 @@ class KeyDeckAccessibilityService : AccessibilityService() {
     }
 
     fun dismissWorkspaceBar() {
+        workspaceBarTickRunnable?.let { mainHandler.removeCallbacks(it) }
+        workspaceBarTickRunnable = null
         val v = workspaceBarView ?: return
         workspaceBarView = null
         val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return

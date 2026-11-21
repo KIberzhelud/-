@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -115,6 +117,11 @@ fun WorkspaceCanvasHost(
         modifier = modifier
             .fillMaxSize()
             .vistaWindowFrame(RoundedCornerShape(4.dp))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
             .padding(6.dp)
             .testTag("workspace_canvas_host")
     ) {
@@ -232,17 +239,27 @@ fun WorkspaceCanvasHost(
                         modifier = Modifier
                             .fillMaxWidth()
                             .vistaInsetBox(isFocused = true)
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
-                        if (appFilterTfv.text.isEmpty()) {
-                            Text("Фильтр приложений…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                        }
                         BasicTextField(
                             value = appFilterTfv,
                             onValueChange = { appFilterTfv = it },
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
                             cursorBrush = SolidColor(theme.accent),
+                            decorationBox = { innerTextField ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 34.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (appFilterTfv.text.isEmpty()) {
+                                        Text("Фильтр приложений…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                                    }
+                                    innerTextField()
+                                }
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("workspace_app_filter_input")

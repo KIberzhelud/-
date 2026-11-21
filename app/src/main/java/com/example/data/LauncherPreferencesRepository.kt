@@ -72,6 +72,7 @@ class LauncherPreferencesRepository(private val context: Context) {
         val SMART_ALBUMS_JSON = stringPreferencesKey("smart_albums_json")
         val LYRICS_OVERRIDES_JSON = stringPreferencesKey("lyrics_overrides_json")
         val EQUALIZER_JSON = stringPreferencesKey("equalizer_settings_json")
+        val INSTALLED_LINUX_TILES_JSON = stringPreferencesKey("installed_linux_tiles_json")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -268,6 +269,26 @@ class LauncherPreferencesRepository(private val context: Context) {
     val equalizerConfig: Flow<SavedEqualizerConfig?> = context.launcherDataStore.data
         .map { prefs -> parseEqualizerConfig(prefs[Keys.EQUALIZER_JSON]) }
         .onStart { emit(null) }
+
+    val installedLinuxTiles: Flow<List<PersistedLinuxTile>> = context.launcherDataStore.data
+        .map { prefs -> parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON]) }
+        .onStart { emit(emptyList()) }
+
+    suspend fun upsertInstalledLinuxTile(tile: PersistedLinuxTile) {
+        context.launcherDataStore.edit { prefs ->
+            val current = parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON])
+                .filterNot { it.id == tile.id || it.packageName.equals(tile.packageName, ignoreCase = true) }
+            prefs[Keys.INSTALLED_LINUX_TILES_JSON] = serializeInstalledLinuxTiles(listOf(tile) + current)
+        }
+    }
+
+    suspend fun removeInstalledLinuxTile(tileId: String) {
+        context.launcherDataStore.edit { prefs ->
+            val current = parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON])
+                .filterNot { it.id == tileId }
+            prefs[Keys.INSTALLED_LINUX_TILES_JSON] = serializeInstalledLinuxTiles(current)
+        }
+    }
 
     suspend fun togglePinApp(appId: String) {
         context.launcherDataStore.edit { prefs ->
@@ -499,7 +520,7 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
     }
 
-    suspend fun saveWorkspaceGridState(state: WorkspaceGridState) {
+    private fun serializeWorkspaceGrid(state: WorkspaceGridState): String {
         val cellsWithHome = if (state.cells.any { it.x == 0 && it.y == 0 }) {
             state.cells
         } else {
@@ -522,9 +543,24 @@ class LauncherPreferencesRepository(private val context: Context) {
             }
             put("cells", arr)
         }
+        return obj.toString()
+    }
+
+    suspend fun saveWorkspaceGridState(state: WorkspaceGridState) {
+        val raw = serializeWorkspaceGrid(state)
         context.launcherDataStore.edit { prefs ->
-            prefs[Keys.WORKSPACES_JSON] = obj.toString()
+            prefs[Keys.WORKSPACES_JSON] = raw
         }
+    }
+
+    suspend fun updateWorkspaceGridState(transform: (WorkspaceGridState) -> WorkspaceGridState): WorkspaceGridState {
+        var result = WorkspaceGridState()
+        context.launcherDataStore.edit { prefs ->
+            val current = parseWorkspaceGrid(prefs[Keys.WORKSPACES_JSON])
+            result = transform(current)
+            prefs[Keys.WORKSPACES_JSON] = serializeWorkspaceGrid(result)
+        }
+        return result
     }
 
     suspend fun saveCustomPalette(palette: CustomColorPalette, activate: Boolean = true) {
@@ -930,6 +966,59 @@ class LauncherPreferencesRepository(private val context: Context) {
         val bassBoost: Int,
         val virtualizer: Int
     )
+
+    data class PersistedLinuxTile(
+        val id: String,
+        val name: String,
+        val packageName: String,
+        val kind: String,
+        val installedDirPath: String,
+        val entryCommand: String,
+        val version: String = "1.0"
+    )
+
+    private fun serializeInstalledLinuxTiles(tiles: List<PersistedLinuxTile>): String {
+        val arr = JSONArray()
+        tiles.forEach { t ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", t.id)
+                    put("name", t.name)
+                    put("pkg", t.packageName)
+                    put("kind", t.kind)
+                    put("dir", t.installedDirPath)
+                    put("cmd", t.entryCommand)
+                    put("ver", t.version)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseInstalledLinuxTiles(raw: String?): List<PersistedLinuxTile> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id").trim()
+                    if (id.isEmpty()) continue
+                    add(
+                        PersistedLinuxTile(
+                            id = id,
+                            name = o.optString("name", id),
+                            packageName = o.optString("pkg", id),
+                            kind = o.optString("kind", "DEB"),
+                            installedDirPath = o.optString("dir", ""),
+                            entryCommand = o.optString("cmd", ""),
+                            version = o.optString("ver", "1.0")
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
 
     companion object {
         val DEFAULT_WEATHER_CITY = WeatherCityResult(

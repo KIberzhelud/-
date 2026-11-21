@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,6 +58,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,10 +69,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
@@ -182,6 +188,8 @@ fun AppTileGrid(
         }
     }
 
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     Column(modifier = modifier.fillMaxSize()) {
         // Windows Vista / Symbian metallic search & shortcuts strip
         Row(
@@ -189,6 +197,11 @@ fun AppTileGrid(
                 .fillMaxWidth()
                 .symbianMetallicBar()
                 .border(width = 1.dp, color = theme.chromeBorderOuter)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -196,8 +209,11 @@ fun AppTileGrid(
                 modifier = Modifier
                     .weight(1f)
                     .vistaInsetBox(isFocused = isSearchFocused)
-                    .clickable(onClick = onRequestSearchFocus)
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                    .clickable {
+                        onRequestSearchFocus()
+                        keyboardController?.show()
+                    }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
@@ -206,70 +222,78 @@ fun AppTileGrid(
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(Modifier.width(7.dp))
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (searchQuery.isEmpty()) {
-                        Text(
-                            text = if (highlightedLetter != null) {
-                                "Буква: $highlightedLetter • ${L10n.searchPlaceholder(lang)}"
-                            } else {
-                                L10n.searchPlaceholder(lang)
-                            },
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
-                            color = if (highlightedLetter != null) theme.accent else TextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    var appsSearchTfv by remember {
-                        mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
-                    }
-                    LaunchedEffect(searchQuery) {
-                        if (searchQuery != appsSearchTfv.text) {
-                            appsSearchTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
-                        }
-                    }
-                    BasicTextField(
-                        value = appsSearchTfv,
-                        onValueChange = { next ->
-                            appsSearchTfv = next
-                            onSearchQueryChange(next.text)
-                        },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = TextPrimary,
-                            fontSize = 12.5.sp
-                        ),
-                        cursorBrush = SolidColor(theme.accent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(
-                            onGo = {
-                                val firstApp = apps.firstOrNull()
-                                val firstChat = chatSearchResults.firstOrNull()
-                                val firstFile = searchFiles.firstOrNull()
-                                val firstImg = searchImages.firstOrNull()
-                                val firstLinux = linuxSearchResults.firstOrNull()
-                                val firstMusic = musicSearchResults.firstOrNull()
-                                when {
-                                    firstApp != null -> onLaunchApp(firstApp)
-                                    firstChat != null -> onOpenLockedChat(firstChat)
-                                    firstFile != null -> onOpenSearchFile(firstFile)
-                                    firstImg != null -> onOpenSearchFile(firstImg)
-                                    firstLinux != null -> onRunLinuxPackage(firstLinux)
-                                    firstMusic != null -> onLaunchMusicMatch(firstMusic)
-                                    trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
-                                }
-                            }
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(searchFocusRequester)
-                            .onFocusChanged { onSearchFocusChange(it.isFocused) }
-                            .testTag("apps_search_input")
-                    )
+                var appsSearchTfv by remember {
+                    mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
                 }
+                LaunchedEffect(searchQuery, isSearchFocused) {
+                    if (searchQuery != appsSearchTfv.text && (!isSearchFocused || searchQuery.isEmpty())) {
+                        appsSearchTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+                    }
+                }
+                BasicTextField(
+                    value = appsSearchTfv,
+                    onValueChange = { next ->
+                        appsSearchTfv = next
+                        onSearchQueryChange(next.text)
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = TextPrimary,
+                        fontSize = 12.5.sp
+                    ),
+                    cursorBrush = SolidColor(theme.accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(
+                        onGo = {
+                            val firstApp = apps.firstOrNull()
+                            val firstChat = chatSearchResults.firstOrNull()
+                            val firstFile = searchFiles.firstOrNull()
+                            val firstImg = searchImages.firstOrNull()
+                            val firstLinux = linuxSearchResults.firstOrNull()
+                            val firstMusic = musicSearchResults.firstOrNull()
+                            when {
+                                firstApp != null -> onLaunchApp(firstApp)
+                                firstChat != null -> onOpenLockedChat(firstChat)
+                                firstFile != null -> onOpenSearchFile(firstFile)
+                                firstImg != null -> onOpenSearchFile(firstImg)
+                                firstLinux != null -> onRunLinuxPackage(firstLinux)
+                                firstMusic != null -> onLaunchMusicMatch(firstMusic)
+                                trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
+                            }
+                        }
+                    ),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 34.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (appsSearchTfv.text.isEmpty()) {
+                                Text(
+                                    text = if (highlightedLetter != null) {
+                                        "Буква: $highlightedLetter • ${L10n.searchPlaceholder(lang)}"
+                                    } else {
+                                        L10n.searchPlaceholder(lang)
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
+                                    color = if (highlightedLetter != null) theme.accent else TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(searchFocusRequester)
+                        .onFocusChanged {
+                            onSearchFocusChange(it.isFocused)
+                            if (it.isFocused) keyboardController?.show()
+                        }
+                        .testTag("apps_search_input")
+                )
             }
 
             Spacer(Modifier.width(6.dp))
@@ -938,6 +962,22 @@ private fun AppGlossyTileItem(
                         .size(34.dp)
                         .clip(RoundedCornerShape(3.dp))
                 )
+            } else if (app.isLinuxTile) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF0B2420))
+                        .border(1.dp, Color(0xFF19D49E), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Terminal,
+                        contentDescription = app.label,
+                        tint = Color(0xFF3FF2B9),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             } else {
                 Image(
                     painter = painterResource(R.drawable.ic_symbian_tools),
@@ -1027,6 +1067,12 @@ private fun SearchImageCard(
             .padding(6.dp)
             .testTag("search_image_card_${file.id}")
     ) {
+        val context = LocalContext.current
+        val thumb by produceState<ImageBitmap?>(initialValue = file.thumbnail, file.id) {
+            if (value == null) {
+                value = UniversalSearchRepository.loadImageThumbnail(context, file)
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1035,9 +1081,10 @@ private fun SearchImageCard(
                 .background(theme.surface),
             contentAlignment = Alignment.Center
         ) {
-            if (file.thumbnail != null) {
+            val resolvedThumb = thumb
+            if (resolvedThumb != null) {
                 Image(
-                    bitmap = file.thumbnail,
+                    bitmap = resolvedThumb,
                     contentDescription = file.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()

@@ -134,7 +134,7 @@ fun AppContextDialog(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = app.packageName,
+                        text = if (app.isLinuxTile) "Linux CLI • ${app.packageName}" else app.packageName,
                         style = MaterialTheme.typography.bodySmall,
                         color = TextSecondary,
                         maxLines = 1,
@@ -151,23 +151,25 @@ fun AppContextDialog(
             ) {
                 ContextActionRow(
                     icon = Icons.AutoMirrored.Rounded.Launch,
-                    label = "Открыть приложение",
+                    label = if (app.isLinuxTile) "Открыть в терминале Linux" else "Открыть приложение",
                     tint = ElectricCyan,
                     onClick = {
                         onDismiss()
                         onLaunch()
                     }
                 )
-                ContextActionRow(
-                    icon = Icons.Rounded.AddToQueue,
-                    label = "Создать рабочий стол",
-                    tint = theme.focusBorder,
-                    onClick = {
-                        onDismiss()
-                        onCreateWorkspace()
-                    },
-                    modifier = Modifier.testTag("context_create_workspace")
-                )
+                if (!app.isLinuxTile) {
+                    ContextActionRow(
+                        icon = Icons.Rounded.AddToQueue,
+                        label = "Создать рабочий стол",
+                        tint = theme.focusBorder,
+                        onClick = {
+                            onDismiss()
+                            onCreateWorkspace()
+                        },
+                        modifier = Modifier.testTag("context_create_workspace")
+                    )
+                }
                 ContextActionRow(
                     icon = if (app.isPinned) Icons.Rounded.Star else Icons.Rounded.StarOutline,
                     label = if (app.isPinned) "Убрать из избранного (Ctrl+D)" else "Закрепить в избранном (Ctrl+D)",
@@ -178,34 +180,36 @@ fun AppContextDialog(
                     },
                     modifier = Modifier.testTag("context_toggle_pin")
                 )
-                ContextActionRow(
-                    icon = Icons.Rounded.AutoMode,
-                    label = if (isAutoKill) {
-                        "Одноразовое: закрывать при выходе ✓"
-                    } else {
-                        "Сделать одноразовым (закрывать при выходе)"
-                    },
-                    tint = if (isAutoKill) CallIncomingGreen else theme.accent,
-                    onClick = {
-                        onToggleAutoKill()
-                        onDismiss()
-                    },
-                    modifier = Modifier.testTag("context_toggle_autokill")
-                )
-                ContextActionRow(
-                    icon = Icons.Rounded.Headset,
-                    label = if (isBackgroundSpoofed) {
-                        "Фоновый звук/обход паузы: ВКЛ ✓"
-                    } else {
-                        "Разрешить звук в фоне (обход паузы)"
-                    },
-                    tint = if (isBackgroundSpoofed) CallIncomingGreen else TextSecondary,
-                    onClick = {
-                        onToggleBackgroundSpoof()
-                        onDismiss()
-                    },
-                    modifier = Modifier.testTag("context_toggle_bg_spoof")
-                )
+                if (!app.isLinuxTile) {
+                    ContextActionRow(
+                        icon = Icons.Rounded.AutoMode,
+                        label = if (isAutoKill) {
+                            "Одноразовое: закрывать при выходе ✓"
+                        } else {
+                            "Сделать одноразовым (закрывать при выходе)"
+                        },
+                        tint = if (isAutoKill) CallIncomingGreen else theme.accent,
+                        onClick = {
+                            onToggleAutoKill()
+                            onDismiss()
+                        },
+                        modifier = Modifier.testTag("context_toggle_autokill")
+                    )
+                    ContextActionRow(
+                        icon = Icons.Rounded.Headset,
+                        label = if (isBackgroundSpoofed) {
+                            "Фоновый звук/обход паузы: ВКЛ ✓"
+                        } else {
+                            "Разрешить звук в фоне (обход паузы)"
+                        },
+                        tint = if (isBackgroundSpoofed) CallIncomingGreen else TextSecondary,
+                        onClick = {
+                            onToggleBackgroundSpoof()
+                            onDismiss()
+                        },
+                        modifier = Modifier.testTag("context_toggle_bg_spoof")
+                    )
+                }
                 ContextActionRow(
                     icon = Icons.Rounded.Edit,
                     label = "Переименовать",
@@ -220,29 +224,31 @@ fun AppContextDialog(
                     onClick = onChooseIcon,
                     modifier = Modifier.testTag("context_choose_icon")
                 )
-                ContextActionRow(
-                    icon = Icons.Rounded.Share,
-                    label = "Поделиться APK",
-                    tint = ElectricCyan,
-                    onClick = onShareApk,
-                    modifier = Modifier.testTag("context_share_apk")
-                )
-                ContextActionRow(
-                    icon = Icons.Rounded.SaveAlt,
-                    label = "Сохранить APK в папку…",
-                    tint = TextPrimary,
-                    onClick = onSaveApk,
-                    modifier = Modifier.testTag("context_save_apk")
-                )
-                ContextActionRow(
-                    icon = Icons.Rounded.Info,
-                    label = "О приложении",
-                    tint = TextPrimary,
-                    onClick = onOpenInfo
-                )
+                if (!app.isLinuxTile) {
+                    ContextActionRow(
+                        icon = Icons.Rounded.Share,
+                        label = "Поделиться APK",
+                        tint = ElectricCyan,
+                        onClick = onShareApk,
+                        modifier = Modifier.testTag("context_share_apk")
+                    )
+                    ContextActionRow(
+                        icon = Icons.Rounded.SaveAlt,
+                        label = "Сохранить APK в папку…",
+                        tint = TextPrimary,
+                        onClick = onSaveApk,
+                        modifier = Modifier.testTag("context_save_apk")
+                    )
+                    ContextActionRow(
+                        icon = Icons.Rounded.Info,
+                        label = "О приложении",
+                        tint = TextPrimary,
+                        onClick = onOpenInfo
+                    )
+                }
                 ContextActionRow(
                     icon = Icons.Rounded.DeleteOutline,
-                    label = "Удалить",
+                    label = if (app.isLinuxTile) "Удалить пакет и плитку" else "Удалить",
                     tint = CallMissedRed,
                     onClick = onUninstall
                 )

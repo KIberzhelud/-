@@ -21,6 +21,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -96,6 +97,7 @@ import com.example.ui.components.InlineMusicControlDrawer
 import com.example.ui.components.KeyboardShortcutsDialog
 import com.example.ui.components.LandscapeSymbianSidebar
 import com.example.ui.components.LinuxCatalogDialog
+import com.example.ui.components.LinuxRunnerDialog
 import com.example.ui.components.LockedSingleChatView
 import com.example.ui.components.PortraitMusicHeaderBar
 import com.example.ui.components.PowerampPlayerScreen
@@ -112,6 +114,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
+import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
 import com.example.viewmodel.LauncherUiState
 import com.example.viewmodel.LauncherViewModel
@@ -126,6 +129,8 @@ fun LauncherScreen(
     writerViewModel: WriterViewModel = viewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val activeLinuxRunnerTile by viewModel.activeLinuxRunnerTile.collectAsStateWithLifecycle()
+    val linuxConsoleOutput by viewModel.linuxConsoleOutput.collectAsStateWithLifecycle()
 
     val appGridState = rememberLazyGridState()
     val callLogListState = rememberLazyListState()
@@ -274,6 +279,7 @@ fun LauncherScreen(
     }
 
     val hasAnyModalOpen = state.showFullPowerampPlayer ||
+        activeLinuxRunnerTile != null ||
         state.sourcePickerTarget != null ||
         state.pendingStreamCaptureRequest != null ||
         state.showWeatherForecastDialog ||
@@ -304,6 +310,7 @@ fun LauncherScreen(
 
     BackHandler(enabled = shouldHandleBack) {
         when {
+            activeLinuxRunnerTile != null -> viewModel.closeLinuxRunner()
             showAllFilesPromptDialog -> showAllFilesPromptDialog = false
             state.sourcePickerTarget != null -> viewModel.openSourcePicker(null)
             state.pendingStreamCaptureRequest != null -> viewModel.clearPendingStreamCaptureRequest()
@@ -398,6 +405,7 @@ fun LauncherScreen(
                 LandscapeSymbianSidebar(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
+                    livePositionFlow = viewModel.livePositionMs,
                     isDrawerOpen = state.showMusicSheet,
                     coverStyle = state.playerCoverStyle,
                     activeTab = state.activeTab,
@@ -429,6 +437,7 @@ fun LauncherScreen(
                     InlineMusicControlDrawer(
                         mediaState = state.mediaState,
                         livePositionMs = state.livePositionMs,
+                        livePositionFlow = viewModel.livePositionMs,
                         selectedTab = state.musicDrawerTab,
                         localTracks = state.localAudioTracks,
                         telegramNotifications = state.hubNotifications,
@@ -506,7 +515,12 @@ fun LauncherScreen(
                     )
                 }
 
-                if (state.activeTab != MainTab.HUB) {
+                val isInCleanWorkspaceLandscape = state.activeTab == MainTab.HOME &&
+                    state.showWorkspaceSpace &&
+                    state.appSearchQuery.isBlank() &&
+                    state.highlightedLetter == null
+
+                if (state.activeTab != MainTab.HUB && !isInCleanWorkspaceLandscape) {
                     FavoritesAndAlphabetRail(
                         activeTab = state.activeTab,
                         alphabetMode = state.alphabetMode,
@@ -539,6 +553,7 @@ fun LauncherScreen(
                 PortraitMusicHeaderBar(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
+                    livePositionFlow = viewModel.livePositionMs,
                     isDrawerOpen = state.showMusicSheet,
                     isCollapsed = state.isPlayerCollapsed,
                     showDeleteWorkspace = state.activeTab == MainTab.HOME && !state.workspaceGrid.isOnHome,
@@ -565,6 +580,7 @@ fun LauncherScreen(
                     InlineMusicControlDrawer(
                         mediaState = state.mediaState,
                         livePositionMs = state.livePositionMs,
+                        livePositionFlow = viewModel.livePositionMs,
                         selectedTab = state.musicDrawerTab,
                         localTracks = state.localAudioTracks,
                         telegramNotifications = state.hubNotifications,
@@ -612,6 +628,63 @@ fun LauncherScreen(
                     )
                 }
 
+                val isInCleanWorkspaceMode = state.activeTab == MainTab.HOME &&
+                    state.showWorkspaceSpace &&
+                    state.appSearchQuery.isBlank() &&
+                    state.highlightedLetter == null
+
+                if (isInCleanWorkspaceMode) {
+                    // Compact docked Search Strip matching screenshot layout directly under Player Bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .symbianMetallicBar()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                            .padding(horizontal = 6.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .vistaInsetBox()
+                                .clickable {
+                                    viewModel.closeWorkspaceSpace()
+                                    runCatching { appSearchFocusRequester.requestFocus() }
+                                }
+                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .testTag("workspace_top_search_pill")
+                        ) {
+                            Text(
+                                text = "🔍 Поиск: приложения, чаты, *apk, музыка…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton(isPrimary = true, isActive = false)
+                                .clickable { viewModel.openHomeWorkspace() }
+                                .padding(horizontal = 10.dp, vertical = 7.dp)
+                                .testTag("workspace_top_home_pill")
+                        ) {
+                            Text(
+                                text = "🏠 Плитки",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
+                }
+
                 Row(
                     modifier = Modifier
                         .weight(1f)
@@ -647,7 +720,7 @@ fun LauncherScreen(
                         )
                     }
 
-                    if (state.activeTab != MainTab.HUB) {
+                    if (state.activeTab != MainTab.HUB && !isInCleanWorkspaceMode) {
                         FavoritesAndAlphabetRail(
                             activeTab = state.activeTab,
                             alphabetMode = state.alphabetMode,
@@ -666,18 +739,24 @@ fun LauncherScreen(
                     }
                 }
 
-                // Bottom Windows Vista / Symbian S60 Softkey Taskbar
-                HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .symbianMetallicBar()
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        .height(52.dp)
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                // Bottom Windows Vista / Symbian S60 Softkey Taskbar (hidden in Workspace Space so workspace fills full area below Player+Search)
+                if (!isInCleanWorkspaceMode) {
+                    HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .symbianMetallicBar()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {}
+                            )
+                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            .height(52.dp)
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                     PortraitNavButton(
                         label = L10n.camera(lang),
                         iconRes = R.drawable.ic_symbian_camera,
@@ -717,15 +796,16 @@ fun LauncherScreen(
                             .weight(1f)
                             .testTag("nav_hub_portrait")
                     )
-                    PortraitNavButton(
-                        label = L10n.books(lang),
-                        iconRes = R.drawable.ic_symbian_editor,
-                        selected = state.isWriterModeOpen,
-                        onClick = { viewModel.openWriterMode() },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("nav_writer_portrait")
-                    )
+                        PortraitNavButton(
+                            label = L10n.books(lang),
+                            iconRes = R.drawable.ic_symbian_editor,
+                            selected = state.isWriterModeOpen,
+                            onClick = { viewModel.openWriterMode() },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("nav_writer_portrait")
+                        )
+                    }
                 }
             }
         }
@@ -774,6 +854,7 @@ fun LauncherScreen(
             PowerampPlayerScreen(
                 mediaState = state.mediaState,
                 livePositionMs = state.livePositionMs,
+                livePositionFlow = viewModel.livePositionMs,
                 coverStyle = state.playerCoverStyle,
                 activeTab = state.powerampTab,
                 isLandscape = isLandscape,
@@ -894,7 +975,13 @@ fun LauncherScreen(
                 saveApkLauncher.launch(viewModel.getSuggestedApkName(app))
             },
             onOpenInfo = { viewModel.openAppInfo(app) },
-            onUninstall = { viewModel.uninstallApp(app) }
+            onUninstall = {
+                if (app.isLinuxTile) {
+                    viewModel.uninstallLinuxTile(app.linuxPackageId ?: app.id.removePrefix("linux_tile:"))
+                } else {
+                    viewModel.uninstallApp(app)
+                }
+            }
         )
     }
 
@@ -973,6 +1060,17 @@ fun LauncherScreen(
             onRefresh = viewModel::refreshLinuxCatalog,
             onOpenTermuxDownload = viewModel::openTermuxDownload,
             onDismiss = { viewModel.setShowLinuxCatalogDialog(false) }
+        )
+    }
+
+    activeLinuxRunnerTile?.let { tile ->
+        LinuxRunnerDialog(
+            tile = tile,
+            output = linuxConsoleOutput,
+            onRunCommand = viewModel::runLinuxConsoleCommand,
+            onRerunEntry = { viewModel.runLinuxConsoleCommand(tile.entryCommand) },
+            onUninstall = { viewModel.uninstallLinuxTile(tile.id) },
+            onDismiss = viewModel::closeLinuxRunner
         )
     }
 
@@ -1262,6 +1360,7 @@ private fun MainTabContent(
                         onDeleteWorkspace = { viewModel.deleteWorkspace() },
                         modifier = Modifier
                             .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.navigationBars)
                             .padding(4.dp)
                     )
                 }

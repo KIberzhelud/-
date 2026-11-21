@@ -9,6 +9,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaControlRepository
@@ -101,6 +103,7 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.flow.StateFlow
 
 private val TELEGRAM_CLIENT_TOKENS = listOf(
     "telegram",
@@ -167,6 +170,7 @@ fun InlineMusicControlDrawer(
     onOpenNotificationAccess: () -> Unit,
     onLaunchMusicApp: (AppEntry) -> Unit,
     onOpenFullPoweramp: () -> Unit = {},
+    livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -180,6 +184,11 @@ fun InlineMusicControlDrawer(
     val drawerBody: @Composable (Modifier) -> Unit = { contentModifier ->
         Column(
             modifier = contentModifier
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             // 1. Pinned Compact Top Header: Source + Open + YT Audio + Close (reverse-swipe closes drawer)
@@ -652,53 +661,61 @@ fun InlineMusicControlDrawer(
                             modifier = Modifier.size(14.dp)
                         )
                         Spacer(Modifier.width(5.dp))
-                        Box(modifier = Modifier.weight(1f)) {
-                            if (trackSearchQuery.isEmpty()) {
-                                Text(
-                                    text = if (lang == com.example.model.AppLanguage.RU) {
-                                        "Поиск треков по всем стримингам и ТГ…"
-                                    } else {
-                                        "Search tracks across streaming & TG…"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                    color = TextMuted,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            var drawerSearchTfv by remember {
-                                mutableStateOf(TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length)))
-                            }
-                            LaunchedEffect(trackSearchQuery) {
-                                if (trackSearchQuery != drawerSearchTfv.text) {
-                                    drawerSearchTfv = TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length))
-                                }
-                            }
-                            BasicTextField(
-                                value = drawerSearchTfv,
-                                onValueChange = { next ->
-                                    drawerSearchTfv = next
-                                    onTrackSearchChange(next.text)
-                                },
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall.copy(
-                                    color = TextPrimary,
-                                    fontSize = 12.sp
-                                ),
-                                cursorBrush = SolidColor(theme.accent),
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(
-                                    onSearch = {
-                                        if (drawerSearchTfv.text.isNotBlank()) {
-                                            onSearchAndPlayInStream(drawerSearchTfv.text, active?.packageName)
-                                        }
-                                    }
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("drawer_track_search_input")
-                            )
+                        var drawerSearchTfv by remember {
+                            mutableStateOf(TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length)))
                         }
+                        LaunchedEffect(trackSearchQuery) {
+                            if (trackSearchQuery != drawerSearchTfv.text) {
+                                drawerSearchTfv = TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length))
+                            }
+                        }
+                        BasicTextField(
+                            value = drawerSearchTfv,
+                            onValueChange = { next ->
+                                drawerSearchTfv = next
+                                onTrackSearchChange(next.text)
+                            },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
+                                color = TextPrimary,
+                                fontSize = 12.sp
+                            ),
+                            cursorBrush = SolidColor(theme.accent),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    if (drawerSearchTfv.text.isNotBlank()) {
+                                        onSearchAndPlayInStream(drawerSearchTfv.text, active?.packageName)
+                                    }
+                                }
+                            ),
+                            decorationBox = { innerTextField ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 34.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    if (drawerSearchTfv.text.isEmpty()) {
+                                        Text(
+                                            text = if (lang == com.example.model.AppLanguage.RU) {
+                                                "Поиск треков по всем стримингам и ТГ…"
+                                            } else {
+                                                "Search tracks across streaming & TG…"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                            color = TextMuted,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("drawer_track_search_input")
+                        )
                         if (mediaState.isSearchingStream) {
                             CircularProgressIndicator(
                                 color = theme.accent,
@@ -1208,6 +1225,11 @@ fun InlineMusicControlDrawer(
                 .widthIn(min = 285.dp, max = 345.dp)
                 .fillMaxHeight()
                 .vistaWindowFrame(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
                 .testTag("inline_music_drawer")
         ) {
             drawerBody(
@@ -1258,6 +1280,11 @@ fun InlineMusicControlDrawer(
             modifier = modifier
                 .fillMaxWidth()
                 .vistaWindowFrame(RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
                 .testTag("inline_music_drawer")
         ) {
             drawerBody(
@@ -1358,6 +1385,55 @@ fun InlineMusicControlDrawer(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DrawerLiveSeekStrip(
+    sessionId: String,
+    durationMs: Long,
+    fallbackPositionMs: Long,
+    livePositionFlow: StateFlow<Long>?,
+    onSeekTo: (Long) -> Unit
+) {
+    val flowPos = livePositionFlow?.collectAsStateWithLifecycle()?.value
+    val livePos = flowPos ?: fallbackPositionMs
+    var isDragging by remember { mutableStateOf(false) }
+    var sliderPos by remember(sessionId) { mutableFloatStateOf(0f) }
+    val displayPos = if (isDragging) sliderPos.toLong() else livePos
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = MediaControlRepository.formatTimeMs(displayPos),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+            color = TextSecondary,
+            modifier = Modifier.width(34.dp)
+        )
+        VistaSlider(
+            value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+            onValueChange = {
+                isDragging = true
+                sliderPos = it
+            },
+            onValueChangeFinished = {
+                isDragging = false
+                onSeekTo(sliderPos.toLong())
+            },
+            valueRange = 0f..durationMs.toFloat(),
+            compact = true,
+            modifier = Modifier
+                .weight(1f)
+                .testTag("drawer_vista_seek_slider")
+        )
+        Text(
+            text = MediaControlRepository.formatTimeMs(durationMs),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+            color = TextMuted,
+            modifier = Modifier.padding(start = 4.dp)
+        )
     }
 }
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.MediaControlRepository
 import com.example.model.CallsSubTab
@@ -87,6 +89,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -110,6 +113,7 @@ fun PortraitMusicHeaderBar(
     onSetCollapsed: (Boolean) -> Unit = {},
     onOpenFullPlayer: () -> Unit = {},
     onDeleteWorkspace: () -> Unit = {},
+    livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -120,6 +124,11 @@ fun PortraitMusicHeaderBar(
         modifier = modifier
             .fillMaxWidth()
             .symbianMetallicBar()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
             .testTag("portrait_music_panel")
     ) {
         if (isCollapsed) {
@@ -473,50 +482,70 @@ fun PortraitMusicHeaderBar(
             }
         }
 
-        // Interactive Windows Vista seekbar strip (strictly isolated from source switching!)
+        // Interactive Windows Vista seekbar strip (isolated in leaf composable)
         if (active != null && active.durationMs > 0L) {
-            var isScrubbing by remember(active.id) { mutableStateOf(false) }
-            var scrubPos by remember(active.id) { mutableFloatStateOf(0f) }
-            val currentPos = if (isScrubbing) scrubPos.toLong() else livePositionMs
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(theme.insetBg)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = MediaControlRepository.formatTimeMs(currentPos),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = TextSecondary
-                )
-                VistaSlider(
-                    value = currentPos.toFloat().coerceIn(0f, active.durationMs.toFloat()),
-                    onValueChange = {
-                        isScrubbing = true
-                        scrubPos = it
-                    },
-                    onValueChangeFinished = {
-                        isScrubbing = false
-                        onSeekTo(scrubPos.toLong())
-                    },
-                    valueRange = 0f..active.durationMs.toFloat(),
-                    compact = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp)
-                        .testTag("header_vista_seek_slider")
-                )
-                Text(
-                    text = MediaControlRepository.formatTimeMs(active.durationMs),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                    color = TextMuted
-                )
-            }
+            PortraitHeaderSeekStrip(
+                sessionId = active.id,
+                durationMs = active.durationMs,
+                fallbackPositionMs = livePositionMs,
+                livePositionFlow = livePositionFlow,
+                onSeekTo = onSeekTo
+            )
         } else {
             HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
         }
+    }
+}
+
+@Composable
+private fun PortraitHeaderSeekStrip(
+    sessionId: String,
+    durationMs: Long,
+    fallbackPositionMs: Long,
+    livePositionFlow: StateFlow<Long>?,
+    onSeekTo: (Long) -> Unit
+) {
+    val theme = LocalVistaTheme.current
+    val flowPos = livePositionFlow?.collectAsStateWithLifecycle()?.value
+    val livePos = flowPos ?: fallbackPositionMs
+    var isScrubbing by remember(sessionId) { mutableStateOf(false) }
+    var scrubPos by remember(sessionId) { mutableFloatStateOf(0f) }
+    val currentPos = if (isScrubbing) scrubPos.toLong() else livePos
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.insetBg)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = MediaControlRepository.formatTimeMs(currentPos),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            color = TextSecondary
+        )
+        VistaSlider(
+            value = currentPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+            onValueChange = {
+                isScrubbing = true
+                scrubPos = it
+            },
+            onValueChangeFinished = {
+                isScrubbing = false
+                onSeekTo(scrubPos.toLong())
+            },
+            valueRange = 0f..durationMs.toFloat(),
+            compact = true,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 4.dp)
+                .testTag("header_vista_seek_slider")
+        )
+        Text(
+            text = MediaControlRepository.formatTimeMs(durationMs),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            color = TextMuted
+        )
     }
 }
 
@@ -537,6 +566,52 @@ private fun SymbianTransportButton(
         contentAlignment = Alignment.Center
     ) {
         content()
+    }
+}
+
+@Composable
+private fun LandscapeSidebarSeekStrip(
+    sessionId: String,
+    durationMs: Long,
+    fallbackPositionMs: Long,
+    livePositionFlow: StateFlow<Long>?,
+    onSeekTo: (Long) -> Unit
+) {
+    val flowPos = livePositionFlow?.collectAsStateWithLifecycle()?.value
+    val livePos = flowPos ?: fallbackPositionMs
+    var isScrubbing by remember(sessionId) { mutableStateOf(false) }
+    var scrubPos by remember(sessionId) { mutableFloatStateOf(0f) }
+    val currentPos = if (isScrubbing) scrubPos.toLong() else livePos
+
+    Spacer(Modifier.height(4.dp))
+    VistaSlider(
+        value = currentPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+        onValueChange = {
+            isScrubbing = true
+            scrubPos = it
+        },
+        onValueChangeFinished = {
+            isScrubbing = false
+            onSeekTo(scrubPos.toLong())
+        },
+        valueRange = 0f..durationMs.toFloat(),
+        compact = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = MediaControlRepository.formatTimeMs(currentPos),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+            color = TextMuted
+        )
+        Text(
+            text = MediaControlRepository.formatTimeMs(durationMs),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
+            color = TextMuted
+        )
     }
 }
 
@@ -569,6 +644,7 @@ fun LandscapeSymbianSidebar(
     onSelectHubSubTab: (HubSubTab) -> Unit,
     onLaunchCamera: () -> Unit,
     onOpenWriter: () -> Unit,
+    livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -580,6 +656,11 @@ fun LandscapeSymbianSidebar(
             .width(156.dp)
             .fillMaxHeight()
             .symbianMetallicBar()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
     ) {
         Column(
             modifier = Modifier
@@ -718,40 +799,13 @@ fun LandscapeSymbianSidebar(
             }
 
             if (active != null && active.durationMs > 0L) {
-                var isScrubbing by remember(active.id) { mutableStateOf(false) }
-                var scrubPos by remember(active.id) { mutableFloatStateOf(0f) }
-                val currentPos = if (isScrubbing) scrubPos.toLong() else livePositionMs
-
-                Spacer(Modifier.height(4.dp))
-                VistaSlider(
-                    value = currentPos.toFloat().coerceIn(0f, active.durationMs.toFloat()),
-                    onValueChange = {
-                        isScrubbing = true
-                        scrubPos = it
-                    },
-                    onValueChangeFinished = {
-                        isScrubbing = false
-                        onSeekTo(scrubPos.toLong())
-                    },
-                    valueRange = 0f..active.durationMs.toFloat(),
-                    compact = true,
-                    modifier = Modifier.fillMaxWidth()
+                LandscapeSidebarSeekStrip(
+                    sessionId = active.id,
+                    durationMs = active.durationMs,
+                    fallbackPositionMs = livePositionMs,
+                    livePositionFlow = livePositionFlow,
+                    onSeekTo = onSeekTo
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = MediaControlRepository.formatTimeMs(currentPos),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
-                        color = TextMuted
-                    )
-                    Text(
-                        text = MediaControlRepository.formatTimeMs(active.durationMs),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp),
-                        color = TextMuted
-                    )
-                }
             }
 
             Spacer(Modifier.height(6.dp))

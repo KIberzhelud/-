@@ -12,7 +12,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -77,6 +81,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -88,16 +93,26 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaControlRepository
 import com.example.data.MusicCatalogAndLyricsRepository
@@ -127,7 +142,10 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.sin
 
 private enum class SearchSourceFilter(val title: String) {
@@ -195,6 +213,7 @@ fun PowerampPlayerScreen(
     onDeleteAlbum: (String) -> Unit,
     onDownloadMissingAlbumTrack: (SmartAlbum, AlbumExpectedTrack) -> Unit,
     onDownloadAllMissingAlbumTracks: (String) -> Unit,
+    livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -212,6 +231,7 @@ fun PowerampPlayerScreen(
                     )
                 )
             )
+            .pointerInput(Unit) { detectTapGestures {} }
             .windowInsetsPadding(WindowInsets.safeDrawing)
             .imePadding()
             .testTag("poweramp_full_player_screen")
@@ -404,6 +424,7 @@ fun PowerampPlayerScreen(
                 PowerampTab.PLAYER -> PowerampPlayerMainTab(
                     mediaState = mediaState,
                     livePositionMs = livePositionMs,
+                    livePositionFlow = livePositionFlow,
                     coverStyle = coverStyle,
                     equalizerState = equalizerState,
                     localTracks = localTracks,
@@ -446,6 +467,7 @@ fun PowerampPlayerScreen(
                     trackTitle = active?.title.orEmpty(),
                     trackArtist = active?.artist.orEmpty(),
                     livePositionMs = livePositionMs,
+                    livePositionFlow = livePositionFlow,
                     lyrics = currentLyrics,
                     isFetching = isFetchingLyrics,
                     onSeekTo = onSeekTo,
@@ -488,6 +510,156 @@ fun PowerampPlayerScreen(
                 )
             }
         }
+
+        // 4. Persistent Bottom Playback & Seek Mini-Deck visible across ALL non-Player tabs!
+        if (activeTab != PowerampTab.PLAYER) {
+            PowerampGlobalMiniDeck(
+                mediaState = mediaState,
+                livePositionMs = livePositionMs,
+                livePositionFlow = livePositionFlow,
+                onOpenPlayerTab = { onSelectTab(PowerampTab.PLAYER) },
+                onTogglePlayPause = onTogglePlayPause,
+                onSkipPrevious = onSkipPrevious,
+                onSkipNext = onSkipNext,
+                onSeekTo = onSeekTo,
+                onSeekBy = onSeekBy
+            )
+        }
+    }
+}
+
+@Composable
+private fun collectLivePos(livePositionFlow: StateFlow<Long>?, fallbackMs: Long): Long {
+    val flowVal = livePositionFlow?.collectAsStateWithLifecycle()?.value
+    return flowVal ?: fallbackMs
+}
+
+@Composable
+private fun PowerampGlobalMiniDeck(
+    mediaState: MediaPlayerState,
+    livePositionMs: Long,
+    livePositionFlow: StateFlow<Long>?,
+    onOpenPlayerTab: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSkipPrevious: () -> Unit,
+    onSkipNext: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onSeekBy: (Long) -> Unit
+) {
+    val theme = LocalVistaTheme.current
+    val active = mediaState.activeSession
+    val effectivePos = collectLivePos(livePositionFlow, livePositionMs)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .symbianMetallicBar()
+            .border(1.dp, theme.chromeBorderOuter)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("poweramp_global_mini_deck"),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (active != null && active.durationMs > 0L) {
+            var scrubbing by remember(active.id) { mutableStateOf(false) }
+            var scrubPos by remember(active.id) { mutableFloatStateOf(0f) }
+            val displayPos = if (scrubbing) scrubPos.toLong() else effectivePos
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = MediaControlRepository.formatTimeMs(displayPos),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                    color = TextSecondary
+                )
+                VistaSlider(
+                    value = displayPos.toFloat().coerceIn(0f, active.durationMs.toFloat()),
+                    onValueChange = {
+                        scrubbing = true
+                        scrubPos = it
+                    },
+                    onValueChangeFinished = {
+                        scrubbing = false
+                        onSeekTo(scrubPos.toLong())
+                    },
+                    valueRange = 0f..active.durationMs.toFloat(),
+                    compact = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("poweramp_mini_seek_slider")
+                )
+                Text(
+                    text = MediaControlRepository.formatTimeMs(active.durationMs),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                    color = TextMuted
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(3.dp))
+                    .clickable(onClick = onOpenPlayerTab)
+                    .padding(vertical = 2.dp)
+            ) {
+                Text(
+                    text = active?.title ?: "Трек не выбран",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = active?.let {
+                        listOf(it.artist, it.formatLabel).filter { s -> s.isNotBlank() }.joinToString(" • ")
+                    } ?: "Нажмите для перехода в плеер",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                    color = theme.accent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            DeckIconBtn(onClick = { onSeekBy(-10_000L) }, tag = "poweramp_mini_back10_btn") {
+                Icon(Icons.Rounded.Replay10, contentDescription = "-10с", tint = TextSecondary, modifier = Modifier.size(16.dp))
+            }
+            DeckIconBtn(onClick = onSkipPrevious, tag = "poweramp_mini_prev_btn") {
+                Icon(Icons.Rounded.SkipPrevious, contentDescription = "Предыдущий", tint = TextPrimary, modifier = Modifier.size(18.dp))
+            }
+            Box(
+                modifier = Modifier
+                    .size(width = 42.dp, height = 34.dp)
+                    .vistaAeroButton(isPrimary = true)
+                    .clickable(onClick = onTogglePlayPause)
+                    .testTag("poweramp_mini_play_pause_btn"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = "Играть / Пауза",
+                    tint = Color.White,
+                    modifier = Modifier.size(21.dp)
+                )
+            }
+            DeckIconBtn(onClick = onSkipNext, tag = "poweramp_mini_next_btn") {
+                Icon(Icons.Rounded.SkipNext, contentDescription = "Следующий", tint = TextPrimary, modifier = Modifier.size(18.dp))
+            }
+            DeckIconBtn(onClick = { onSeekBy(10_000L) }, tag = "poweramp_mini_fwd10_btn") {
+                Icon(Icons.Rounded.Forward10, contentDescription = "+10с", tint = TextSecondary, modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 
@@ -495,6 +667,7 @@ fun PowerampPlayerScreen(
 private fun PowerampPlayerMainTab(
     mediaState: MediaPlayerState,
     livePositionMs: Long,
+    livePositionFlow: StateFlow<Long>? = null,
     coverStyle: PlayerCoverStyle,
     equalizerState: EqualizerState,
     localTracks: List<LocalAudioTrack>,
@@ -644,33 +817,15 @@ private fun PowerampPlayerMainTab(
                 Spacer(Modifier.height(8.dp))
                 PowerampSpectrumVisualizer(isPlaying = active?.isPlaying == true)
 
-                // Precision Vista Seekbar
+                // Precision Vista Seekbar (isolated in leaf composable)
                 if (active != null && active.durationMs > 0L) {
-                    var scrubbing by remember(active.id) { mutableStateOf(false) }
-                    var scrubPos by remember(active.id) { mutableFloatStateOf(0f) }
-                    val displayPos = if (scrubbing) scrubPos.toLong() else livePositionMs
-
-                    Spacer(Modifier.height(6.dp))
-                    VistaSlider(
-                        value = displayPos.toFloat().coerceIn(0f, active.durationMs.toFloat()),
-                        onValueChange = {
-                            scrubbing = true
-                            scrubPos = it
-                        },
-                        onValueChangeFinished = {
-                            scrubbing = false
-                            onSeekTo(scrubPos.toLong())
-                        },
-                        valueRange = 0f..active.durationMs.toFloat(),
-                        modifier = Modifier.fillMaxWidth()
+                    PowerampPlayerSeekStrip(
+                        sessionId = active.id,
+                        durationMs = active.durationMs,
+                        fallbackPositionMs = livePositionMs,
+                        livePositionFlow = livePositionFlow,
+                        onSeekTo = onSeekTo
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(MediaControlRepository.formatTimeMs(displayPos), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-                        Text(MediaControlRepository.formatTimeMs(active.durationMs), style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                    }
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -783,6 +938,7 @@ private fun PowerampPlayerMainTab(
             // Live Synced Lyrics Quick Card (directly in Player tab)
             InlineSyncedLyricsPreviewCard(
                 livePositionMs = livePositionMs,
+                livePositionFlow = livePositionFlow,
                 lyrics = currentLyrics,
                 isFetching = isFetchingLyrics,
                 onSeekTo = onSeekTo,
@@ -816,17 +972,27 @@ private fun PowerampPlayerMainTab(
                 modifier = Modifier
                     .fillMaxWidth()
                     .vistaInsetBox(isFocused = quickListQuery.isNotEmpty())
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                if (quickListQuery.isEmpty()) {
-                    Text("Поиск по локальным трекам и очереди…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                }
                 BasicTextField(
                     value = quickListTfv,
                     onValueChange = { quickListTfv = it },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
                     cursorBrush = SolidColor(theme.accent),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 34.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (quickListTfv.text.isEmpty()) {
+                                Text("Поиск по локальным трекам и очереди…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                            }
+                            innerTextField()
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -1011,8 +1177,45 @@ private fun PowerampSpectrumVisualizer(isPlaying: Boolean) {
 }
 
 @Composable
+private fun PowerampPlayerSeekStrip(
+    sessionId: String,
+    durationMs: Long,
+    fallbackPositionMs: Long,
+    livePositionFlow: StateFlow<Long>?,
+    onSeekTo: (Long) -> Unit
+) {
+    val effectivePos = collectLivePos(livePositionFlow, fallbackPositionMs)
+    var scrubbing by remember(sessionId) { mutableStateOf(false) }
+    var scrubPos by remember(sessionId) { mutableFloatStateOf(0f) }
+    val displayPos = if (scrubbing) scrubPos.toLong() else effectivePos
+
+    Spacer(Modifier.height(6.dp))
+    VistaSlider(
+        value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+        onValueChange = {
+            scrubbing = true
+            scrubPos = it
+        },
+        onValueChangeFinished = {
+            scrubbing = false
+            onSeekTo(scrubPos.toLong())
+        },
+        valueRange = 0f..durationMs.toFloat(),
+        modifier = Modifier.fillMaxWidth()
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(MediaControlRepository.formatTimeMs(displayPos), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+        Text(MediaControlRepository.formatTimeMs(durationMs), style = MaterialTheme.typography.labelSmall, color = TextMuted)
+    }
+}
+
+@Composable
 private fun InlineSyncedLyricsPreviewCard(
     livePositionMs: Long,
+    livePositionFlow: StateFlow<Long>? = null,
     lyrics: TrackLyricsData?,
     isFetching: Boolean,
     onSeekTo: (Long) -> Unit,
@@ -1021,11 +1224,12 @@ private fun InlineSyncedLyricsPreviewCard(
     onDeleteLyrics: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    val activeIdx by remember(lyrics, livePositionMs) {
+    val effectivePos = collectLivePos(livePositionFlow, livePositionMs)
+    val activeIdx by remember(lyrics, effectivePos) {
         derivedStateOf {
             val lines = lyrics?.syncedLines.orEmpty()
             if (lines.isEmpty()) -1
-            else lines.indexOfLast { it.timeMs <= livePositionMs }
+            else lines.indexOfLast { it.timeMs <= effectivePos }
         }
     }
 
@@ -1044,7 +1248,7 @@ private fun InlineSyncedLyricsPreviewCard(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 Icon(Icons.Rounded.Lyrics, contentDescription = null, tint = theme.accent, modifier = Modifier.size(15.dp))
                 Text(
-                    text = if (lyrics?.hasSynced == true) "СИНХРОННЫЙ ТЕКСТ (${lyrics.sourceLabel})" else "ТЕКСТ ПЕСНИ",
+                    text = if (lyrics?.hasSynced == true) "КАРАОКЕ • СИНХРОННЫЙ ТЕКСТ" else "ТЕКСТ ПЕСНИ",
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                     color = theme.focusBorder
                 )
@@ -1097,21 +1301,44 @@ private fun InlineSyncedLyricsPreviewCard(
                 val endIdx = (startIdx + 4).coerceAtMost(lyrics.syncedLines.lastIndex)
                 for (i in startIdx..endIdx) {
                     val line = lyrics.syncedLines[i]
+                    val nextTime = lyrics.syncedLines.getOrNull(i + 1)?.timeMs ?: (line.timeMs + 3500L)
+                    val span = (nextTime - line.timeMs).coerceAtLeast(650L)
                     val isActive = i == activeIdx
-                    Text(
-                        text = line.text,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = if (isActive) 13.5.sp else 12.sp
-                        ),
-                        color = if (isActive) MusicSourceAmber else TextSecondary,
+                    val lineProgress = if (isActive) {
+                        ((effectivePos - line.timeMs).toFloat() / span.toFloat()).coerceIn(0.05f, 1f)
+                    } else 0f
+
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(3.dp))
-                            .background(if (isActive) theme.accent.copy(alpha = 0.2f) else Color.Transparent)
+                            .background(if (isActive) Color(0xFF0A1E2E) else Color.Transparent)
                             .clickable { onSeekTo(line.timeMs) }
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
+                    ) {
+                        if (isActive) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .background(Color.Transparent)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(lineProgress)
+                                        .background(theme.accent.copy(alpha = 0.28f))
+                                )
+                            }
+                        }
+                        Text(
+                            text = line.text,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = if (isActive) 13.5.sp else 12.sp
+                            ),
+                            color = if (isActive) MusicSourceAmber else TextSecondary,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
             else -> {
@@ -1136,61 +1363,228 @@ private fun PowerampEqualizerTab(
     onSetBassBoost: (Int) -> Unit,
     onSetVirtualizer: (Int) -> Unit
 ) {
-    val theme = LocalVistaTheme.current
+    val brushedSteel = Brush.verticalGradient(
+        listOf(
+            Color(0xFF333942),
+            Color(0xFF22272F),
+            Color(0xFF171B22)
+        )
+    )
+    val rackBorder = Color(0xFF555E6B)
+    val vfdGreen = Color(0xFF4BFFAE)
+    val vfdAmber = Color(0xFFFFBD4A)
+    val activeLed = if (equalizerState.enabled) vfdGreen else Color(0xFF7B3338)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(10.dp)
+            .padding(8.dp)
             .testTag("poweramp_equalizer_tab"),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(7.dp)
     ) {
-        // Master Switch
-        Row(
+        // 1980s Hi-Fi Stereo Rack Chassis Header + Screws + Power Switch
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .vistaWindowFrame(RoundedCornerShape(4.dp))
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .clip(RoundedCornerShape(4.dp))
+                .background(brushedSteel)
+                .border(1.5.dp, rackBorder, RoundedCornerShape(4.dp))
+                .padding(10.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "POWERAMP 5-ПОЛОСНЫЙ ЭКВАЛАЙЗЕР И DSP",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = theme.focusBorder
-                )
-                Text(
-                    text = if (equalizerState.dspHardwareAttached) "Аппаратный DSP подключён к аудиопотоку" else "Профиль готов (включится с локальным плеером)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (equalizerState.dspHardwareAttached) CallIncomingGreen else TextSecondary
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .vistaAeroButton(isPrimary = equalizerState.enabled, isActive = equalizerState.enabled)
-                    .clickable { onSetEnabled(!equalizerState.enabled) }
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
-                    .testTag("eq_master_toggle")
-            ) {
-                Text(
-                    text = if (equalizerState.enabled) "ВКЛ" else "ВЫКЛ",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = Color.White
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    RackScrew(sizeDp = 12)
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        Text(
+                            text = "STEREO GRAPHIC EQUALIZER GE-50 • 5-BAND DSP",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            ),
+                            color = Color(0xFFD8DEE8),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(activeLed)
+                                    .border(1.dp, Color.Black, CircleShape)
+                            )
+                            Text(
+                                text = when {
+                                    !equalizerState.enabled -> "BYPASS • ТРАКТ НАПРЯМУЮ"
+                                    equalizerState.dspHardwareAttached -> "DSP ACTIVE • АППАРАТНЫЙ ЭКВАЛАЙЗЕР"
+                                    else -> "PREAMP READY • ОЖИДАНИЕ ТРЕКА"
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.5.sp
+                                ),
+                                color = if (equalizerState.enabled) vfdGreen else TextMuted
+                            )
+                        }
+                    }
+
+                    // Tactile Metallic Rocker POWER Toggle
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    if (equalizerState.enabled) listOf(Color(0xFF285843), Color(0xFF153427))
+                                    else listOf(Color(0xFF424750), Color(0xFF23272D))
+                                )
+                            )
+                            .border(
+                                1.dp,
+                                if (equalizerState.enabled) vfdGreen else Color(0xFF666F7D),
+                                RoundedCornerShape(3.dp)
+                            )
+                            .clickable { onSetEnabled(!equalizerState.enabled) }
+                            .padding(horizontal = 12.dp, vertical = 7.dp)
+                            .testTag("eq_master_toggle"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(if (equalizerState.enabled) vfdGreen else Color(0xFFFF5252))
+                        )
+                        Text(
+                            text = if (equalizerState.enabled) "POWER ON" else "BYPASS",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = Color.White
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    RackScrew(sizeDp = 12)
+                }
+
+                // Retro VFD Vacuum Fluorescent Frequency Curve Display
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color(0xFF040D0A))
+                        .border(1.5.dp, Color(0xFF142B24), RoundedCornerShape(3.dp))
+                        .padding(6.dp)
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val w = size.width
+                        val h = size.height
+                        val midY = h / 2f
+
+                        // Retro VFD grid lines
+                        val gridColor = Color(0xFF11382C)
+                        for (row in 1..3) {
+                            val y = h * (row / 4f)
+                            drawLine(gridColor, Offset(0f, y), Offset(w, y), strokeWidth = 1.dp.toPx())
+                        }
+                        val bands = equalizerState.bands
+                        val count = bands.size.coerceAtLeast(1)
+                        val padX = 16.dp.toPx()
+                        val usableW = (w - padX * 2f).coerceAtLeast(10f)
+
+                        val pts = bands.mapIndexed { idx, band ->
+                            val x = if (count == 1) w / 2f else padX + idx * (usableW / (count - 1))
+                            val norm = (band.levelMb / 1500f).coerceIn(-1f, 1f)
+                            val y = midY - norm * (h * 0.36f)
+                            Offset(x, y)
+                        }
+
+                        if (pts.isNotEmpty()) {
+                            val curvePath = Path().apply {
+                                moveTo(pts.first().x, pts.first().y)
+                                for (i in 0 until pts.lastIndex) {
+                                    val p0 = pts[i]
+                                    val p1 = pts[i + 1]
+                                    val cx = (p0.x + p1.x) / 2f
+                                    cubicTo(cx, p0.y, cx, p1.y, p1.x, p1.y)
+                                }
+                            }
+                            val lineColor = if (equalizerState.enabled) vfdGreen else Color(0xFF426356)
+                            drawPath(
+                                path = curvePath,
+                                color = lineColor.copy(alpha = 0.28f),
+                                style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                            drawPath(
+                                path = curvePath,
+                                color = lineColor,
+                                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                            pts.forEach { p ->
+                                drawCircle(color = vfdAmber, radius = 3.5.dp.toPx(), center = p)
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "PRESET: ${equalizerState.preset.title.uppercase()}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = vfdAmber
+                        )
+                        Text(
+                            text = "+15 / 0 / -15 dB",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 8.5.sp
+                            ),
+                            color = vfdGreen.copy(alpha = 0.8f)
+                        )
+                    }
+                }
             }
         }
 
-        // Presets
+        // Square Vintage Push-Button Presets
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .vistaInsetBox()
-                .padding(10.dp),
+                .clip(RoundedCornerShape(4.dp))
+                .background(brushedSteel)
+                .border(1.dp, rackBorder, RoundedCornerShape(4.dp))
+                .padding(9.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("ПРЕСЕТЫ ЗВУЧАНИЯ", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = MusicSourceAmber)
+            Text(
+                text = "MEMORY SELECT • ПРЕСЕТЫ",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.sp
+                ),
+                color = Color(0xFFB5BFC9)
+            )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1199,105 +1593,424 @@ private fun PowerampEqualizerTab(
             ) {
                 EqualizerPreset.entries.forEach { preset ->
                     val selected = equalizerState.preset == preset
-                    Box(
+                    Column(
                         modifier = Modifier
-                            .vistaAeroButton(isPrimary = selected, isActive = selected)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    if (selected) listOf(Color(0xFF4E5663), Color(0xFF282D36))
+                                    else listOf(Color(0xFF343A44), Color(0xFF1F232A))
+                                )
+                            )
+                            .border(
+                                1.dp,
+                                if (selected) vfdAmber else Color(0xFF565E6B),
+                                RoundedCornerShape(3.dp)
+                            )
                             .clickable { onApplyPreset(preset) }
-                            .padding(horizontal = 10.dp, vertical = 7.dp)
-                            .testTag("eq_preset_${preset.name.lowercase()}")
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("eq_preset_${preset.name.lowercase()}"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 14.dp, height = 3.dp)
+                                .background(if (selected) vfdAmber else Color(0xFF161A1E))
+                        )
                         Text(
                             text = preset.title,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium),
-                            color = if (selected) Color.White else TextPrimary
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 10.sp
+                            ),
+                            color = if (selected) vfdAmber else Color(0xFFD5DCE4)
                         )
                     }
                 }
             }
         }
 
-        // Band Sliders
+        // 5-Band Vertical Analog Rack Faders with dB Scale & LED Ladders
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .vistaInsetBox()
+                .clip(RoundedCornerShape(4.dp))
+                .background(brushedSteel)
+                .border(1.5.dp, rackBorder, RoundedCornerShape(4.dp))
                 .padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("ЧАСТОТНЫЕ ПОЛОСЫ (−15 dB … +15 dB)", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = theme.accent)
-            equalizerState.bands.forEach { band ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SPECTRUM FADERS (−15 dB … +15 dB)",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp
+                    ),
+                    color = Color(0xFFB5BFC9)
+                )
+                Text(
+                    text = "ATTENUATOR BANK",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp
+                    ),
+                    color = vfdGreen
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left dB Legend Column
+                Column(
+                    modifier = Modifier.height(128.dp),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Text(
-                        text = band.freqLabel,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary,
-                        modifier = Modifier.width(52.dp)
-                    )
-                    VistaSlider(
-                        value = band.levelMb.toFloat(),
-                        onValueChange = { onSetBand(band.index, it.toInt()) },
-                        valueRange = -1500f..1500f,
-                        compact = true,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("eq_band_slider_${band.index}")
-                    )
-                    Text(
-                        text = "%+.1f dB".format(band.levelMb / 100f),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MusicSourceAmber,
-                        modifier = Modifier.width(58.dp)
+                    Text("+15", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.5.sp), color = Color(0xFFFF6E6E))
+                    Text("+7", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.5.sp), color = vfdAmber)
+                    Text("0", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.5.sp, fontWeight = FontWeight.Bold), color = vfdGreen)
+                    Text("-7", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.5.sp), color = TextMuted)
+                    Text("-15", style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.5.sp), color = TextMuted)
+                }
+
+                equalizerState.bands.forEach { band ->
+                    VintageVerticalFaderColumn(
+                        bandIndex = band.index,
+                        freqLabel = band.freqLabel,
+                        levelMb = band.levelMb,
+                        enabled = equalizerState.enabled,
+                        onSetLevelMb = { next -> onSetBand(band.index, next) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
         }
 
-        // Bass Boost & Virtualizer
-        Column(
+        // Dual Analog Rotary Potentiometer Knobs (Bass Boost & 3D Stereo Scene)
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .vistaInsetBox()
+                .clip(RoundedCornerShape(4.dp))
+                .background(brushedSteel)
+                .border(1.5.dp, rackBorder, RoundedCornerShape(4.dp))
                 .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("УСИЛЕНИЕ БАСА И СЦЕНА", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = theme.accent)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Bass Boost", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, modifier = Modifier.width(74.dp))
-                VistaSlider(
-                    value = equalizerState.bassBoostStrength.toFloat(),
-                    onValueChange = { onSetBassBoost(it.toInt()) },
-                    valueRange = 0f..1000f,
-                    compact = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("eq_bass_slider")
+            VintageRotaryKnobControl(
+                title = "BASS CONTOUR",
+                subtitle = "Усиление баса",
+                value = equalizerState.bassBoostStrength,
+                enabled = equalizerState.enabled,
+                accentColor = vfdAmber,
+                testTagName = "eq_bass_slider",
+                onValueChange = onSetBassBoost,
+                modifier = Modifier.weight(1f)
+            )
+            VintageRotaryKnobControl(
+                title = "STEREO WIDE",
+                subtitle = "3D Сцена",
+                value = equalizerState.virtualizerStrength,
+                enabled = equalizerState.enabled,
+                accentColor = vfdGreen,
+                testTagName = "eq_virtualizer_slider",
+                onValueChange = onSetVirtualizer,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RackScrew(sizeDp: Int) {
+    Canvas(modifier = Modifier.size(sizeDp.dp)) {
+        val r = size.minDimension / 2f
+        val c = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(
+            brush = Brush.radialGradient(listOf(Color(0xFF9BA5B3), Color(0xFF424A56))),
+            radius = r,
+            center = c
+        )
+        drawCircle(color = Color(0xFF1D2228), radius = r, center = c, style = Stroke(1.dp.toPx()))
+        drawLine(Color(0xFF1A1E24), Offset(c.x - r * 0.55f, c.y - r * 0.25f), Offset(c.x + r * 0.55f, c.y + r * 0.25f), strokeWidth = 1.4.dp.toPx())
+    }
+}
+
+@Composable
+private fun VintageVerticalFaderColumn(
+    bandIndex: Int,
+    freqLabel: String,
+    levelMb: Int,
+    enabled: Boolean,
+    onSetLevelMb: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val norm = ((levelMb + 1500) / 3000f).coerceIn(0f, 1f)
+    val trackHeight = 124.dp
+
+    Column(
+        modifier = modifier
+            .background(Color(0xFF14181E), RoundedCornerShape(3.dp))
+            .border(1.dp, Color(0xFF39414C), RoundedCornerShape(3.dp))
+            .padding(vertical = 6.dp, horizontal = 3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = "%+.0f".format(levelMb / 100f),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 9.5.sp,
+                fontWeight = FontWeight.Bold
+            ),
+            color = if (enabled) Color(0xFFFFBD4A) else TextMuted,
+            maxLines = 1
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .semantics {
+                    progressBarRangeInfo = ProgressBarRangeInfo(levelMb.toFloat(), -1500f..1500f)
+                }
+                .pointerInput(bandIndex) {
+                    detectTapGestures { offset ->
+                        val frac = 1f - (offset.y / size.height.toFloat()).coerceIn(0f, 1f)
+                        onSetLevelMb((-1500 + (frac * 3000f)).toInt().coerceIn(-1500, 1500))
+                    }
+                }
+                .pointerInput(bandIndex) {
+                    detectVerticalDragGestures { change, _ ->
+                        change.consume()
+                        val frac = 1f - (change.position.y / size.height.toFloat()).coerceIn(0f, 1f)
+                        onSetLevelMb((-1500 + (frac * 3000f)).toInt().coerceIn(-1500, 1500))
+                    }
+                }
+                .testTag("eq_band_slider_$bandIndex"),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                val cx = w / 2f
+                val padY = 12.dp.toPx()
+                val slotTop = padY
+                val slotBottom = h - padY
+                val slotH = (slotBottom - slotTop).coerceAtLeast(10f)
+
+                // Recessed fader track slot
+                drawRoundRect(
+                    color = Color(0xFF06080B),
+                    topLeft = Offset(cx - 3.dp.toPx(), slotTop),
+                    size = Size(6.dp.toPx(), slotH),
+                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
                 )
-                Text("${equalizerState.bassBoostStrength / 10}%", style = MaterialTheme.typography.labelSmall, color = theme.accent, modifier = Modifier.width(38.dp))
+
+                // 9-segment LED ladder flanking the fader slot
+                val ledCount = 9
+                for (seg in 0 until ledCount) {
+                    val segFrac = (seg + 0.5f) / ledCount.toFloat()
+                    val segY = slotBottom - segFrac * slotH
+                    val lit = enabled && norm >= segFrac - 0.05f
+                    val baseCol = when {
+                        seg >= 7 -> Color(0xFFFF5252)
+                        seg >= 5 -> Color(0xFFFFBD4A)
+                        else -> Color(0xFF3FF2A4)
+                    }
+                    drawRect(
+                        color = if (lit) baseCol else Color(0xFF232931),
+                        topLeft = Offset(cx - 12.dp.toPx(), segY - 2.dp.toPx()),
+                        size = Size(5.dp.toPx(), 3.dp.toPx())
+                    )
+                    drawRect(
+                        color = if (lit) baseCol else Color(0xFF232931),
+                        topLeft = Offset(cx + 7.dp.toPx(), segY - 2.dp.toPx()),
+                        size = Size(5.dp.toPx(), 3.dp.toPx())
+                    )
+                }
+
+                // Brushed aluminum fader cap
+                val thumbY = slotBottom - norm * slotH
+                val capW = 24.dp.toPx()
+                val capH = 14.dp.toPx()
+                drawRoundRect(
+                    brush = Brush.verticalGradient(listOf(Color(0xFFABB5C4), Color(0xFF565E6B), Color(0xFF8C96A4))),
+                    topLeft = Offset(cx - capW / 2f, thumbY - capH / 2f),
+                    size = Size(capW, capH),
+                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                )
+                drawLine(
+                    color = Color(0xFF101317),
+                    start = Offset(cx - capW / 2f + 2.dp.toPx(), thumbY),
+                    end = Offset(cx + capW / 2f - 2.dp.toPx(), thumbY),
+                    strokeWidth = 2.dp.toPx()
+                )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        }
+
+        Text(
+            text = freqLabel,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.5.sp
+            ),
+            color = Color(0xFFD5DCE4),
+            maxLines = 1
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF282E38), RoundedCornerShape(2.dp))
+                    .border(1.dp, Color(0xFF4D5663), RoundedCornerShape(2.dp))
+                    .clickable { onSetLevelMb((levelMb - 300).coerceIn(-1500, 1500)) }
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
-                Text("3D Сцена", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, modifier = Modifier.width(74.dp))
-                VistaSlider(
-                    value = equalizerState.virtualizerStrength.toFloat(),
-                    onValueChange = { onSetVirtualizer(it.toInt()) },
-                    valueRange = 0f..1000f,
-                    compact = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("eq_virtualizer_slider")
+                Text("-", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
+            }
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF282E38), RoundedCornerShape(2.dp))
+                    .border(1.dp, Color(0xFF4D5663), RoundedCornerShape(2.dp))
+                    .clickable { onSetLevelMb((levelMb + 300).coerceIn(-1500, 1500)) }
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            ) {
+                Text("+", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VintageRotaryKnobControl(
+    title: String,
+    subtitle: String,
+    value: Int,
+    enabled: Boolean,
+    accentColor: Color,
+    testTagName: String,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val norm = (value / 1000f).coerceIn(0f, 1f)
+    Column(
+        modifier = modifier
+            .background(Color(0xFF14181E), RoundedCornerShape(4.dp))
+            .border(1.dp, Color(0xFF3E4754), RoundedCornerShape(4.dp))
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.5.sp
+            ),
+            color = Color(0xFFD5DCE4),
+            maxLines = 1
+        )
+        Box(
+            modifier = Modifier
+                .size(84.dp)
+                .semantics {
+                    progressBarRangeInfo = ProgressBarRangeInfo(value.toFloat(), 0f..1000f)
+                }
+                .pointerInput(value) {
+                    var currentVal = value.toFloat()
+                    detectDragGestures(
+                        onDragStart = { currentVal = value.toFloat() },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val delta = (dragAmount.x - dragAmount.y) * 5.2f
+                            currentVal = (currentVal + delta).coerceIn(0f, 1000f)
+                            onValueChange(currentVal.toInt())
+                        }
+                    )
+                }
+                .testTag(testTagName),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val outerR = size.minDimension * 0.44f
+                val knobR = size.minDimension * 0.34f
+
+                // Scale ticks (-135 deg to +135 deg)
+                val ticks = 11
+                for (i in 0 until ticks) {
+                    val t = i / (ticks - 1).toFloat()
+                    val angleDeg = 135.0 + t * 270.0
+                    val rad = angleDeg * (PI / 180.0)
+                    val lit = enabled && t <= norm + 0.02f
+                    val pStart = Offset(c.x + (outerR * 0.88f) * cos(rad).toFloat(), c.y + (outerR * 0.88f) * sin(rad).toFloat())
+                    val pEnd = Offset(c.x + outerR * cos(rad).toFloat(), c.y + outerR * sin(rad).toFloat())
+                    drawLine(
+                        color = if (lit) accentColor else Color(0xFF424A56),
+                        start = pStart,
+                        end = pEnd,
+                        strokeWidth = 2.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+
+                // Brushed aluminum body
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color(0xFF6B7380), Color(0xFF282D35), Color(0xFF14171B)), center = c, radius = knobR),
+                    radius = knobR,
+                    center = c
                 )
-                Text("${equalizerState.virtualizerStrength / 10}%", style = MaterialTheme.typography.labelSmall, color = theme.accent, modifier = Modifier.width(38.dp))
+                drawCircle(color = Color(0xFF8C97A6), radius = knobR, center = c, style = Stroke(1.4.dp.toPx()))
+
+                // Pointer needle
+                val pointerAngle = (135.0 + norm * 270.0) * (PI / 180.0)
+                val pInner = Offset(c.x + (knobR * 0.28f) * cos(pointerAngle).toFloat(), c.y + (knobR * 0.28f) * sin(pointerAngle).toFloat())
+                val pOuter = Offset(c.x + (knobR * 0.88f) * cos(pointerAngle).toFloat(), c.y + (knobR * 0.88f) * sin(pointerAngle).toFloat())
+                drawLine(
+                    color = if (enabled) accentColor else TextMuted,
+                    start = pInner,
+                    end = pOuter,
+                    strokeWidth = 3.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+        Text(
+            text = "$subtitle • ${value / 10}%",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 9.5.sp),
+            color = if (enabled) accentColor else TextMuted,
+            maxLines = 1
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF282E38), RoundedCornerShape(3.dp))
+                    .border(1.dp, Color(0xFF4D5663), RoundedCornerShape(3.dp))
+                    .clickable { onValueChange((value - 100).coerceIn(0, 1000)) }
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            ) {
+                Text("-", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
+            }
+            Box(
+                modifier = Modifier
+                    .background(Color(0xFF282E38), RoundedCornerShape(3.dp))
+                    .border(1.dp, Color(0xFF4D5663), RoundedCornerShape(3.dp))
+                    .clickable { onValueChange((value + 100).coerceIn(0, 1000)) }
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            ) {
+                Text("+", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
             }
         }
     }
@@ -1308,6 +2021,7 @@ private fun PowerampLyricsTab(
     trackTitle: String,
     trackArtist: String,
     livePositionMs: Long,
+    livePositionFlow: StateFlow<Long>? = null,
     lyrics: TrackLyricsData?,
     isFetching: Boolean,
     onSeekTo: (Long) -> Unit,
@@ -1316,23 +2030,26 @@ private fun PowerampLyricsTab(
     onDeleteLyrics: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
+    val effectivePos = collectLivePos(livePositionFlow, livePositionMs)
     var isEditing by remember { mutableStateOf(false) }
     var editorText by remember(lyrics?.trackKey, lyrics?.rawLrc) {
         mutableStateOf(lyrics?.rawLrc ?: lyrics?.plainText ?: "")
     }
     var nextStampLineIdx by remember(trackTitle, isEditing) { mutableIntStateOf(0) }
+    var lyricsOffsetMs by remember(trackTitle, trackArtist) { mutableLongStateOf(0L) }
     val listState = rememberLazyListState()
 
-    val activeIdx by remember(lyrics, livePositionMs) {
+    val adjustedPos = (effectivePos + lyricsOffsetMs).coerceAtLeast(0L)
+    val activeIdx by remember(lyrics, adjustedPos) {
         derivedStateOf {
             val lines = lyrics?.syncedLines.orEmpty()
-            if (lines.isEmpty()) -1 else lines.indexOfLast { it.timeMs <= livePositionMs }
+            if (lines.isEmpty()) -1 else lines.indexOfLast { it.timeMs <= adjustedPos }
         }
     }
 
     LaunchedEffect(activeIdx, isEditing) {
         if (!isEditing && activeIdx >= 0) {
-            runCatching { listState.animateScrollToItem((activeIdx - 2).coerceAtLeast(0)) }
+            runCatching { listState.animateScrollToItem(activeIdx, scrollOffset = -120) }
         }
     }
 
@@ -1410,6 +2127,37 @@ private fun PowerampLyricsTab(
             }
         }
 
+        // Karaoke Time-Sync Offset Nudge Bar
+        if (!isEditing && lyrics?.syncedLines?.isNotEmpty() == true) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .vistaInsetBox()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = "Караоке-синхр (${if (lyricsOffsetMs >= 0) "+" else ""}${"%.1f".format(lyricsOffsetMs / 1000f)}с):",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                    color = MusicSourceAmber
+                )
+                listOf(-500L to "-0.5с", -100L to "-0.1с", 0L to "Сброс", 100L to "+0.1с", 500L to "+0.5с").forEach { (delta, label) ->
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton(isActive = delta == 0L && lyricsOffsetMs == 0L)
+                            .clickable {
+                                lyricsOffsetMs = if (delta == 0L) 0L else (lyricsOffsetMs + delta)
+                            }
+                            .padding(horizontal = 7.dp, vertical = 3.dp)
+                    ) {
+                        Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = Color.White)
+                    }
+                }
+            }
+        }
+
         if (isEditing) {
             Column(
                 modifier = Modifier
@@ -1427,7 +2175,7 @@ private fun PowerampLyricsTab(
                         modifier = Modifier
                             .vistaAeroButton(isPrimary = true)
                             .clickable {
-                                val stamp = MusicCatalogAndLyricsRepository.formatLrcTimestamp(livePositionMs)
+                                val stamp = MusicCatalogAndLyricsRepository.formatLrcTimestamp(effectivePos)
                                 val lines = editorText.lines().toMutableList()
                                 if (lines.isEmpty() || (lines.size == 1 && lines[0].isBlank())) {
                                     editorText = "$stamp "
@@ -1447,7 +2195,7 @@ private fun PowerampLyricsTab(
                             Icon(Icons.Rounded.Timer, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(
-                                text = "+ Таймкод (${MediaControlRepository.formatTimeMs(livePositionMs)})",
+                                text = "+ Таймкод (${MediaControlRepository.formatTimeMs(effectivePos)})",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -1554,30 +2302,80 @@ private fun PowerampLyricsTab(
                     ) {
                         itemsIndexed(lyrics.syncedLines) { idx, line ->
                             val isActive = idx == activeIdx
-                            Row(
+                            val isPassed = activeIdx >= 0 && idx < activeIdx
+                            val nextTime = lyrics.syncedLines.getOrNull(idx + 1)?.timeMs ?: (line.timeMs + 3500L)
+                            val span = (nextTime - line.timeMs).coerceAtLeast(650L)
+                            val lineProgress = if (isActive) {
+                                ((adjustedPos - line.timeMs).toFloat() / span.toFloat()).coerceIn(0.05f, 1f)
+                            } else 0f
+
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(4.dp))
-                                    .background(if (isActive) theme.accent.copy(alpha = 0.28f) else Color.Transparent)
-                                    .clickable { onSeekTo(line.timeMs) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .background(
+                                        if (isActive) Color(0xFF0A1D2B)
+                                        else Color.Transparent
+                                    )
+                                    .border(
+                                        width = if (isActive) 1.dp else 0.dp,
+                                        color = if (isActive) theme.accent.copy(alpha = 0.65f) else Color.Transparent,
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .clickable { onSeekTo((line.timeMs - lyricsOffsetMs).coerceAtLeast(0L)) }
                             ) {
-                                Text(
-                                    text = MediaControlRepository.formatTimeMs(line.timeMs),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = if (isActive) MusicSourceAmber else TextMuted,
-                                    modifier = Modifier.width(42.dp)
-                                )
-                                Text(
-                                    text = line.text,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = if (isActive) 15.sp else 13.5.sp
-                                    ),
-                                    color = if (isActive) Color.White else TextSecondary,
-                                    modifier = Modifier.weight(1f)
-                                )
+                                if (isActive) {
+                                    Box(modifier = Modifier.matchParentSize()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .fillMaxWidth(lineProgress)
+                                                .background(
+                                                    Brush.horizontalGradient(
+                                                        listOf(
+                                                            theme.accent.copy(alpha = 0.42f),
+                                                            MusicSourceAmber.copy(alpha = 0.34f)
+                                                        )
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isActive) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(3.dp)
+                                                .height(18.dp)
+                                                .background(MusicSourceAmber, RoundedCornerShape(2.dp))
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = MediaControlRepository.formatTimeMs(line.timeMs),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = if (isActive) MusicSourceAmber else TextMuted,
+                                        modifier = Modifier.width(42.dp)
+                                    )
+                                    Text(
+                                        text = line.text,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = if (isActive) 16.sp else 13.5.sp
+                                        ),
+                                        color = when {
+                                            isActive -> Color.White
+                                            isPassed -> TextMuted.copy(alpha = 0.72f)
+                                            else -> TextSecondary
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1652,37 +2450,45 @@ private fun PowerampMultiSourceSearchTab(
                 modifier = Modifier
                     .weight(1f)
                     .vistaInsetBox(isFocused = query.isNotEmpty())
-                    .padding(horizontal = 9.dp, vertical = 7.dp),
+                    .padding(horizontal = 9.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Rounded.Search, contentDescription = null, tint = theme.accent, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Box(modifier = Modifier.weight(1f)) {
-                    if (query.isEmpty()) {
-                        Text("Трек или артист (везде сразу)…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                    }
-                    var unifiedTfv by remember {
-                        mutableStateOf(TextFieldValue(query, TextRange(query.length)))
-                    }
-                    LaunchedEffect(query) {
-                        if (query != unifiedTfv.text) {
-                            unifiedTfv = TextFieldValue(query, TextRange(query.length))
-                        }
-                    }
-                    BasicTextField(
-                        value = unifiedTfv,
-                        onValueChange = { next ->
-                            unifiedTfv = next
-                            onQueryChange(next.text)
-                        },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
-                        cursorBrush = SolidColor(theme.accent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("poweramp_unified_search_input")
-                    )
+                var unifiedTfv by remember {
+                    mutableStateOf(TextFieldValue(query, TextRange(query.length)))
                 }
+                LaunchedEffect(query) {
+                    if (query != unifiedTfv.text) {
+                        unifiedTfv = TextFieldValue(query, TextRange(query.length))
+                    }
+                }
+                BasicTextField(
+                    value = unifiedTfv,
+                    onValueChange = { next ->
+                        unifiedTfv = next
+                        onQueryChange(next.text)
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                    cursorBrush = SolidColor(theme.accent),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 34.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (unifiedTfv.text.isEmpty()) {
+                                Text("Трек или артист (везде сразу)…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("poweramp_unified_search_input")
+                )
                 if (query.isNotEmpty()) {
                     Icon(
                         imageVector = Icons.Rounded.Close,

@@ -15,11 +15,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,18 +34,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.KeyboardSearchMatcher
+import com.example.data.LauncherPreferencesRepository
 import com.example.data.UniversalSearchRepository
 import com.example.model.LinuxPackageEntry
 import com.example.ui.theme.CallIncomingGreen
+import com.example.ui.theme.CallMissedRed
 import com.example.ui.theme.LocalVistaTheme
-import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -51,10 +59,10 @@ import com.example.ui.theme.vistaWindowFrame
 @Composable
 fun LinuxCatalogDialog(
     packages: List<LinuxPackageEntry>,
-    isTermuxInstalled: Boolean,
+    @Suppress("UNUSED_PARAMETER") isTermuxInstalled: Boolean,
     onInstallOrRun: (LinuxPackageEntry) -> Unit,
     onRefresh: () -> Unit,
-    onOpenTermuxDownload: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onOpenTermuxDownload: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
@@ -92,15 +100,12 @@ fun LinuxCatalogDialog(
                         color = TextPrimary
                     )
                     Text(
-                        text = if (isTermuxInstalled) "Termux обнаружен • готов к запуску" else "Termux не найден • fallback на Shizuku/proot",
+                        text = "Встроенный установщик KeyDeck • создаёт плитку на рабочем столе",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isTermuxInstalled) CallIncomingGreen else MusicSourceAmber
+                        color = CallIncomingGreen
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (!isTermuxInstalled) {
-                        VistaButton(text = "Termux", isPrimary = true, onClick = onOpenTermuxDownload)
-                    }
                     VistaButton(text = "↻", onClick = onRefresh)
                     VistaButton(text = "✕", onClick = onDismiss)
                 }
@@ -112,18 +117,34 @@ fun LinuxCatalogDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .vistaInsetBox(isFocused = query.isNotEmpty())
-                    .padding(horizontal = 8.dp, vertical = 7.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                if (query.isEmpty()) {
-                    Text("Поиск .deb, AppImage, утилит…", style = MaterialTheme.typography.bodySmall, color = TextMuted)
-                }
                 BasicTextField(
                     value = query,
                     onValueChange = { query = it },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
                     cursorBrush = SolidColor(theme.accent),
-                    modifier = Modifier.fillMaxWidth().testTag("linux_catalog_search")
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 34.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (query.isEmpty()) {
+                                Text(
+                                    "Поиск .deb, AppImage, скриптов…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("linux_catalog_search")
                 )
             }
 
@@ -131,7 +152,9 @@ fun LinuxCatalogDialog(
 
             if (filtered.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -142,7 +165,9 @@ fun LinuxCatalogDialog(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(filtered, key = { it.id }) { entry ->
@@ -162,7 +187,10 @@ fun LinuxCatalogDialog(
                             ) {
                                 Text(
                                     text = if (entry.isInstalled) "CLI" else entry.kind.title.substringBefore(' '),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 9.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
                                     color = theme.accent
                                 )
                             }
@@ -197,6 +225,162 @@ fun LinuxCatalogDialog(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun LinuxRunnerDialog(
+    tile: LauncherPreferencesRepository.PersistedLinuxTile,
+    output: String,
+    onRunCommand: (String) -> Unit,
+    onRerunEntry: () -> Unit,
+    onUninstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val theme = LocalVistaTheme.current
+    var cmdInput by remember(tile.id) { mutableStateOf("") }
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(output) {
+        runCatching { scrollState.animateScrollTo(scrollState.maxValue) }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .widthIn(max = 580.dp)
+                .heightIn(min = 340.dp, max = 640.dp)
+                .vistaWindowFrame(RoundedCornerShape(6.dp))
+                .padding(10.dp)
+                .testTag("linux_runner_dialog"),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "${tile.name} (Linux • v${tile.version})",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = Color(0xFF3FF2B9),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = tile.packageName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    VistaButton(text = "Перезапуск", onClick = onRerunEntry)
+                    VistaButton(text = "Удалить плитку", onClick = onUninstall)
+                    VistaButton(text = "✕", onClick = onDismiss)
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color(0xFF070C0E), RoundedCornerShape(4.dp))
+                    .border(1.dp, Color(0xFF1E3E39), RoundedCornerShape(4.dp))
+                    .verticalScroll(scrollState)
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = output.ifBlank { "$ ${tile.entryCommand}" },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.5.sp,
+                        lineHeight = 16.sp
+                    ),
+                    color = Color(0xFFB5FCE0)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .vistaInsetBox(isFocused = cmdInput.isNotEmpty())
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    BasicTextField(
+                        value = cmdInput,
+                        onValueChange = { cmdInput = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall.copy(
+                            color = TextPrimary,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        cursorBrush = SolidColor(theme.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(
+                            onSend = {
+                                if (cmdInput.isNotBlank()) {
+                                    onRunCommand(cmdInput)
+                                    cmdInput = ""
+                                }
+                            }
+                        ),
+                        decorationBox = { innerTextField ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 34.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (cmdInput.isEmpty()) {
+                                    Text(
+                                        text = "Команда shell (ls, cat, sh …)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("linux_runner_cmd_input")
+                    )
+                }
+                VistaButton(
+                    text = "Выполнить",
+                    isPrimary = true,
+                    onClick = {
+                        if (cmdInput.isNotBlank()) {
+                            onRunCommand(cmdInput)
+                            cmdInput = ""
+                        }
+                    },
+                    modifier = Modifier.testTag("linux_runner_exec_btn")
+                )
+            }
+
+            if (tile.installedDirPath.isNotBlank()) {
+                Text(
+                    text = "Директория: ${tile.installedDirPath}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                    color = CallMissedRed.takeIf { false } ?: TextMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

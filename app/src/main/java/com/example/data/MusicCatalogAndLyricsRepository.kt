@@ -316,51 +316,79 @@ object MusicCatalogAndLyricsRepository {
                 val itemTitle = doc.optString("title").trim().ifBlank { id }
                 val itemArtist = doc.optString("creator").trim()
                 val metaRaw = httpGetText("https://archive.org/metadata/$id") ?: continue
-                val files = JSONObject(metaRaw).optJSONArray("files") ?: continue
-                var pickedFlac = false
-                var pickedMp3 = false
-                for (fIdx in 0 until files.length()) {
-                    val f = files.optJSONObject(fIdx) ?: continue
-                    val name = f.optString("name")
-                    val lower = name.lowercase(Locale.ROOT)
-                    val isFlac = lower.endsWith(".flac")
-                    val isLossy = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".ogg")
-                    if (!isFlac && !isLossy) continue
-                    if (isFlac && pickedFlac) continue
-                    if (isLossy && pickedMp3) continue
-                    val trackTitle = f.optString("title").trim()
-                        .ifBlank { name.substringBeforeLast('.').substringAfterLast('/') }
-                        .ifBlank { itemTitle }
-                    val trackArtist = f.optString("artist").trim()
-                        .ifBlank { f.optString("creator").trim() }
-                        .ifBlank { itemArtist }
-                    val durSec = f.optString("length").toDoubleOrNull() ?: 0.0
-                    val size = f.optString("size").toLongOrNull() ?: 0L
-                    val safeFileUrl = "https://archive.org/download/$id/${Uri.encode(name, "/")}"
-                    val ext = lower.substringAfterLast('.')
-                    out.add(
-                        TrackSourceCandidate(
-                            id = "arch:$id:$name",
-                            sourceKind = if (isFlac) MusicSourceKind.ARCHIVE_FLAC else MusicSourceKind.ARCHIVE_LOSSY,
-                            sourceLabel = if (isFlac) "Archive.org FLAC" else "Archive.org ${ext.uppercase(Locale.ROOT)}",
-                            title = trackTitle,
-                            artist = trackArtist,
-                            album = itemTitle,
-                            durationMs = (durSec * 1000.0).toLong().coerceAtLeast(0L),
-                            downloadUrl = safeFileUrl,
-                            previewUrl = safeFileUrl,
-                            fileExtension = ext,
-                            bitrateKbps = if (isFlac) 1000 else 320,
-                            sampleRateHz = 44100,
-                            sizeBytes = size
-                        )
+                out.addAll(
+                    parseArchiveMetadataFiles(
+                        id = id,
+                        itemTitle = itemTitle,
+                        itemArtist = itemArtist,
+                        metaRaw = metaRaw,
+                        maxResults = (24 - out.size).coerceAtMost(16)
                     )
-                    if (isFlac) pickedFlac = true else pickedMp3 = true
-                    if (out.size >= 12) break
-                }
+                )
+                if (out.size >= 24) break
             }
             out
         }.getOrDefault(emptyList())
+    }
+
+    internal fun parseArchiveMetadataFiles(
+        id: String,
+        itemTitle: String,
+        itemArtist: String,
+        metaRaw: String,
+        maxResults: Int = 24
+    ): List<TrackSourceCandidate> {
+        if (maxResults <= 0) return emptyList()
+        return runCatching {
+            val files = JSONObject(metaRaw).optJSONArray("files") ?: return emptyList()
+            val out = mutableListOf<TrackSourceCandidate>()
+            val seenInItem = HashSet<String>()
+            for (fIdx in 0 until files.length()) {
+                val f = files.optJSONObject(fIdx) ?: continue
+                val name = f.optString("name")
+                val lower = name.lowercase(Locale.ROOT)
+                val isFlac = lower.endsWith(".flac")
+                val isLossy = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".ogg")
+                if (!isFlac && !isLossy) continue
+                val trackTitle = f.optString("title").trim()
+                    .ifBlank { name.substringBeforeLast('.').substringAfterLast('/') }
+                    .ifBlank { itemTitle }
+                val dedupeKey = "${normalizeKeyText(trackTitle)}|$isFlac"
+                if (!seenInItem.add(dedupeKey)) continue
+                val trackArtist = f.optString("artist").trim()
+                    .ifBlank { f.optString("creator").trim() }
+                    .ifBlank { itemArtist }
+                val durSec = f.optString("length").toDoubleOrNull() ?: 0.0
+                val size = f.optString("size").toLongOrNull() ?: 0L
+                val safeFileUrl = "https://archive.org/download/$id/${Uri.encode(name, "/")}"
+                val ext = lower.substringAfterLast('.')
+                out.add(
+                    TrackSourceCandidate(
+                        id = "arch:$id:$name",
+                        sourceKind = if (isFlac) MusicSourceKind.ARCHIVE_FLAC else MusicSourceKind.ARCHIVE_LOSSY,
+                        sourceLabel = if (isFlac) "Archive.org FLAC" else "Archive.org ${ext.uppercase(Locale.ROOT)}",
+                        title = trackTitle,
+                        artist = trackArtist,
+                        album = itemTitle,
+                        durationMs = (durSec * 1000.0).toLong().coerceAtLeast(0L),
+                        downloadUrl = safeFileUrl,
+                        previewUrl = safeFileUrl,
+                        fileExtension = ext,
+                        bitrateKbps = if (isFlac) 1000 else 320,
+                        sampleRateHz = 44100,
+                        sizeBytes = size
+                    )
+                )
+                if (out.size >= maxResults) break
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
+    fun searchArchiveOrgAlbumFiles(albumTitle: String, artist: String): List<TrackSourceCandidate> {
+        val query = listOf(artist.trim(), albumTitle.trim()).filter { it.isNotBlank() }.joinToString(" ")
+        if (query.isBlank()) return emptyList()
+        return searchArchiveOrgAudio(query)
     }
 
     internal fun parseItunesTracksJson(rawJson: String): List<TrackSourceCandidate> {
@@ -416,9 +444,13 @@ object MusicCatalogAndLyricsRepository {
         title: String,
         artist: String,
         candidates: List<TrackSourceCandidate>,
-        installedMusicApps: List<AppEntry>
+        installedMusicApps: List<AppEntry>,
+        allowStreamingCapture: Boolean = true,
+        extraCandidates: List<TrackSourceCandidate> = emptyList()
     ): DownloadOutcome = withContext(Dispatchers.IO) {
-        val sorted = candidates.sortedBy { it.sourceKind.priorityOrder }
+        val merged = (candidates + extraCandidates)
+            .distinctBy { "${it.sourceKind}:${it.downloadUrl ?: it.id}" }
+        val sorted = merged.sortedBy { it.sourceKind.priorityOrder }
 
         // Check if already present as local lossless
         val existingLocalFlac = sorted.firstOrNull { it.sourceKind == MusicSourceKind.LOCAL_FLAC }?.localTrack
@@ -435,11 +467,12 @@ object MusicCatalogAndLyricsRepository {
             }
         }
 
-        // Search Archive.org specifically for FLAC if candidates list didn't include remote results
+        // Search Archive.org specifically for FLAC/Lossy if candidates list didn't include remote results
+        var discoveredArchive: List<TrackSourceCandidate> = emptyList()
         if (flacRemote == null) {
             val probeQuery = "$artist $title".trim()
-            val extraArchive = searchArchiveOrgAudio(probeQuery)
-            val foundFlac = extraArchive.firstOrNull { it.sourceKind == MusicSourceKind.ARCHIVE_FLAC && !it.downloadUrl.isNullOrBlank() }
+            discoveredArchive = searchArchiveOrgAudio(probeQuery)
+            val foundFlac = discoveredArchive.firstOrNull { it.sourceKind == MusicSourceKind.ARCHIVE_FLAC && !it.downloadUrl.isNullOrBlank() }
             if (foundFlac != null && !foundFlac.downloadUrl.isNullOrBlank()) {
                 val saved = downloadDirectFile(context, foundFlac.downloadUrl, title, artist, foundFlac.album, "flac")
                 if (saved != null) {
@@ -448,15 +481,15 @@ object MusicCatalogAndLyricsRepository {
             }
         }
 
-        // Priority B: Paid / Installed Streaming App Audio Capture Bridge
         val streamCandidate = sorted.firstOrNull { it.sourceKind == MusicSourceKind.STREAMING_PAID && !it.packageName.isNullOrBlank() }
         val fallbackStreamingApp = installedMusicApps
             .filter { MediaControlRepository.isStreamingPackage(it.packageName) }
             .minByOrNull { MediaControlRepository.sortPriorityScore(it.packageName) }
-
         val targetPkg = streamCandidate?.packageName ?: fallbackStreamingApp?.packageName
         val targetLabel = streamCandidate?.sourceLabel ?: fallbackStreamingApp?.label ?: "Стриминг"
-        if (!targetPkg.isNullOrBlank()) {
+
+        // Priority B (when interactive): Paid / Installed Streaming App Audio Capture Bridge
+        if (allowStreamingCapture && !targetPkg.isNullOrBlank()) {
             return@withContext DownloadOutcome.NeedsStreamingCapture(
                 title = title,
                 artist = artist,
@@ -465,17 +498,28 @@ object MusicCatalogAndLyricsRepository {
             )
         }
 
-        // Priority C: Direct Lossy (MP3 / OGG / M4A) fallback
-        val lossyRemote = sorted.firstOrNull {
+        // Priority C: Direct Lossy (MP3 / OGG / M4A) fallback (from existing candidates, archive discovery, or iTunes)
+        val combinedLossyPool = sorted + discoveredArchive
+        val lossyRemote = combinedLossyPool.firstOrNull {
             (it.sourceKind == MusicSourceKind.ARCHIVE_LOSSY || it.sourceKind == MusicSourceKind.ITUNES_CATALOG) &&
                 !it.downloadUrl.isNullOrBlank()
-        }
+        } ?: searchItunesTracks("$artist $title".trim()).firstOrNull { !it.downloadUrl.isNullOrBlank() }
+
         if (lossyRemote != null && !lossyRemote.downloadUrl.isNullOrBlank()) {
             val ext = lossyRemote.fileExtension.ifBlank { "mp3" }
             val saved = downloadDirectFile(context, lossyRemote.downloadUrl, title, artist, lossyRemote.album, ext)
             if (saved != null) {
                 return@withContext DownloadOutcome.DownloadedFile(saved, "Скачан ${ext.uppercase(Locale.ROOT)}: ${saved.title}")
             }
+        }
+
+        if (!allowStreamingCapture && !targetPkg.isNullOrBlank()) {
+            return@withContext DownloadOutcome.NeedsStreamingCapture(
+                title = title,
+                artist = artist,
+                packageName = targetPkg,
+                appLabel = targetLabel
+            )
         }
 
         DownloadOutcome.Failed("Не найден прямой FLAC/MP3 источник для «$title»")

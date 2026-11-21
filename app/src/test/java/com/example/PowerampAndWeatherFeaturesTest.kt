@@ -15,12 +15,15 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.LinuxPackagesRepository
 import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.data.NotificationHubRepository
 import com.example.data.RecentForegroundTracker
 import com.example.data.UniversalSearchRepository
 import com.example.data.WeatherRepository
+import java.io.File
 import com.example.model.AlbumExpectedTrack
 import com.example.model.AudioCaptureState
 import com.example.model.ConsensusWeatherReport
@@ -595,5 +598,183 @@ class PowerampAndWeatherFeaturesTest {
         composeTestRule.onNodeWithTag("poweramp_tab_albums").performClick()
         composeTestRule.onNodeWithTag("poweramp_tab_player").performClick()
         composeTestRule.onNodeWithText("Starlight").assertIsDisplayed()
+    }
+
+    @Test
+    fun `poweramp global mini deck stays interactive across eq lyrics search and albums tabs`() {
+        val lyrics = TrackLyricsData(
+            trackKey = "muse|starlight",
+            title = "Starlight",
+            artist = "Muse",
+            syncedLines = listOf(
+                SyncedLyricLine(0L, "Hold you in my arms"),
+                SyncedLyricLine(10_000L, "Far away")
+            ),
+            plainText = "Hold you in my arms\nFar away"
+        )
+        val session = MediaSessionUi(
+            id = "local_test",
+            packageName = "com.example",
+            appLabel = "KeyDeck",
+            title = "Starlight",
+            artist = "Muse",
+            album = "Black Holes",
+            isPlaying = true,
+            positionMs = 11_000L,
+            durationMs = 240_000L,
+            playbackSpeed = 1.0f,
+            lastUpdateElapsedMs = 0L,
+            formatLabel = "FLAC",
+            bitrateKbps = 1000
+        )
+
+        var playPauseClicks = 0
+        var nextClicks = 0
+        var seekBySum = 0L
+
+        composeTestRule.setContent {
+            KeyDeckTheme {
+                var activeTab by remember { mutableStateOf(PowerampTab.PLAYER) }
+                PowerampPlayerScreen(
+                    mediaState = MediaPlayerState(sessions = listOf(session), selectedSessionId = session.id),
+                    livePositionMs = 11_000L,
+                    coverStyle = PlayerCoverStyle.COVER,
+                    activeTab = activeTab,
+                    isLandscape = false,
+                    sourceSelectionMode = SourceSelectionMode.AUTO,
+                    localTracks = emptyList(),
+                    unifiedSearchQuery = "",
+                    unifiedSearchResults = emptyList(),
+                    isSearchingOnline = false,
+                    currentLyrics = lyrics,
+                    isFetchingLyrics = false,
+                    equalizerState = EqualizerState(enabled = true),
+                    audioCaptureState = AudioCaptureState(),
+                    smartAlbums = emptyList(),
+                    selectedAlbumId = null,
+                    onClose = {},
+                    onSelectTab = { activeTab = it },
+                    onToggleSourceMode = {},
+                    onSelectSession = {},
+                    onTogglePlayPause = { playPauseClicks++ },
+                    onSkipPrevious = {},
+                    onSkipNext = { nextClicks++ },
+                    onSeekTo = {},
+                    onSeekBy = { seekBySum += it },
+                    onSkipToQueueItem = {},
+                    onOpenActivePlayer = {},
+                    onPlayLocalTrack = {},
+                    onDeleteLocalTrack = {},
+                    onDeleteActiveTrack = {},
+                    onSetPlaybackSpeed = {},
+                    onCycleRepeatMode = {},
+                    onToggleShuffle = {},
+                    onSearchMusicEverywhere = {},
+                    onUnifiedTrackAction = { _, _ -> },
+                    onOpenSourcePicker = { _, _ -> },
+                    onStopAudioCapture = {},
+                    onAutoFetchLyrics = {},
+                    onSaveLyrics = {},
+                    onDeleteLyrics = {},
+                    onSetEqualizerEnabled = {},
+                    onApplyEqualizerPreset = {},
+                    onSetEqualizerBand = { _, _ -> },
+                    onSetBassBoost = {},
+                    onSetVirtualizer = {},
+                    onSelectAlbum = {},
+                    onCreateAlbum = { _, _ -> },
+                    onRefreshAlbumOnline = {},
+                    onAttachLocalTracksToAlbum = { _, _ -> },
+                    onDetachLocalTrackFromAlbum = { _, _ -> },
+                    onPickCustomAlbumCover = {},
+                    onSelectAlternateCoverUrl = { _, _ -> },
+                    onDeleteAlbum = {},
+                    onDownloadMissingAlbumTrack = { _, _ -> },
+                    onDownloadAllMissingAlbumTracks = {}
+                )
+            }
+        }
+
+        // On PLAYER tab mini deck is hidden (main transport controls are visible)
+        composeTestRule.onNodeWithTag("poweramp_global_mini_deck").assertDoesNotExist()
+
+        // Vintage EQ tab shows rack controls + persistent mini deck
+        composeTestRule.onNodeWithTag("poweramp_tab_equalizer").performClick()
+        composeTestRule.onNodeWithTag("eq_master_toggle").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("eq_band_slider_0").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("eq_band_slider_4").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("eq_bass_slider").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("eq_virtualizer_slider").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_global_mini_deck").assertIsDisplayed()
+
+        // Lyrics, Search, and Albums tabs all retain persistent playback & seek mini deck
+        composeTestRule.onNodeWithTag("poweramp_tab_lyrics").performClick()
+        composeTestRule.onNodeWithTag("poweramp_global_mini_deck").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_tab_search").performClick()
+        composeTestRule.onNodeWithTag("poweramp_global_mini_deck").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_tab_albums").performClick()
+        composeTestRule.onNodeWithTag("poweramp_global_mini_deck").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("poweramp_mini_play_pause_btn").performClick()
+        composeTestRule.onNodeWithTag("poweramp_mini_next_btn").performClick()
+        composeTestRule.onNodeWithTag("poweramp_mini_fwd10_btn").performClick()
+        composeTestRule.onNodeWithTag("poweramp_mini_back10_btn").performClick()
+
+        assertEquals(1, playPauseClicks)
+        assertEquals(1, nextClicks)
+        assertEquals(0L, seekBySum)
+    }
+
+    @Test
+    fun `archive metadata parser extracts multiple album tracks and linux ar parser reads deb members`() {
+        val metaJson = """
+            {
+              "files": [
+                {"name": "01_Take_a_Bow.flac", "title": "Take a Bow", "artist": "Muse", "length": "275"},
+                {"name": "02_Starlight.flac", "title": "Starlight", "artist": "Muse", "length": "240"},
+                {"name": "02_Starlight.mp3", "title": "Starlight", "artist": "Muse", "length": "240"},
+                {"name": "cover.jpg", "title": "Cover"}
+              ]
+            }
+        """.trimIndent()
+        val parsed = MusicCatalogAndLyricsRepository.parseArchiveMetadataFiles(
+            id = "muse_bhar",
+            itemTitle = "Black Holes",
+            itemArtist = "Muse",
+            metaRaw = metaJson,
+            maxResults = 16
+        )
+        assertEquals(3, parsed.size)
+        assertTrue(parsed.any { it.title == "Take a Bow" && it.fileExtension == "flac" })
+        assertTrue(parsed.any { it.title == "Starlight" && it.fileExtension == "flac" })
+        assertTrue(parsed.any { it.title == "Starlight" && it.fileExtension == "mp3" })
+
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val linuxRepo = LinuxPackagesRepository(app, com.example.data.ShizukuBridge(app))
+        val tmpDeb = File.createTempFile("sample_pkg", ".deb", app.cacheDir)
+        try {
+            fun headerBytes(name: String, size: Int): ByteArray {
+                val paddedName = name.padEnd(16, ' ').substring(0, 16)
+                val paddedMeta = "0           0     0     100644  " + size.toString().padEnd(10, ' ') + "`\n"
+                return (paddedName + paddedMeta).toByteArray(Charsets.US_ASCII)
+            }
+            val debContent = buildList {
+                add("!<arch>\n".toByteArray(Charsets.US_ASCII))
+                add(headerBytes("debian-binary/", 4))
+                add("2.0\n".toByteArray(Charsets.US_ASCII))
+                add(headerBytes("data.tar.gz/", 3))
+                add(byteArrayOf(1, 2, 3))
+            }.fold(ByteArray(0)) { acc, bytes -> acc + bytes }
+            tmpDeb.writeBytes(debContent)
+
+            val headers = linuxRepo.parseArMemberHeaders(tmpDeb)
+            assertEquals(2, headers.size)
+            assertEquals("debian-binary", headers[0].first)
+            assertEquals(4L, headers[0].second)
+            assertEquals("data.tar.gz", headers[1].first)
+            assertEquals(3L, headers[1].second)
+        } finally {
+            tmpDeb.delete()
+        }
     }
 }

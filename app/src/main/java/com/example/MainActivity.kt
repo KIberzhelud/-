@@ -57,11 +57,13 @@ class MainActivity : ComponentActivity() {
                     highlightArgb = it.highlightArgb
                 )
             } ?: state.wallpaperPalette
-            val vistaTokens = buildVistaThemeTokens(
-                themeColor = state.uiThemeColor,
-                wallpaperPalette = effectivePalette,
-                hasWallpaper = state.hasWallpaper
-            )
+            val vistaTokens = remember(state.uiThemeColor, effectivePalette, state.hasWallpaper) {
+                buildVistaThemeTokens(
+                    themeColor = state.uiThemeColor,
+                    wallpaperPalette = effectivePalette,
+                    hasWallpaper = state.hasWallpaper
+                )
+            }
             val baseDensity = LocalDensity.current
             val scaledDensity = remember(baseDensity.density, baseDensity.fontScale, state.uiScale) {
                 Density(
@@ -101,6 +103,9 @@ class MainActivity : ComponentActivity() {
             intent.removeExtra(KeyDeckAccessibilityService.EXTRA_OPEN_HUB)
         }
         if (intent?.getBooleanExtra(KeyDeckAccessibilityService.EXTRA_OPEN_SEARCH, false) == true) {
+            viewModel.closeFullPowerampPlayer()
+            viewModel.closeRecentsOverlay()
+            viewModel.closeWriterMode()
             viewModel.closeWorkspaceSpace()
             viewModel.selectTab(MainTab.HOME)
             runCatching { appSearchFocusRequester.requestFocus() }

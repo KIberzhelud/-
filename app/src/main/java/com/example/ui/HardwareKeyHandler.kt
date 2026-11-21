@@ -39,6 +39,7 @@ object HardwareKeyHandler {
         if (event.action != AndroidKeyEvent.ACTION_DOWN) return false
 
         val hasAnyModalOpen = state.showFullPowerampPlayer ||
+            viewModel.activeLinuxRunnerTile.value != null ||
             state.sourcePickerTarget != null ||
             state.pendingStreamCaptureRequest != null ||
             state.showWeatherForecastDialog ||
@@ -59,6 +60,7 @@ object HardwareKeyHandler {
         if (hasAnyModalOpen) {
             if (event.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
                 when {
+                    viewModel.activeLinuxRunnerTile.value != null -> viewModel.closeLinuxRunner()
                     state.sourcePickerTarget != null -> viewModel.openSourcePicker(null)
                     state.pendingStreamCaptureRequest != null -> viewModel.clearPendingStreamCaptureRequest()
                     state.showWeatherCityPickerDialog -> viewModel.setShowWeatherCityPickerDialog(false)
@@ -307,16 +309,18 @@ object HardwareKeyHandler {
         }
 
         val columns = if (viewModel.isLandscapeLayout) 3 else 2
+        val textInputFocused = viewModel.isAppSearchInputFocused || viewModel.isCallsSearchInputFocused
 
         // 2D Arrow / D-Pad Tile Navigation across ALL tabs
-        // Note: In HUB CHATS inline reply input, let BasicTextField receive text/Enter if focused,
-        // otherwise D-Pad navigates cards.
+        // Keep cursor left/right, Enter, and space unintercepted while typing inside search inputs.
         when (event.keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                if (textInputFocused) return false
                 viewModel.moveGridFocus(dx = -1, dy = 0, columns = columns)
                 return true
             }
             AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (textInputFocused) return false
                 viewModel.moveGridFocus(dx = 1, dy = 0, columns = columns)
                 return true
             }
@@ -331,6 +335,7 @@ object HardwareKeyHandler {
             AndroidKeyEvent.KEYCODE_ENTER,
             AndroidKeyEvent.KEYCODE_NUMPAD_ENTER,
             AndroidKeyEvent.KEYCODE_DPAD_CENTER -> {
+                if (textInputFocused) return false
                 if (state.activeTab != MainTab.HUB || state.hubSubTab != HubSubTab.CHATS) {
                     viewModel.activateFocusedItem()
                     return true
@@ -382,11 +387,14 @@ object HardwareKeyHandler {
                     if (codePoint > 0 && !Character.isISOControl(codePoint)) {
                         val ch = codePoint.toChar()
                         if (ch == '/') {
+                            if (state.showWorkspaceSpace) viewModel.closeWorkspaceSpace()
                             onFocusAppSearch()
                             return true
                         }
                         if (ch.isLetterOrDigit() || ch == ' ' || ch == '*' || ch == '.') {
+                            if (state.showWorkspaceSpace) viewModel.closeWorkspaceSpace()
                             viewModel.appendAppSearchChar(ch)
+                            onFocusAppSearch()
                             return true
                         }
                     }

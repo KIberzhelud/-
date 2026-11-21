@@ -88,11 +88,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.io.File
 
 data class PendingStreamCaptureRequest(
     val title: String,
@@ -244,6 +250,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _contacts = MutableStateFlow<List<ContactEntry>>(emptyList())
     private val _permissionsState = MutableStateFlow(Triple(false, false, false))
     private val _livePositionMs = MutableStateFlow(0L)
+    val livePositionMs: StateFlow<Long> = _livePositionMs.asStateFlow()
     private val _showMusicSheet = MutableStateFlow(false)
     private val _musicDrawerTab = MutableStateFlow(MusicDrawerTab.STREAMING)
     private val _showShortcutsDialog = MutableStateFlow(false)
@@ -291,16 +298,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isFetchingLyrics = MutableStateFlow(false)
     private val _pendingStreamCaptureRequest = MutableStateFlow<PendingStreamCaptureRequest?>(null)
     private val _selectedAlbumId = MutableStateFlow<String?>(null)
+    private val _activeLinuxRunnerTile = MutableStateFlow<LauncherPreferencesRepository.PersistedLinuxTile?>(null)
+    val activeLinuxRunnerTile: StateFlow<LauncherPreferencesRepository.PersistedLinuxTile?> = _activeLinuxRunnerTile.asStateFlow()
+    private val _linuxConsoleOutput = MutableStateFlow("")
+    val linuxConsoleOutput: StateFlow<String> = _linuxConsoleOutput.asStateFlow()
 
     @Volatile
     private var wasPausedSinceResume: Boolean = false
     private var searchDebounceJob: Job? = null
     private var deviceSearchJob: Job? = null
+    private var linuxSearchJob: Job? = null
     private var weatherSearchJob: Job? = null
     private var onlineMusicSearchJob: Job? = null
     private var lyricsFetchJob: Job? = null
     private var lastLoadedLyricsKey: String = ""
     private var musicAppRotationIndex: Int = -1
+    private val workspaceMutex = Mutex()
 
     @Volatile
     var isLandscapeLayout: Boolean = false
@@ -328,10 +341,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         prefsRepo.pinnedAppIds,
         prefsRepo.customAppLabels,
         prefsRepo.appIconOverrides,
-        combine(_appSearchQuery, _highlightedLetter) { q, l -> q to l }
-    ) { apps, pinnedIds, customLabels, iconOverrides, queryAndLetter ->
-        val (query, letterFilter) = queryAndLetter
-        val updatedApps = apps
+        combine(_appSearchQuery, _highlightedLetter, prefsRepo.installedLinuxTiles) { q, l, lTiles ->
+            Triple(q, l, lTiles)
+        }
+    ) { apps, pinnedIds, customLabels, iconOverrides, queryLetterLinux ->
+        val (query, letterFilter, linuxTiles) = queryLetterLinux
+        val linuxTileApps = linuxTiles.map { t ->
+            val firstCh = t.name.trim().firstOrNull()?.uppercaseChar() ?: '#'
+            val normCh = when {
+                firstCh == 'Ё' -> 'Е'
+                firstCh in 'A'..'Z' || firstCh in 'А'..'Я' -> firstCh
+                else -> '#'
+            }
+            AppEntry(
+                id = "linux_tile:${t.id}",
+                label = t.name,
+                packageName = "linux.${t.packageName}",
+                activityName = t.packageName,
+                icon = null,
+                initialChar = normCh,
+                originalLabel = t.name,
+                isLinuxTile = true,
+                linuxPackageId = t.id
+            )
+        }
+        val updatedApps = (apps + linuxTileApps)
             .map { app ->
                 appsRepo.applyCustomization(
                     app = app,
@@ -481,7 +515,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val mediaAndExtrasFlow = combine(
         mediaRepo.mediaState,
-        _livePositionMs,
+        flowOf(0L),
         prefsRepo.hubQuickLinks,
         _callsSearchQuery,
         combine(
@@ -1054,7 +1088,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     0L
                 }
-                delay(500L)
+                delay(if (active?.isPlaying == true) 200L else 500L)
             }
         }
     }
@@ -1204,7 +1238,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         searchDebounceJob = viewModelScope.launch {
             delay(180L)
-            _musicSearchResults.value = mediaRepo.searchStreamingAndLocalCatalog(query, uiState.value.musicApps)
+            val musicAppsSnapshot = uiState.value.musicApps
+            _musicSearchResults.value = withContext(Dispatchers.Default) {
+                mediaRepo.searchStreamingAndLocalCatalog(query, musicAppsSnapshot)
+            }
             triggerDeviceSearch(query)
             triggerLinuxSearch(query)
         }
@@ -1229,12 +1266,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun triggerLinuxSearch(query: String) {
+        linuxSearchJob?.cancel()
         val trimmed = query.trim()
         if (trimmed.length < 2) {
             _linuxSearchResults.value = emptyList()
             return
         }
-        viewModelScope.launch {
+        linuxSearchJob = viewModelScope.launch {
+            delay(150L)
             _linuxSearchResults.value = linuxRepo.scanLinuxPackages(trimmed)
         }
     }
@@ -1737,17 +1776,30 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _isWriterModeOpen.value = false
         _activeTab.value = MainTab.HOME
         _showWorkspaceSpace.value = true
-        val current = uiState.value.workspaceGrid
-        if (current.isOnHome) {
-            val existingNonHome = current.cells.firstOrNull { !it.isHome }
-            if (existingNonHome != null) {
-                viewModelScope.launch {
-                    prefsRepo.saveWorkspaceGridState(
-                        current.copy(activeX = existingNonHome.x, activeY = existingNonHome.y)
-                    )
+        viewModelScope.launch {
+            workspaceMutex.withLock {
+                val updated = prefsRepo.updateWorkspaceGridState { current ->
+                    if (!current.isOnHome) {
+                        current
+                    } else {
+                        val existingNonHome = current.cells.firstOrNull { !it.isHome }
+                        if (existingNonHome != null) {
+                            current.copy(activeX = existingNonHome.x, activeY = existingNonHome.y)
+                        } else {
+                            val tx = current.activeX + 1
+                            val ty = current.activeY
+                            val nextCells = if (current.cells.any { it.x == tx && it.y == ty }) {
+                                current.cells
+                            } else {
+                                current.cells + WorkspaceCell(tx, ty)
+                            }
+                            current.copy(cells = nextCells, activeX = tx, activeY = ty)
+                        }
+                    }
                 }
-            } else {
-                navigateWorkspace(+1, 0)
+                if (!updated.isOnHome) {
+                    _workspaceActionFeedback.value = "Рабочий стол (${updated.activeX}, ${updated.activeY})"
+                }
             }
         }
     }
@@ -1756,68 +1808,80 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (dx == 0 && dy == 0) return
         _showWorkspaceSpace.value = true
         viewModelScope.launch {
-            val current = uiState.value.workspaceGrid
-            val tx = current.activeX + dx
-            val ty = current.activeY + dy
-            val exists = current.cells.any { it.x == tx && it.y == ty }
-            val nextCells = if (exists) current.cells else current.cells + WorkspaceCell(tx, ty)
-            val nextState = current.copy(cells = nextCells, activeX = tx, activeY = ty)
-            prefsRepo.saveWorkspaceGridState(nextState)
-            _workspaceActionFeedback.value = if (tx == 0 && ty == 0) {
-                "Главный рабочий стол (0, 0)"
-            } else {
-                "Рабочий стол ($tx, $ty)"
+            workspaceMutex.withLock {
+                val updated = prefsRepo.updateWorkspaceGridState { current ->
+                    val tx = current.activeX + dx
+                    val ty = current.activeY + dy
+                    val exists = current.cells.any { it.x == tx && it.y == ty }
+                    val nextCells = if (exists) current.cells else current.cells + WorkspaceCell(tx, ty)
+                    current.copy(cells = nextCells, activeX = tx, activeY = ty)
+                }
+                _workspaceActionFeedback.value = if (updated.isOnHome) {
+                    "Главный рабочий стол (0, 0)"
+                } else {
+                    "Рабочий стол (${updated.activeX}, ${updated.activeY})"
+                }
             }
         }
     }
 
     fun createWorkspaceWithApp(app: AppEntry, dx: Int = 1, dy: Int = 0) {
         viewModelScope.launch {
-            val current = uiState.value.workspaceGrid
-            var step = 1
-            var targetX = current.activeX + dx
-            var targetY = current.activeY + dy
-            while (current.cells.any { it.x == targetX && it.y == targetY } || (targetX == 0 && targetY == 0)) {
-                step++
-                targetX = current.activeX + dx * step
-                targetY = current.activeY + dy * step
+            workspaceMutex.withLock {
+                val updated = prefsRepo.updateWorkspaceGridState { current ->
+                    var step = 1
+                    var targetX = current.activeX + dx
+                    var targetY = current.activeY + dy
+                    while (current.cells.any { it.x == targetX && it.y == targetY } || (targetX == 0 && targetY == 0)) {
+                        step++
+                        targetX = current.activeX + dx * step
+                        targetY = current.activeY + dy * step
+                    }
+                    val newCell = WorkspaceCell(
+                        x = targetX,
+                        y = targetY,
+                        packageName = app.packageName,
+                        activityName = app.activityName,
+                        label = app.label
+                    )
+                    current.copy(
+                        cells = current.cells + newCell,
+                        activeX = targetX,
+                        activeY = targetY
+                    )
+                }
+                _contextMenuApp.value = null
+                _isWriterModeOpen.value = false
+                _activeTab.value = MainTab.HOME
+                _appSearchQuery.value = ""
+                _showWorkspaceSpace.value = true
+                showToast("Стол (${updated.activeX}, ${updated.activeY}): ${app.label}")
             }
-            val newCell = WorkspaceCell(
-                x = targetX,
-                y = targetY,
-                packageName = app.packageName,
-                activityName = app.activityName,
-                label = app.label
-            )
-            val nextState = current.copy(
-                cells = current.cells + newCell,
-                activeX = targetX,
-                activeY = targetY
-            )
-            prefsRepo.saveWorkspaceGridState(nextState)
-            _contextMenuApp.value = null
-            _isWriterModeOpen.value = false
-            _activeTab.value = MainTab.HOME
-            _appSearchQuery.value = ""
-            _showWorkspaceSpace.value = true
-            showToast("Стол ($targetX, $targetY): ${app.label}")
         }
     }
 
     fun assignAppToCurrentWorkspace(app: AppEntry) {
         viewModelScope.launch {
-            val current = uiState.value.workspaceGrid
-            if (current.isOnHome) return@launch
-            val updatedCells = current.cells.filterNot { it.x == current.activeX && it.y == current.activeY } +
-                WorkspaceCell(
-                    x = current.activeX,
-                    y = current.activeY,
-                    packageName = app.packageName,
-                    activityName = app.activityName,
-                    label = app.label
-                )
-            prefsRepo.saveWorkspaceGridState(current.copy(cells = updatedCells))
-            showToast("Назначено на стол (${current.activeX}, ${current.activeY}): ${app.label}")
+            workspaceMutex.withLock {
+                val updated = prefsRepo.updateWorkspaceGridState { current ->
+                    if (current.isOnHome) {
+                        current
+                    } else {
+                        val updatedCells = current.cells.filterNot { it.x == current.activeX && it.y == current.activeY } +
+                            WorkspaceCell(
+                                x = current.activeX,
+                                y = current.activeY,
+                                packageName = app.packageName,
+                                activityName = app.activityName,
+                                label = app.label
+                            )
+                        current.copy(cells = updatedCells)
+                    }
+                }
+                if (!updated.isOnHome) {
+                    showToast("Назначено на стол (${updated.activeX}, ${updated.activeY}): ${app.label}")
+                }
+            }
         }
     }
 
@@ -1827,14 +1891,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return
         }
         viewModelScope.launch {
-            val current = uiState.value.workspaceGrid
-            val remaining = current.cells.filterNot { it.x == x && it.y == y }
-            prefsRepo.saveWorkspaceGridState(
-                current.copy(cells = remaining, activeX = 0, activeY = 0)
-            )
-            _showWorkspaceSpace.value = false
-            KeyDeckAccessibilityService.hideDockedWorkspaceBar()
-            showToast("Рабочий стол ($x, $y) удалён")
+            workspaceMutex.withLock {
+                prefsRepo.updateWorkspaceGridState { current ->
+                    val remaining = current.cells.filterNot { it.x == x && it.y == y }
+                    current.copy(cells = remaining, activeX = 0, activeY = 0)
+                }
+                _showWorkspaceSpace.value = false
+                KeyDeckAccessibilityService.hideDockedWorkspaceBar()
+                showToast("Рабочий стол ($x, $y) удалён")
+            }
         }
     }
 
@@ -1842,9 +1907,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showWorkspaceSpace.value = false
         KeyDeckAccessibilityService.hideDockedWorkspaceBar()
         viewModelScope.launch {
-            val current = uiState.value.workspaceGrid
-            if (!current.isOnHome) {
-                prefsRepo.saveWorkspaceGridState(current.copy(activeX = 0, activeY = 0))
+            workspaceMutex.withLock {
+                prefsRepo.updateWorkspaceGridState { current ->
+                    if (current.isOnHome) current else current.copy(activeX = 0, activeY = 0)
+                }
             }
         }
     }
@@ -1857,12 +1923,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             it.packageName == pkg && (cell.activityName == null || it.activityName == cell.activityName)
         } ?: state.allApps.firstOrNull { it.packageName == pkg }
 
+        val dm = getApplication<Application>().resources.displayMetrics
+        val minTopPx = KeyDeckAccessibilityService.getRecommendedWorkspaceTopPx(getApplication())
+        val adjustedTop = maxOf(bounds.top, minTopPx)
+        val adjustedBottom = maxOf(adjustedTop + 200, bounds.bottom, dm.heightPixels)
+        val clampedBounds = Rect(0, adjustedTop, maxOf(bounds.right, dm.widthPixels), adjustedBottom)
+
         autoCloseManager.recordLaunchedPackage(pkg)
         val wsTitle = "${cell.label ?: app?.label ?: "Стол"} (${cell.x},${cell.y})"
         KeyDeckAccessibilityService.showDockedWorkspaceBar(wsTitle)
 
         if (app != null) {
-            appsRepo.launchAppInBounds(app, bounds)
+            appsRepo.launchAppInBounds(app, clampedBounds)
         } else {
             appsRepo.launchPackage(pkg)
         }
@@ -1872,10 +1944,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 shizukuBridge.launchAppInBoundsViaShizuku(
                     packageName = pkg,
                     activityName = app?.activityName ?: cell.activityName,
-                    left = bounds.left,
-                    top = bounds.top,
-                    right = bounds.right,
-                    bottom = bounds.bottom
+                    left = clampedBounds.left,
+                    top = clampedBounds.top,
+                    right = clampedBounds.right,
+                    bottom = clampedBounds.bottom
                 )
             }
         }
@@ -1985,6 +2057,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun launchApp(app: AppEntry) {
+        if (app.isLinuxTile) {
+            openLinuxRunner(app.linuxPackageId ?: app.id.removePrefix("linux_tile:"))
+            return
+        }
         autoCloseManager.recordLaunchedPackage(app.packageName)
         if (!appsRepo.launchApp(app)) showToast("Не удалось открыть ${app.label}")
     }
@@ -2510,6 +2586,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             showToast("Скачивание ${candidate.formatBadge}: ${candidate.title}…")
             val saved = MusicCatalogAndLyricsRepository.downloadDirectCandidate(getApplication(), candidate)
             if (saved != null) {
+                mediaRepo.registerDownloadedTrack(saved)
                 val tracks = mediaRepo.refreshLocalTracks()
                 val syncedSaved = tracks.firstOrNull { it.filePath == saved.filePath } ?: saved
                 if (attachToAlbumId != null) {
@@ -2534,6 +2611,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private suspend fun handleDownloadOutcome(outcome: DownloadOutcome, albumId: String?) {
         when (outcome) {
             is DownloadOutcome.DownloadedFile -> {
+                mediaRepo.registerDownloadedTrack(outcome.track)
                 val tracks = mediaRepo.refreshLocalTracks()
                 val matched = tracks.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
                 if (albumId != null) {
@@ -2908,51 +2986,82 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 showToast("Все треки альбома уже на устройстве!")
                 return@launch
             }
+            showToast("Автоскачивание ${missing.size} трек(ов) из «${album.title}»…")
+            val albumArchiveFiles = withContext(Dispatchers.IO) {
+                MusicCatalogAndLyricsRepository.searchArchiveOrgAlbumFiles(album.title, album.artist)
+            }
             var downloadedCount = 0
+            var firstCaptureNeeded: DownloadOutcome.NeedsStreamingCapture? = null
+            var captureNeededCount = 0
+
             for (slot in missing) {
                 val artist = slot.artist.ifBlank { album.artist }
+                val normSlotTitle = MusicCatalogAndLyricsRepository.normalizeKeyText(slot.title)
+                val albumMatches = albumArchiveFiles.filter { cand ->
+                    val normCand = MusicCatalogAndLyricsRepository.normalizeKeyText(cand.title)
+                    normCand == normSlotTitle ||
+                        (normSlotTitle.length >= 4 && (normCand.contains(normSlotTitle) || normSlotTitle.contains(normCand)))
+                }
                 val grouped = MusicCatalogAndLyricsRepository.searchAllSources(
                     query = "$artist ${slot.title}".trim(),
                     localTracks = uiState.value.localAudioTracks,
                     mediaState = uiState.value.mediaState,
                     installedMusicApps = uiState.value.musicApps
                 )
-                val candidates = grouped.firstOrNull()?.candidates ?: emptyList()
+                val queryCandidates = grouped.firstOrNull()?.candidates ?: emptyList()
                 val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
                     context = getApplication(),
                     title = slot.title,
                     artist = artist,
-                    candidates = candidates,
-                    installedMusicApps = uiState.value.musicApps
+                    candidates = queryCandidates,
+                    installedMusicApps = uiState.value.musicApps,
+                    allowStreamingCapture = false,
+                    extraCandidates = albumMatches
                 )
                 when (outcome) {
                     is DownloadOutcome.DownloadedFile -> {
                         downloadedCount++
-                        val tracks = mediaRepo.refreshLocalTracks()
-                        val matched = tracks.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
-                        attachLocalTracksToAlbum(album.id, listOf(matched.id))
+                        mediaRepo.registerDownloadedTrack(outcome.track)
+                        val refreshed = mediaRepo.refreshLocalTracks()
+                        val matched = refreshed.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
+                        val latestAlbums = prefsRepo.smartAlbums.first()
+                        val updatedAlbums = latestAlbums.map { alb ->
+                            if (alb.id == album.id) {
+                                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                                    alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + matched.id).distinct()),
+                                    refreshed
+                                )
+                            } else alb
+                        }
+                        prefsRepo.saveSmartAlbums(updatedAlbums)
                     }
                     is DownloadOutcome.NeedsStreamingCapture -> {
-                        requestStreamCaptureForTrack(
-                            title = outcome.title,
-                            artist = outcome.artist,
-                            packageName = outcome.packageName,
-                            appLabel = outcome.appLabel,
-                            albumId = album.id
-                        )
-                        showToast(
-                            if (downloadedCount > 0) "Скачано $downloadedCount; далее захват «${outcome.title}» из ${outcome.appLabel}"
-                            else "Для «${outcome.title}» нужен захват потока из ${outcome.appLabel}"
-                        )
-                        return@launch
+                        captureNeededCount++
+                        if (firstCaptureNeeded == null) {
+                            firstCaptureNeeded = outcome
+                        }
                     }
                     is DownloadOutcome.Failed -> Unit
                 }
             }
-            showToast(
-                if (downloadedCount > 0) "Докачано треков в альбом: $downloadedCount"
-                else "Не удалось автоматически скачать недостающие треки"
-            )
+
+            if (downloadedCount == 0 && firstCaptureNeeded != null) {
+                requestStreamCaptureForTrack(
+                    title = firstCaptureNeeded.title,
+                    artist = firstCaptureNeeded.artist,
+                    packageName = firstCaptureNeeded.packageName,
+                    appLabel = firstCaptureNeeded.appLabel,
+                    albumId = album.id
+                )
+                showToast("Прямые FLAC/MP3 не найдены — захватите «${firstCaptureNeeded.title}» из ${firstCaptureNeeded.appLabel}")
+            } else if (downloadedCount > 0 && captureNeededCount > 0) {
+                showToast("Скачано $downloadedCount трек(ов); ещё $captureNeededCount доступны через захват стриминга")
+            } else {
+                showToast(
+                    if (downloadedCount > 0) "Докачано треков в альбом: $downloadedCount"
+                    else "Не удалось автоматически скачать недостающие треки"
+                )
+            }
         }
     }
 
@@ -3141,18 +3250,89 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun installOrRunLinuxPackage(entry: LinuxPackageEntry) {
         viewModelScope.launch {
-            linuxRepo.installOrRunPackage(entry).onSuccess { msg ->
-                showToast(msg)
+            linuxRepo.installLocally(entry).onSuccess { outcome ->
+                val tile = LauncherPreferencesRepository.PersistedLinuxTile(
+                    id = outcome.tileId,
+                    name = outcome.name,
+                    packageName = outcome.packageName,
+                    kind = outcome.kind.name,
+                    installedDirPath = outcome.installedDirPath,
+                    entryCommand = outcome.entryCommand,
+                    version = entry.version
+                )
+                prefsRepo.upsertInstalledLinuxTile(tile)
+                _showLinuxCatalogDialog.value = false
+                _activeLinuxRunnerTile.value = tile
+                _linuxConsoleOutput.value = outcome.log
+                refreshLinuxCatalog()
+                showToast("Создана плитка: ${tile.name}")
             }.onFailure { err ->
-                showToast(err.message ?: "Нужен Termux или Shizuku")
+                showToast(err.message ?: "Ошибка установки пакета Linux")
             }
         }
     }
 
-    fun openTermuxDownload() {
-        if (!linuxRepo.openTermuxDownloadPage()) {
-            showToast("Откройте F-Droid и установите Termux")
+    fun openLinuxRunner(tileId: String) {
+        viewModelScope.launch {
+            val tiles = prefsRepo.installedLinuxTiles.first()
+            val tile = tiles.firstOrNull { it.id == tileId }
+            if (tile == null) {
+                showToast("Пакет Linux не найден")
+                return@launch
+            }
+            _activeLinuxRunnerTile.value = tile
+            _linuxConsoleOutput.value = "Запуск ${tile.name} (${tile.version})…\n$ ${tile.entryCommand}"
+            val workDir = tile.installedDirPath.takeIf { it.isNotBlank() }?.let { File(it) }
+            val result = linuxRepo.executeLocalShellCommand(tile.entryCommand, workDir)
+            result.onSuccess { out ->
+                _linuxConsoleOutput.value = "$ ${tile.entryCommand}\n$out"
+            }.onFailure { err ->
+                _linuxConsoleOutput.value = "$ ${tile.entryCommand}\n[Ошибка]: ${err.message}"
+            }
         }
+    }
+
+    fun runLinuxConsoleCommand(command: String) {
+        val tile = _activeLinuxRunnerTile.value ?: return
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch {
+            val workDir = tile.installedDirPath.takeIf { it.isNotBlank() }?.let { File(it) }
+            val res = linuxRepo.executeLocalShellCommand(trimmed, workDir)
+            val text = res.getOrElse { "[Ошибка]: ${it.message}" }
+            _linuxConsoleOutput.value = buildString {
+                if (_linuxConsoleOutput.value.isNotBlank()) {
+                    appendLine(_linuxConsoleOutput.value.trimEnd())
+                    appendLine()
+                }
+                appendLine("$ $trimmed")
+                append(text)
+            }
+        }
+    }
+
+    fun uninstallLinuxTile(tileId: String) {
+        viewModelScope.launch {
+            val tiles = prefsRepo.installedLinuxTiles.first()
+            val target = tiles.firstOrNull { it.id == tileId }
+            if (target != null) {
+                linuxRepo.deleteLocalPackageFiles(target.installedDirPath)
+            }
+            prefsRepo.removeInstalledLinuxTile(tileId)
+            if (_activeLinuxRunnerTile.value?.id == tileId) {
+                _activeLinuxRunnerTile.value = null
+            }
+            refreshLinuxCatalog()
+            showToast("Linux-плитка удалена")
+        }
+    }
+
+    fun closeLinuxRunner() {
+        _activeLinuxRunnerTile.value = null
+    }
+
+    fun openTermuxDownload() {
+        showToast("Termux больше не требуется — пакеты ставятся локально в KeyDeck")
     }
 
     fun refreshWeather() {

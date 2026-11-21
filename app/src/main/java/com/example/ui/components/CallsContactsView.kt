@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -49,6 +51,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -133,10 +136,16 @@ fun CallsContactsView(
         }
 
         // Vista inset Search & Action Strip: [icon] [Поиск или номер...] [ВЫЗОВ] [+КОНТАКТ] [СБРОС]
+        val keyboardController = LocalSoftwareKeyboardController.current
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(theme.surface.copy(alpha = 0.92f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -144,7 +153,11 @@ fun CallsContactsView(
                 modifier = Modifier
                     .weight(1f)
                     .vistaInsetBox()
-                    .padding(horizontal = 7.dp, vertical = 5.dp),
+                    .clickable {
+                        runCatching { callsSearchFocusRequester.requestFocus() }
+                        keyboardController?.show()
+                    }
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
@@ -153,49 +166,57 @@ fun CallsContactsView(
                     modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (searchQuery.isEmpty()) {
-                        Text(
-                            text = if (highlightedLetter != null) {
-                                "Буква: $highlightedLetter • Поиск или номер…"
-                            } else {
-                                "Поиск или номер…"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (highlightedLetter != null) theme.accent else TextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    var callsTfv by remember {
-                        mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
-                    }
-                    LaunchedEffect(searchQuery) {
-                        if (searchQuery != callsTfv.text) {
-                            callsTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
-                        }
-                    }
-                    BasicTextField(
-                        value = callsTfv,
-                        onValueChange = { next ->
-                            callsTfv = next
-                            onSearchQueryChange(next.text)
-                        },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
-                        cursorBrush = SolidColor(ElectricCyan),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                        keyboardActions = KeyboardActions(onGo = { onCallClick(callsTfv.text) }),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(callsSearchFocusRequester)
-                            .onFocusChanged { onSearchFocusChange(it.isFocused) }
-                            .testTag("calls_search_input")
-                    )
+                var callsTfv by remember {
+                    mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
                 }
+                LaunchedEffect(searchQuery) {
+                    if (searchQuery != callsTfv.text) {
+                        callsTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+                    }
+                }
+                BasicTextField(
+                    value = callsTfv,
+                    onValueChange = { next ->
+                        callsTfv = next
+                        onSearchQueryChange(next.text)
+                    },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                    cursorBrush = SolidColor(ElectricCyan),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { onCallClick(callsTfv.text) }),
+                    decorationBox = { innerTextField ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 34.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (callsTfv.text.isEmpty()) {
+                                Text(
+                                    text = if (highlightedLetter != null) {
+                                        "Буква: $highlightedLetter • Поиск или номер…"
+                                    } else {
+                                        "Поиск или номер…"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (highlightedLetter != null) theme.accent else TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(callsSearchFocusRequester)
+                        .onFocusChanged {
+                            onSearchFocusChange(it.isFocused)
+                            if (it.isFocused) keyboardController?.show()
+                        }
+                        .testTag("calls_search_input")
+                )
             }
             Spacer(Modifier.width(5.dp))
             ActionChipButton(
