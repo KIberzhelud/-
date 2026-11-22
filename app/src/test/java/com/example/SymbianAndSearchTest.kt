@@ -387,7 +387,7 @@ class SymbianAndSearchTest {
         assertEquals("Aero Glass Startup", viewModel.uiState.value.localAudioTracks.first().title)
 
         viewModel.updateLocalTrackSearchQuery("цой")
-        pumpMainUntil { viewModel.uiState.value.localAudioTracks.size == 1 }
+        pumpMainUntil { viewModel.uiState.value.localAudioTracks.size == 1 && viewModel.uiState.value.localAudioTracks.first().id == "3" }
         assertEquals("3", viewModel.uiState.value.localAudioTracks.first().id)
 
         viewModel.updateLocalTrackSearchQuery("")
@@ -883,15 +883,12 @@ class SymbianAndSearchTest {
         assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlR, viewModel, {}, {}))
         pumpMainUntil { !viewModel.uiState.value.showRecentsOverlay }
 
-        // 4. Ctrl+N with intercepted shade toggles HUB <-> HOME cleanly
-        viewModel.toggleShadeInterception()
-        pumpMainUntil { viewModel.uiState.value.shizukuState.interceptShadeEnabled }
+        // 4. Ctrl+N toggles HUB <-> HOME cleanly
         val ctrlN = KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_N, 0, KeyEvent.META_CTRL_ON)
         assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlN, viewModel, {}, {}))
         pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HUB }
         assertTrue(HardwareKeyHandler.handleAndroidKeyEvent(ctrlN, viewModel, {}, {}))
         pumpMainUntil { viewModel.uiState.value.activeTab == MainTab.HOME }
-        viewModel.toggleShadeInterception()
 
         // 5. AppPreviewCache stores thumbnails and refreshRecentFrames attaches them
         val sampleApp = AppEntry("t1/1", "Telegram", "org.telegram.messenger", "1", null, 'T', false, HubCategory.CHAT, 0)

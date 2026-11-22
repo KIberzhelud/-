@@ -32,7 +32,9 @@ import com.example.data.StreamAudioCaptureRuntime
 import com.example.data.StreamAudioCaptureService
 import com.example.data.UniversalSearchRepository
 import com.example.data.WallpaperThemeHelper
+import com.example.data.GitHubCloudBuildRepository
 import com.example.data.WeatherRepository
+import com.example.data.ZipUpdateRepository
 import com.example.model.AlbumExpectedTrack
 import com.example.model.AlphabetMode
 import com.example.model.AndroidOptimizationStats
@@ -49,6 +51,7 @@ import com.example.model.CustomColorPalette
 import com.example.model.DeviceSearchFile
 import com.example.model.EqualizerPreset
 import com.example.model.EqualizerState
+import com.example.model.GitHubBuildConfig
 import com.example.model.HubCategory
 import com.example.model.HubChatMessage
 import com.example.model.HubNotificationItem
@@ -79,6 +82,7 @@ import com.example.model.WeatherCityResult
 import com.example.model.WorkspaceCell
 import com.example.model.WorkspaceGridState
 import com.example.model.WriterSubTab
+import com.example.model.ZipUpdateInspection
 import com.example.ui.LockScreenActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -92,6 +96,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -107,6 +112,15 @@ data class PendingStreamCaptureRequest(
     val appLabel: String,
     val targetAlbumId: String? = null,
     val requestId: Long = System.currentTimeMillis()
+)
+
+data class RootThemeConfig(
+    val uiThemeColor: UiThemeColor = UiThemeColor.BLUE,
+    val activeCustomPalette: CustomColorPalette? = null,
+    val wallpaperPalette: WallpaperPaletteData? = null,
+    val hasWallpaper: Boolean = false,
+    val appLanguage: AppLanguage = AppLanguage.RU,
+    val uiScale: Float = 1.0f
 )
 
 data class LauncherUiState(
@@ -162,6 +176,13 @@ data class LauncherUiState(
     val showOptimizationDialog: Boolean = false,
     val showBackgroundWebAudioDialog: Boolean = false,
     val showLinuxCatalogDialog: Boolean = false,
+    val showZipUpdateDialog: Boolean = false,
+    val zipUpdateInspection: ZipUpdateInspection? = null,
+    val zipUpdateBusy: Boolean = false,
+    val zipUpdateStatus: String? = null,
+    val githubBuildConfig: GitHubBuildConfig = GitHubBuildConfig(),
+    val appVersionName: String = "1.0",
+    val appVersionCode: Long = 1L,
     val uiThemeColor: UiThemeColor = UiThemeColor.BLUE,
     val wallpaperBitmap: ImageBitmap? = null,
     val wallpaperPalette: WallpaperPaletteData? = null,
@@ -232,6 +253,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val optimizerManager = AndroidOptimizerManager(application, shizukuBridge)
     private val universalSearchRepo = UniversalSearchRepository(application, shizukuBridge)
     private val linuxRepo = LinuxPackagesRepository(application, shizukuBridge)
+    private val zipUpdateRepo = ZipUpdateRepository(application, shizukuBridge)
+    private val githubCloudBuildRepo = GitHubCloudBuildRepository(application)
+    private val installedVersionInfo = zipUpdateRepo.getCurrentVersionInfo()
 
     private val _allApps = MutableStateFlow<List<AppEntry>>(emptyList())
     private val _isLoadingApps = MutableStateFlow(true)
@@ -270,6 +294,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isWriterModeOpen = MutableStateFlow(false)
     private val _writerInitialSubTab = MutableStateFlow(WriterSubTab.BOOKS)
     private val _deviceSearchResults = MutableStateFlow<List<DeviceSearchFile>>(emptyList())
+    private val _chatSearchResults = MutableStateFlow<List<LockedChatThread>>(emptyList())
     private val _isSearchingDevice = MutableStateFlow(false)
     private val _storageAccessState = MutableStateFlow(false to false)
     private val _localTrackSearchQuery = MutableStateFlow("")
@@ -298,20 +323,29 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isFetchingLyrics = MutableStateFlow(false)
     private val _pendingStreamCaptureRequest = MutableStateFlow<PendingStreamCaptureRequest?>(null)
     private val _selectedAlbumId = MutableStateFlow<String?>(null)
+    private val _captureAutoSplitEnabled = MutableStateFlow(true)
+    private val _captureSilentMuteMode = MutableStateFlow(false)
     private val _activeLinuxRunnerTile = MutableStateFlow<LauncherPreferencesRepository.PersistedLinuxTile?>(null)
     val activeLinuxRunnerTile: StateFlow<LauncherPreferencesRepository.PersistedLinuxTile?> = _activeLinuxRunnerTile.asStateFlow()
     private val _linuxConsoleOutput = MutableStateFlow("")
     val linuxConsoleOutput: StateFlow<String> = _linuxConsoleOutput.asStateFlow()
+    private val _showZipUpdateDialog = MutableStateFlow(false)
+    private val _zipUpdateInspection = MutableStateFlow<ZipUpdateInspection?>(null)
+    private val _zipUpdateBusy = MutableStateFlow(false)
+    private val _zipUpdateStatus = MutableStateFlow<String?>(null)
 
     @Volatile
     private var wasPausedSinceResume: Boolean = false
     private var searchDebounceJob: Job? = null
+    private var chatSearchJob: Job? = null
     private var deviceSearchJob: Job? = null
     private var linuxSearchJob: Job? = null
     private var weatherSearchJob: Job? = null
     private var onlineMusicSearchJob: Job? = null
     private var lyricsFetchJob: Job? = null
     private var lastLoadedLyricsKey: String = ""
+    private var lyricsRetryAttempt: Int = 0
+    private var lastRejectedLyricsRaw: String? = null
     private var musicAppRotationIndex: Int = -1
     private val workspaceMutex = Mutex()
 
@@ -336,16 +370,26 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _scrollHubIndexEvents = MutableSharedFlow<Int>(extraBufferCapacity = 8)
     val scrollHubIndexEvents = _scrollHubIndexEvents.asSharedFlow()
 
-    private val baseAppsFlow = combine(
+    private data class CustomizedAppsBundle(
+        val allApps: List<AppEntry>,
+        val pinnedApps: List<AppEntry>,
+        val musicApps: List<AppEntry>,
+        val chatApps: List<AppEntry>,
+        val newsApps: List<AppEntry>
+    )
+
+    private data class AppsFilterBundle(
+        val customized: CustomizedAppsBundle,
+        val filteredApps: List<AppEntry>
+    )
+
+    private val customizedAppsFlow = combine(
         _allApps,
         prefsRepo.pinnedAppIds,
         prefsRepo.customAppLabels,
         prefsRepo.appIconOverrides,
-        combine(_appSearchQuery, _highlightedLetter, prefsRepo.installedLinuxTiles) { q, l, lTiles ->
-            Triple(q, l, lTiles)
-        }
-    ) { apps, pinnedIds, customLabels, iconOverrides, queryLetterLinux ->
-        val (query, letterFilter, linuxTiles) = queryLetterLinux
+        prefsRepo.installedLinuxTiles
+    ) { apps, pinnedIds, customLabels, iconOverrides, linuxTiles ->
         val linuxTileApps = linuxTiles.map { t ->
             val firstCh = t.name.trim().firstOrNull()?.uppercaseChar() ?: '#'
             val normCh = when {
@@ -375,26 +419,40 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 )
             }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        CustomizedAppsBundle(
+            allApps = updatedApps,
+            pinnedApps = updatedApps.filter { it.isPinned },
+            musicApps = updatedApps.filter { it.hubCategory == HubCategory.MUSIC },
+            chatApps = updatedApps.filter { it.hubCategory == HubCategory.CHAT },
+            newsApps = updatedApps.filter { it.hubCategory == HubCategory.NEWS }
+        )
+    }.flowOn(Dispatchers.Default)
+
+    private val baseAppsFlow = combine(
+        customizedAppsFlow,
+        _appSearchQuery,
+        _highlightedLetter
+    ) { customized, query, letterFilter ->
+        val updatedApps = customized.allApps
         val filtered = when {
             query.isNotBlank() -> updatedApps
                 .filter {
                     KeyboardSearchMatcher.matches(it.label, query) ||
-                        KeyboardSearchMatcher.matches(it.originalLabel, query) ||
+                        (it.originalLabel != it.label && KeyboardSearchMatcher.matches(it.originalLabel, query)) ||
                         KeyboardSearchMatcher.matches(it.packageName, query)
                 }
                 .sortedByDescending {
-                    maxOf(
-                        KeyboardSearchMatcher.matchScore(it.label, query),
-                        KeyboardSearchMatcher.matchScore(it.originalLabel, query)
-                    )
+                    val primaryScore = KeyboardSearchMatcher.matchScore(it.label, query)
+                    if (primaryScore >= 100 || it.originalLabel == it.label) primaryScore
+                    else maxOf(primaryScore, KeyboardSearchMatcher.matchScore(it.originalLabel, query))
                 }
             letterFilter != null -> updatedApps.filter {
                 KeyboardSearchMatcher.matchesInitialWithTranslit(it.label, it.initialChar, letterFilter)
             }
             else -> updatedApps
         }
-        Triple(updatedApps, filtered, updatedApps.filter { it.isPinned })
-    }
+        AppsFilterBundle(customized, filtered)
+    }.flowOn(Dispatchers.Default)
 
     private val callsFlow = combine(
         _callLogs,
@@ -403,18 +461,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _permissionsState,
         _highlightedLetter
     ) { logs, contacts, query, perms, letterFilter ->
-        val filteredLogs = if (query.isBlank()) {
+        val trimmed = query.trim()
+        val filteredLogs = if (trimmed.isEmpty()) {
             logs
         } else {
             logs.filter {
-                KeyboardSearchMatcher.matches(it.displayName, query) ||
-                    it.number.contains(query.trim(), ignoreCase = true)
+                KeyboardSearchMatcher.matches(it.displayName, trimmed) ||
+                    it.number.contains(trimmed, ignoreCase = true)
             }
         }
         val filteredContacts = when {
-            query.isNotBlank() -> contacts.filter {
-                KeyboardSearchMatcher.matches(it.name, query) ||
-                    it.number.contains(query.trim(), ignoreCase = true)
+            trimmed.isNotEmpty() -> contacts.filter {
+                KeyboardSearchMatcher.matches(it.name, trimmed) ||
+                    it.number.contains(trimmed, ignoreCase = true)
             }
             letterFilter != null -> contacts.filter {
                 KeyboardSearchMatcher.matchesInitialWithTranslit(it.name, it.initialChar, letterFilter)
@@ -423,7 +482,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         val starred = contacts.filter { it.isStarred }.distinctBy { it.id }
         CallsBundle(filteredLogs, filteredContacts, starred, perms)
-    }
+    }.flowOn(Dispatchers.Default)
 
     private data class CallsBundle(
         val logs: List<CallLogEntry>,
@@ -479,12 +538,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         combine(_isWriterModeOpen, _writerInitialSubTab) { open, sub -> open to sub },
         combine(
             _deviceSearchResults,
+            _chatSearchResults,
             _isSearchingDevice,
             prefsRepo.searchTreeUris,
             combine(_contextMenuFile, _renameTargetApp, _iconPickerTargetApp) { f, r, i -> Triple(f, r, i) }
-        ) { res, loading, trees, modalTriple ->
+        ) { res, chats, loading, trees, modalTriple ->
             SearchBundle(
                 results = res,
+                chatResults = chats,
                 isSearching = loading,
                 indexedTreeCount = trees.size,
                 contextMenuFile = modalTriple.first,
@@ -498,6 +559,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private data class SearchBundle(
         val results: List<DeviceSearchFile>,
+        val chatResults: List<LockedChatThread>,
         val isSearching: Boolean,
         val indexedTreeCount: Int,
         val contextMenuFile: DeviceSearchFile?,
@@ -559,7 +621,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             localTrackSearchQuery = trackQuery,
             isPlayerCollapsed = extras[7] as Boolean
         )
-    }
+    }.flowOn(Dispatchers.Default)
 
     private data class MediaAndExtrasBundle(
         val media: MediaPlayerState,
@@ -802,6 +864,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    private data class ZipUpdateBundle(
+        val showDialog: Boolean,
+        val inspection: ZipUpdateInspection?,
+        val busy: Boolean,
+        val status: String?,
+        val githubConfig: GitHubBuildConfig
+    )
+
+    private val zipUpdateFlow = combine(
+        _showZipUpdateDialog,
+        _zipUpdateInspection,
+        _zipUpdateBusy,
+        _zipUpdateStatus,
+        prefsRepo.githubBuildConfig
+    ) { show, insp, busy, status, ghCfg ->
+        ZipUpdateBundle(show, insp, busy, status, ghCfg)
+    }
+
     val uiState: StateFlow<LauncherUiState> = combine(
         baseAppsFlow,
         callsFlow,
@@ -809,11 +889,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         uiOverlaysFlow,
         combine(
             combine(mediaAndExtrasFlow, hubWriterSearchFlow) { m, hw -> m to hw },
-            combine(customizationPrefsFlow, systemFeatureFlow, recentsAndUiPrefsFlow, workspaceAndWeatherFlow, powerampMusicFlow) { cust, sys, rec, wsw, pw ->
-                arrayOf<Any?>(cust, sys, rec, wsw, pw)
+            combine(
+                customizationPrefsFlow,
+                systemFeatureFlow,
+                recentsAndUiPrefsFlow,
+                workspaceAndWeatherFlow,
+                combine(powerampMusicFlow, zipUpdateFlow) { pw, zip -> pw to zip }
+            ) { cust, sys, rec, wsw, pwZip ->
+                arrayOf<Any?>(cust, sys, rec, wsw, pwZip.first, pwZip.second)
             }
         ) { mh, right -> mh to right }
-    ) { appsTriple, calls, nav, overlays, rightPair ->
+    ) { appsBundle, calls, nav, overlays, rightPair ->
         val mediaBundle = rightPair.first.first
         val hw = rightPair.first.second
         val cust = rightPair.second[0] as CustomizationBundle
@@ -821,8 +907,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val rec = rightPair.second[2] as RecentsAndUiPrefsBundle
         val wsw = rightPair.second[3] as WorkspaceAndWeatherBundle
         val pw = rightPair.second[4] as PowerampBundle
+        val zip = rightPair.second[5] as ZipUpdateBundle
 
-        val (updatedAll, filtered, pinned) = appsTriple
+        val customized = appsBundle.customized
+        val filtered = appsBundle.filteredApps
         val coercedAppFocus = if (filtered.isEmpty()) 0 else overlays.appIdx.coerceIn(0, filtered.lastIndex)
         val coercedLogFocus = if (calls.logs.isEmpty()) 0 else overlays.callIdx.coerceIn(0, calls.logs.lastIndex)
         val coercedContactFocus = if (calls.contacts.isEmpty()) 0 else overlays.contactIdx.coerceIn(0, calls.contacts.lastIndex)
@@ -830,29 +918,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         val images = hw.searchBundle.results.filter { it.kind == SearchResultKind.IMAGE }
         val files = hw.searchBundle.results.filter { it.kind == SearchResultKind.FILE }
-        val chatApps = updatedAll.filter { it.hubCategory == HubCategory.CHAT }
-        val chatMatches = buildChatSearchResults(
-            query = nav.appSearchQuery,
-            notifications = hw.notifications,
-            contacts = calls.contacts,
-            chatApps = chatApps
-        )
 
         LauncherUiState(
             activeTab = nav.activeTab,
             callsSubTab = nav.callsSubTab,
             hubSubTab = nav.hubSubTab,
             alphabetMode = nav.alphabetMode,
-            allApps = updatedAll,
+            allApps = customized.allApps,
             filteredApps = filtered,
-            favoriteApps = pinned,
-            musicApps = updatedAll.filter { it.hubCategory == HubCategory.MUSIC },
-            chatApps = chatApps,
-            newsApps = updatedAll.filter { it.hubCategory == HubCategory.NEWS },
+            favoriteApps = customized.pinnedApps,
+            musicApps = customized.musicApps,
+            chatApps = customized.chatApps,
+            newsApps = customized.newsApps,
             appSearchQuery = nav.appSearchQuery,
             searchImages = images,
             searchFiles = files,
-            chatSearchResults = chatMatches,
+            chatSearchResults = hw.searchBundle.chatResults,
             linuxSearchResults = sys.linuxSearchResults,
             isSearchingDevice = hw.searchBundle.isSearching,
             indexedFolderCount = hw.searchBundle.indexedTreeCount,
@@ -891,6 +972,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             showOptimizationDialog = sys.showOptimizationDialog,
             showBackgroundWebAudioDialog = sys.showBackgroundWebAudioDialog,
             showLinuxCatalogDialog = sys.showLinuxCatalogDialog,
+            showZipUpdateDialog = zip.showDialog,
+            zipUpdateInspection = zip.inspection,
+            zipUpdateBusy = zip.busy,
+            zipUpdateStatus = zip.status,
+            githubBuildConfig = zip.githubConfig,
+            appVersionName = installedVersionInfo.first,
+            appVersionCode = installedVersionInfo.second,
             uiThemeColor = cust.themeColor,
             wallpaperBitmap = cust.wallpaperBitmap,
             wallpaperPalette = cust.wallpaperPalette,
@@ -952,7 +1040,32 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         initialValue = LauncherUiState()
     )
 
+    val rootThemeConfig: StateFlow<RootThemeConfig> = combine(
+        customizationPrefsFlow,
+        recentsAndUiPrefsFlow
+    ) { cust, rec ->
+        val customPal = cust.activeCustomPaletteId?.let { id ->
+            cust.savedPalettes.firstOrNull { it.id == id }
+        }
+        RootThemeConfig(
+            uiThemeColor = cust.themeColor,
+            activeCustomPalette = customPal,
+            wallpaperPalette = cust.wallpaperPalette,
+            hasWallpaper = cust.wallpaperBitmap != null,
+            appLanguage = rec.appLanguage,
+            uiScale = rec.uiScale
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = RootThemeConfig()
+    )
+
     init {
+        StreamAudioCaptureRuntime.setCaptureModes(
+            autoSplitEnabled = _captureAutoSplitEnabled.value,
+            silentMuteMode = _captureSilentMuteMode.value
+        )
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 prefsRepo.appIconOverrides.first().values
@@ -998,13 +1111,36 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
 
         viewModelScope.launch {
+            var lastSeenDiscardReason: String? = null
+            StreamAudioCaptureRuntime.captureState.collect { cap ->
+                val reason = cap.discardReason
+                if (!reason.isNullOrBlank() && reason != lastSeenDiscardReason) {
+                    lastSeenDiscardReason = reason
+                    mediaRepo.refreshLocalTracks()
+                    showToast(reason)
+                } else if (reason.isNullOrBlank()) {
+                    lastSeenDiscardReason = null
+                }
+            }
+        }
+
+        viewModelScope.launch {
             mediaRepo.mediaState.collect { mState ->
                 val active = mState.activeSession
                 if (active != null && active.title.isNotBlank()) {
                     val key = MusicCatalogAndLyricsRepository.buildTrackKey(active.title, active.artist)
                     if (key != lastLoadedLyricsKey) {
+                        lyricsRetryAttempt = 0
+                        lastRejectedLyricsRaw = null
                         lastLoadedLyricsKey = key
                         loadLyricsForCurrentTrack(forceRefresh = false)
+                    }
+                    if (StreamAudioCaptureRuntime.captureState.value.isCapturing) {
+                        StreamAudioCaptureRuntime.updateActiveTrackMetadata(
+                            title = active.title,
+                            artist = active.artist,
+                            durationMs = active.durationMs
+                        )
                     }
                 }
             }
@@ -1040,11 +1176,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         viewModelScope.launch {
             combine(
-                prefsRepo.interceptShadeEnabled,
                 prefsRepo.interceptLockScreenEnabled,
                 prefsRepo.oemGestureBypassEnabled
-            ) { shade, lock, oem -> Triple(shade, lock, oem) }.collect { (shade, lock, oem) ->
-                shizukuBridge.updateInterceptFlags(shade, lock, oem)
+            ) { lock, oem -> lock to oem }.collect { (lock, oem) ->
+                shizukuBridge.updateInterceptFlags(lock, oem)
             }
         }
 
@@ -1180,6 +1315,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun selectTab(tab: MainTab) {
         _isWriterModeOpen.value = false
+        _showFullPowerampPlayer.value = false
         if (tab != MainTab.HOME) {
             _showWorkspaceSpace.value = false
         }
@@ -1202,6 +1338,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // Writer / Book Studio Mode
     fun openWriterMode(subTab: WriterSubTab? = null) {
         if (subTab != null) _writerInitialSubTab.value = subTab
+        _showFullPowerampPlayer.value = false
         _isWriterModeOpen.value = true
     }
 
@@ -1229,12 +1366,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _focusedAppIndex.value = 0
         _highlightedLetter.value = null
         searchDebounceJob?.cancel()
+        chatSearchJob?.cancel()
         if (query.trim().length < 2) {
+            _chatSearchResults.value = emptyList()
             _musicSearchResults.value = emptyList()
             _deviceSearchResults.value = emptyList()
             _linuxSearchResults.value = emptyList()
             _isSearchingDevice.value = false
             return
+        }
+        chatSearchJob = viewModelScope.launch {
+            delay(50L)
+            val snapshotNotifs = NotificationHubRepository.notifications.value
+            val snapshotContacts = _contacts.value
+            val snapshotChatApps = uiState.value.chatApps
+            val matchedChats = withContext(Dispatchers.Default) {
+                buildChatSearchResults(
+                    query = query,
+                    notifications = snapshotNotifs,
+                    contacts = snapshotContacts,
+                    chatApps = snapshotChatApps
+                )
+            }
+            if (_appSearchQuery.value == query) {
+                _chatSearchResults.value = matchedChats
+            }
         }
         searchDebounceJob = viewModelScope.launch {
             delay(180L)
@@ -1257,7 +1413,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
         deviceSearchJob = viewModelScope.launch {
             _isSearchingDevice.value = true
-            delay(180L)
+            delay(260L)
             val trees = prefsRepo.searchTreeUris.first()
             val found = universalSearchRepo.searchDevice(trimmed, trees)
             _deviceSearchResults.value = found
@@ -1305,6 +1461,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openSearchFile(file: DeviceSearchFile) {
+        val lower = file.name.lowercase()
+        if (lower.endsWith(".zip") || lower.endsWith(".apks") || lower.endsWith(".xapk")) {
+            _contextMenuFile.value = null
+            _showZipUpdateDialog.value = true
+            inspectZipUpdateUri(
+                uri = Uri.parse(file.uriString),
+                localFilePath = file.localFilePath,
+                displayName = file.name
+            )
+            return
+        }
         if (!universalSearchRepo.openFile(file)) {
             showToast("Нет приложения для открытия ${file.name}")
         }
@@ -1427,7 +1594,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun clearAllSearchOrHighlights() {
         when (_activeTab.value) {
             MainTab.HOME -> {
+                searchDebounceJob?.cancel()
+                chatSearchJob?.cancel()
                 _appSearchQuery.value = ""
+                _chatSearchResults.value = emptyList()
                 _deviceSearchResults.value = emptyList()
                 _musicSearchResults.value = emptyList()
                 _linuxSearchResults.value = emptyList()
@@ -1933,15 +2103,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val wsTitle = "${cell.label ?: app?.label ?: "Стол"} (${cell.x},${cell.y})"
         KeyDeckAccessibilityService.showDockedWorkspaceBar(wsTitle)
 
-        if (app != null) {
-            appsRepo.launchAppInBounds(app, clampedBounds)
-        } else {
-            appsRepo.launchPackage(pkg)
-        }
         val shizuku = state.shizukuState
-        if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
+        val hasPrivileged = (shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable
+        if (hasPrivileged) {
             viewModelScope.launch {
-                shizukuBridge.launchAppInBoundsViaShizuku(
+                val res = shizukuBridge.launchAppInBoundsViaShizuku(
                     packageName = pkg,
                     activityName = app?.activityName ?: cell.activityName,
                     left = clampedBounds.left,
@@ -1949,6 +2115,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     right = clampedBounds.right,
                     bottom = clampedBounds.bottom
                 )
+                if (res.isFailure) {
+                    if (app != null) appsRepo.launchApp(app) else appsRepo.launchPackage(pkg)
+                }
+            }
+        } else {
+            if (app != null) {
+                appsRepo.launchApp(app)
+            } else {
+                appsRepo.launchPackage(pkg)
             }
         }
     }
@@ -2018,17 +2193,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }.onFailure { err ->
                 showToast(err.message ?: "Запустите Shizuku и выдайте разрешение")
             }
-        }
-    }
-
-    fun toggleShadeInterception() {
-        val target = !uiState.value.shizukuState.interceptShadeEnabled
-        viewModelScope.launch {
-            prefsRepo.setInterceptShadeEnabled(target)
-            showToast(
-                if (target) "Перехват шторки включён (свайп вниз / Ctrl+N -> Хаб)"
-                else "Перехват шторки отключён"
-            )
         }
     }
 
@@ -2216,38 +2380,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (!appsRepo.launchCamera()) showToast("Камера не найдена на устройстве")
     }
 
-    fun expandNotificationShade() {
-        val shizuku = uiState.value.shizukuState
-        if (shizuku.interceptShadeEnabled) {
-            val svc = KeyDeckAccessibilityService.getInstance()
-            if (svc != null) {
-                svc.showVistaShadeOverlay()
-                viewModelScope.launch {
-                    if ((shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable) {
-                        shizukuBridge.collapseSystemShadeViaShizuku()
-                    }
-                }
-                return
-            }
-            if (_activeTab.value == MainTab.HUB && !_isWriterModeOpen.value) {
-                _activeTab.value = MainTab.HOME
-                return
-            }
-            _isWriterModeOpen.value = false
-            _activeTab.value = MainTab.HUB
-            _hubSubTab.value = HubSubTab.CHATS
-            viewModelScope.launch {
-                if (shizuku.isBinderAlive && shizuku.isPermissionGranted) {
-                    shizukuBridge.collapseSystemShadeViaShizuku()
-                }
-            }
-            NotificationHubRepository.refreshFromAttachedService()
-            showToast("Шторка перехвачена → BlackBerry Хаб")
-        } else {
-            appsRepo.expandNotificationShade()
-        }
-    }
-
     fun placeCall(numberOrQuery: String) {
         uiState.value.allApps
             .filter { AutoCloseManager.isDialerPackage(it.packageName) }
@@ -2411,6 +2543,31 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             deleteLocalAudioTrack(localTrack)
         } else {
             showToast("Удаление файла доступно для локальных и скачанных треков")
+        }
+    }
+
+    fun renameLocalAudioTrack(track: LocalAudioTrack, newTitle: String) {
+        viewModelScope.launch {
+            val renamed = mediaRepo.renameLocalTrack(track, newTitle)
+            if (renamed != null) {
+                if (renamed.id != track.id) {
+                    val albums = prefsRepo.smartAlbums.first()
+                    val migrated = albums.map { alb ->
+                        if (alb.attachedLocalTrackIds.contains(track.id)) {
+                            alb.copy(
+                                attachedLocalTrackIds = alb.attachedLocalTrackIds.map {
+                                    if (it == track.id) renamed.id else it
+                                }.distinct()
+                            )
+                        } else alb
+                    }
+                    prefsRepo.saveSmartAlbums(migrated)
+                }
+                reconcileAllSmartAlbumsWithTracks(mediaRepo.localTracks.value)
+                showToast("Переименовано в «${renamed.title}»")
+            } else {
+                showToast("Не удалось переименовать файл")
+            }
         }
     }
 
@@ -2656,6 +2813,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _pendingStreamCaptureRequest.value = null
     }
 
+    fun toggleCaptureAutoSplit() {
+        val next = !_captureAutoSplitEnabled.value
+        _captureAutoSplitEnabled.value = next
+        StreamAudioCaptureRuntime.setCaptureModes(next, _captureSilentMuteMode.value)
+        showToast(if (next) "Авто-нарезка коллекции включена" else "Авто-нарезка коллекции выключена")
+    }
+
+    fun toggleCaptureSilentMute() {
+        val next = !_captureSilentMuteMode.value
+        _captureSilentMuteMode.value = next
+        StreamAudioCaptureRuntime.setCaptureModes(_captureAutoSplitEnabled.value, next)
+        showToast(if (next) "Тихий захват (без звука) включён" else "Тихий захват выключен")
+    }
+
     fun onMediaProjectionResult(resultCode: Int, data: Intent?) {
         val req = _pendingStreamCaptureRequest.value
         _pendingStreamCaptureRequest.value = null
@@ -2664,6 +2835,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             showToast("Захват потока отменён")
             return
         }
+        val matchingSession = mediaRepo.mediaState.value.sessions.firstOrNull { sess ->
+            sess.packageName == req.packageName &&
+                MusicCatalogAndLyricsRepository.normalizeKeyText(sess.title) ==
+                MusicCatalogAndLyricsRepository.normalizeKeyText(req.title)
+        } ?: mediaRepo.mediaState.value.activeSession?.takeIf { it.packageName == req.packageName }
+        val expectedDurationMs = matchingSession?.durationMs ?: 0L
+
         StreamAudioCaptureService.startCapture(
             context = getApplication(),
             resultCode = resultCode,
@@ -2671,21 +2849,36 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             title = req.title,
             artist = req.artist,
             packageName = req.packageName,
-            targetAlbumId = req.targetAlbumId
+            targetAlbumId = req.targetAlbumId,
+            expectedDurationMs = expectedDurationMs,
+            autoSplitEnabled = _captureAutoSplitEnabled.value,
+            silentMuteMode = _captureSilentMuteMode.value
         )
-        val searchQ = listOf(req.artist, req.title).filter { it.isNotBlank() }.joinToString(" ")
-        if (!mediaRepo.playFromSearchInStream(searchQ, req.packageName)) {
-            if (req.packageName.isNotBlank()) launchPackage(req.packageName)
+        if (matchingSession != null) {
+            mediaRepo.selectSession(matchingSession.id)
+            mediaRepo.seekTo(0L)
+            if (!matchingSession.isPlaying) {
+                mediaRepo.togglePlayPause()
+            }
+        } else {
+            val searchQ = listOf(req.artist, req.title).filter { it.isNotBlank() }.joinToString(" ")
+            if (!mediaRepo.playFromSearchInStream(searchQ, req.packageName)) {
+                if (req.packageName.isNotBlank()) launchPackage(req.packageName)
+            }
+            viewModelScope.launch {
+                delay(450L)
+                mediaRepo.seekTo(0L)
+            }
         }
-        showToast("Идёт захват ${req.appLabel} → WAV: «${req.title}»")
+        showToast("Захват ${req.appLabel} с 00:00 → WAV: «${req.title}»")
     }
 
     fun stopStreamCapture() {
         StreamAudioCaptureService.stopCapture(getApplication())
-        showToast("Захват потока остановлен, сохраняем WAV…")
+        showToast("Захват потока остановлен, проверяем запись WAV…")
     }
 
-    // Synced LRC Lyrics + In-App Editor
+    // Synced LRC Lyrics + In-App Editor + Persistent Cache
     fun loadLyricsForCurrentTrack(forceRefresh: Boolean = false) {
         val session = uiState.value.mediaState.activeSession ?: return
         if (session.title.isBlank() || session.title == session.appLabel) return
@@ -2708,10 +2901,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 title = session.title,
                 artist = session.artist,
                 durationMs = session.durationMs,
-                localFilePath = localTrack?.filePath
+                localFilePath = if (forceRefresh) null else localTrack?.filePath,
+                attemptIndex = if (forceRefresh) lyricsRetryAttempt else 0,
+                excludeRawLrc = if (forceRefresh) lastRejectedLyricsRaw else null
             )
             _currentLyrics.value = fetched
             _isFetchingLyrics.value = false
+            if (fetched != null && fetched.hasAnyLyrics) {
+                prefsRepo.saveLyricsOverride(fetched)
+                if (localTrack?.filePath != null && fetched.rawLrc.isNotBlank()) {
+                    MusicCatalogAndLyricsRepository.saveSidecarLrc(localTrack.filePath, fetched.rawLrc)
+                }
+            }
         }
     }
 
@@ -2767,8 +2968,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun autoPickLyricsAgain() {
+        lastRejectedLyricsRaw = _currentLyrics.value?.rawLrc ?: _currentLyrics.value?.plainText
+        lyricsRetryAttempt++
         loadLyricsForCurrentTrack(forceRefresh = true)
-        showToast("Повторный автопоиск текста…")
+        showToast("Поиск альтернативного источника текста…")
     }
 
     // Poweramp DSP Equalizer & Playback Controls
@@ -3200,7 +3403,164 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Auto-Close, System Optimization, Linux Packages & Weather
+    // Auto-Close, System Optimization, Linux Packages, ZIP Updater & Weather
+    fun setShowZipUpdateDialog(show: Boolean) {
+        _showZipUpdateDialog.value = show
+        if (!show) {
+            _zipUpdateStatus.value = null
+        }
+    }
+
+    fun inspectZipUpdateUri(
+        uri: Uri,
+        localFilePath: String? = null,
+        displayName: String? = null
+    ) {
+        viewModelScope.launch {
+            _zipUpdateBusy.value = true
+            _zipUpdateStatus.value = "Проверка содержимого архива…"
+            zipUpdateRepo.inspectZipArchive(uri, localFilePath, displayName)
+                .onSuccess { insp ->
+                    _zipUpdateInspection.value = insp
+                    _zipUpdateStatus.value = null
+                }
+                .onFailure { err ->
+                    _zipUpdateStatus.value = "Ошибка чтения ZIP: ${err.message ?: "повреждённый архив"}"
+                    showToast("Не удалось разобрать ZIP-архив")
+                }
+            _zipUpdateBusy.value = false
+        }
+    }
+
+    fun applyZipUpdate(preferShizukuOrRoot: Boolean) {
+        val inspection = _zipUpdateInspection.value ?: return
+        viewModelScope.launch {
+            _zipUpdateBusy.value = true
+            val messages = mutableListOf<String>()
+            var anyApplied = false
+            if (inspection.canApplyConfigPack) {
+                zipUpdateRepo.applyConfigPack(inspection, prefsRepo)
+                    .onSuccess { msg ->
+                        anyApplied = true
+                        messages.add(msg)
+                        if (!inspection.extractedWallpaperPath.isNullOrBlank()) {
+                            _wallpaperState.value = WallpaperThemeHelper.loadWallpaperAndPalette(
+                                inspection.extractedWallpaperPath
+                            )
+                        }
+                        if (inspection.pendingLyrics.isNotEmpty()) {
+                            lastLoadedLyricsKey = ""
+                            loadLyricsForCurrentTrack(forceRefresh = false)
+                        }
+                    }
+                    .onFailure { err ->
+                        messages.add("Настройки/ресурсы: ${err.message ?: "ошибка"}")
+                    }
+            }
+            if (inspection.canInstallApks) {
+                zipUpdateRepo.installExtractedApks(inspection, preferShizukuOrRoot)
+                    .onSuccess { msg ->
+                        anyApplied = true
+                        messages.add(msg)
+                    }
+                    .onFailure { err ->
+                        messages.add("Установка APK: ${err.message ?: "ошибка"}")
+                    }
+            }
+            val finalMsg = messages.joinToString("\n").ifBlank {
+                "В архиве нет готового APK или пакета настроек для применения"
+            }
+            _zipUpdateStatus.value = finalMsg
+            if (anyApplied) {
+                showToast(finalMsg.lineSequence().firstOrNull() ?: "Обновление применено")
+            }
+            _zipUpdateBusy.value = false
+        }
+    }
+
+    fun saveGitHubBuildConfig(config: GitHubBuildConfig) {
+        viewModelScope.launch {
+            prefsRepo.saveGitHubBuildConfig(config)
+        }
+    }
+
+    fun cloudBuildApkFromSourceZip(config: GitHubBuildConfig, preferShizukuOrRoot: Boolean) {
+        val inspection = _zipUpdateInspection.value ?: return
+        val sourceUri = runCatching { Uri.parse(inspection.sourceUriString) }.getOrNull() ?: return
+        viewModelScope.launch {
+            _zipUpdateBusy.value = true
+            prefsRepo.saveGitHubBuildConfig(config)
+            githubCloudBuildRepo.buildApkFromSourceZip(
+                sourceUri = sourceUri,
+                localFilePath = inspection.localFilePath,
+                config = config,
+                onProgress = { msg -> _zipUpdateStatus.value = msg }
+            ).onSuccess { apkFile ->
+                val apkInspection = zipUpdateRepo.inspectLocalApkFile(apkFile)
+                _zipUpdateInspection.value = apkInspection
+                _zipUpdateStatus.value = "APK собран (${apkFile.name}), запуск установки…"
+                zipUpdateRepo.installExtractedApks(apkInspection, preferShizukuOrRoot)
+                    .onSuccess { msg ->
+                        _zipUpdateStatus.value = "Сборка и установка: $msg"
+                        showToast(msg)
+                    }
+                    .onFailure { err ->
+                        _zipUpdateStatus.value = "APK собран и сохранён, ошибка установки: ${err.message}"
+                    }
+            }.onFailure { err ->
+                _zipUpdateStatus.value = "Ошибка облачной сборки: ${err.message ?: "проверьте репозиторий и токен"}"
+                showToast("Ошибка сборки в GitHub Actions")
+            }
+            _zipUpdateBusy.value = false
+        }
+    }
+
+    fun fetchLatestCloudBuiltApk(config: GitHubBuildConfig, preferShizukuOrRoot: Boolean) {
+        viewModelScope.launch {
+            _zipUpdateBusy.value = true
+            prefsRepo.saveGitHubBuildConfig(config)
+            githubCloudBuildRepo.fetchLatestApkFromRepo(
+                config = config,
+                onProgress = { msg -> _zipUpdateStatus.value = msg }
+            ).onSuccess { apkFile ->
+                val apkInspection = zipUpdateRepo.inspectLocalApkFile(apkFile)
+                _zipUpdateInspection.value = apkInspection
+                zipUpdateRepo.installExtractedApks(apkInspection, preferShizukuOrRoot)
+                    .onSuccess { msg ->
+                        _zipUpdateStatus.value = "Загружен готовый APK: $msg"
+                        showToast(msg)
+                    }
+                    .onFailure { err ->
+                        _zipUpdateStatus.value = "APK скачан, ошибка установки: ${err.message}"
+                    }
+            }.onFailure { err ->
+                _zipUpdateStatus.value = "Не удалось скачать APK: ${err.message ?: "ошибка"}"
+            }
+            _zipUpdateBusy.value = false
+        }
+    }
+
+    fun exportConfigBackupZip(destUri: Uri) {
+        viewModelScope.launch {
+            _zipUpdateBusy.value = true
+            _zipUpdateStatus.value = "Сохранение ZIP-бэкапа настроек и текстов…"
+            val palettes = runCatching { prefsRepo.savedPalettes.first() }.getOrDefault(emptyList())
+            val links = runCatching { prefsRepo.hubQuickLinks.first() }.getOrDefault(emptyList())
+            val lyrics = runCatching { prefsRepo.lyricsOverrides.first() }.getOrDefault(emptyMap())
+            zipUpdateRepo.exportConfigBackupZip(destUri, palettes, links, lyrics)
+                .onSuccess { msg ->
+                    _zipUpdateStatus.value = msg
+                    showToast(msg)
+                }
+                .onFailure { err ->
+                    val msg = "Ошибка экспорта ZIP: ${err.message ?: "не удалось записать файл"}"
+                    _zipUpdateStatus.value = msg
+                    showToast(msg)
+                }
+            _zipUpdateBusy.value = false
+        }
+    }
+
     fun setShowAutoKillDialog(show: Boolean) {
         _showAutoKillDialog.value = show
     }

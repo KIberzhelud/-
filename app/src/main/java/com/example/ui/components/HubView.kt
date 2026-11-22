@@ -15,13 +15,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -45,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
@@ -55,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.LauncherPreferencesRepository
@@ -96,7 +102,6 @@ fun HubView(
     onRequestShizukuPermission: () -> Unit,
     onOpenShizukuApp: () -> Unit,
     onGrantNotificationViaShizuku: () -> Unit,
-    onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
     onToggleOemGestureBypass: () -> Unit = {},
     onPreviewLockScreen: () -> Unit,
@@ -104,6 +109,7 @@ fun HubView(
     onOpenAutoKillSettings: () -> Unit,
     onOpenOptimizationSettings: () -> Unit = {},
     onOpenLinuxCatalog: () -> Unit = {},
+    onOpenZipUpdater: () -> Unit = {},
     onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
     onOpenDefaultLauncherSettings: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
@@ -327,28 +333,66 @@ fun HubView(
                                     modifier = Modifier.padding(top = 6.dp, start = 4.dp)
                                 )
                             }
-                            itemsIndexed(newsLinks, key = { _, link -> "news_link_${link.id}" }) { idx, link ->
-                                val globalIdx = filteredNotifications.size + idx
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .symbianGlossyTile(bucket = 3, isFocused = globalIdx == focusedIndex)
-                                        .clickable { onOpenUrl(link.url) }
-                                        .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Image(
-                                        painter = painterResource(R.drawable.ic_symbian_link),
-                                        contentDescription = link.title,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(link.title, style = MaterialTheme.typography.titleSmall, color = TextPrimary, maxLines = 1)
-                                        Text(link.url, style = MaterialTheme.typography.bodySmall, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (isLandscape) {
+                                itemsIndexed(newsLinks.chunked(2), key = { rowIdx, _ -> "news_links_row_$rowIdx" }) { rowIdx, rowLinks ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        rowLinks.forEachIndexed { colIdx, link ->
+                                            val globalIdx = filteredNotifications.size + rowIdx * 2 + colIdx
+                                            Row(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .symbianGlossyTile(bucket = 3, isFocused = globalIdx == focusedIndex)
+                                                    .clickable { onOpenUrl(link.url) }
+                                                    .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Image(
+                                                    painter = painterResource(R.drawable.ic_symbian_link),
+                                                    contentDescription = link.title,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(link.title, style = MaterialTheme.typography.titleSmall, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(link.url, style = MaterialTheme.typography.bodySmall, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                }
+                                                IconButton(onClick = { onRemoveQuickLink(link.id) }) {
+                                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", tint = TextMuted, modifier = Modifier.size(18.dp))
+                                                }
+                                            }
+                                        }
+                                        if (rowLinks.size == 1) {
+                                            Spacer(Modifier.weight(1f))
+                                        }
                                     }
-                                    IconButton(onClick = { onRemoveQuickLink(link.id) }) {
-                                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", tint = TextMuted, modifier = Modifier.size(18.dp))
+                                }
+                            } else {
+                                itemsIndexed(newsLinks, key = { _, link -> "news_link_${link.id}" }) { idx, link ->
+                                    val globalIdx = filteredNotifications.size + idx
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .symbianGlossyTile(bucket = 3, isFocused = globalIdx == focusedIndex)
+                                            .clickable { onOpenUrl(link.url) }
+                                            .padding(start = 10.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Image(
+                                            painter = painterResource(R.drawable.ic_symbian_link),
+                                            contentDescription = link.title,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(link.title, style = MaterialTheme.typography.titleSmall, color = TextPrimary, maxLines = 1)
+                                            Text(link.url, style = MaterialTheme.typography.bodySmall, color = TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        IconButton(onClick = { onRemoveQuickLink(link.id) }) {
+                                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", tint = TextMuted, modifier = Modifier.size(18.dp))
+                                        }
                                     }
                                 }
                             }
@@ -379,7 +423,7 @@ fun HubView(
                                     report = weatherReport,
                                     selectedCity = selectedWeatherCity,
                                     isLoading = isWeatherLoading,
-                                    compact = false,
+                                    compact = isLandscape,
                                     onRefresh = onRefreshWeather,
                                     onOpenForecast = onOpenWeatherForecast,
                                     onOpenCityPicker = onOpenWeatherCityPicker,
@@ -417,6 +461,7 @@ fun HubView(
                 var settingsQueryTfv by remember { mutableStateOf(TextFieldValue("")) }
                 val settingsQuery = settingsQueryTfv.text
                 val actions = remember(
+                    onOpenZipUpdater,
                     onOpenAppearanceSettings,
                     onOpenOptimizationSettings,
                     onOpenLinuxCatalog,
@@ -429,6 +474,12 @@ fun HubView(
                     onOpenAllFilesAccess
                 ) {
                     listOf(
+                        HubOtherAction(
+                            title = "Обновление и пакеты из ZIP-архива",
+                            iconRes = R.drawable.ic_symbian_apk,
+                            onClick = onOpenZipUpdater,
+                            searchKeywords = "zip зип обнов update apks xapk архив бэкап пакет apk"
+                        ),
                         HubOtherAction("Оформление, палитры, язык и масштаб", R.drawable.ic_symbian_gallery, onOpenAppearanceSettings),
                         HubOtherAction("Оптимизация Android, жесты и Фон YouTube", R.drawable.ic_symbian_tools, onOpenOptimizationSettings),
                         HubOtherAction("Пакеты Linux (.deb / AppImage / Termux)", R.drawable.ic_symbian_tools, onOpenLinuxCatalog),
@@ -437,15 +488,18 @@ fun HubView(
                         HubOtherAction("Доступ к уведомлениям", R.drawable.ic_symbian_music, onOpenNotificationAccess),
                         HubOtherAction("Панель музыки (F5 / Ctrl+M)", R.drawable.ic_symbian_music, onOpenMusicSheet),
                         HubOtherAction("Горячие клавиши (F1–F6, Ctrl+R)", R.drawable.ic_symbian_keyboard, onOpenShortcuts),
-                        HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi) { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) },
-                        HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth) { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) },
-                        HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings) { onOpenSystemSettings(Settings.ACTION_SETTINGS) },
+                        HubOtherAction("Wi-Fi", R.drawable.ic_symbian_wifi, onClick = { onOpenSystemSettings(Settings.ACTION_WIFI_SETTINGS) }),
+                        HubOtherAction("Bluetooth", R.drawable.ic_symbian_bluetooth, onClick = { onOpenSystemSettings(Settings.ACTION_BLUETOOTH_SETTINGS) }),
+                        HubOtherAction("Настройки Android", R.drawable.ic_symbian_settings, onClick = { onOpenSystemSettings(Settings.ACTION_SETTINGS) }),
                         HubOtherAction("Доступ ко всем файлам (поиск)", R.drawable.ic_symbian_files, onOpenAllFilesAccess)
                     )
                 }
                 val filteredActions = remember(actions, settingsQuery) {
                     if (settingsQuery.isBlank()) actions
-                    else actions.filter { KeyboardSearchMatcher.matches(it.title, settingsQuery) }
+                    else actions.filter {
+                        KeyboardSearchMatcher.matches(it.title, settingsQuery) ||
+                            (it.searchKeywords.isNotBlank() && KeyboardSearchMatcher.matches(it.searchKeywords, settingsQuery))
+                    }
                 }
                 val showShizukuCard = remember(settingsQuery) {
                     settingsQuery.isBlank() ||
@@ -516,7 +570,7 @@ fun HubView(
                                 report = weatherReport,
                                 selectedCity = selectedWeatherCity,
                                 isLoading = isWeatherLoading,
-                                compact = false,
+                                compact = isLandscape,
                                 onRefresh = onRefreshWeather,
                                 onOpenForecast = onOpenWeatherForecast,
                                 onOpenCityPicker = onOpenWeatherCityPicker,
@@ -535,7 +589,6 @@ fun HubView(
                                 onGrantOverlayAndAccessibilityViaShizuku = onGrantOverlayAndAccessibilityViaShizuku,
                                 onOpenOptimizationSettings = onOpenOptimizationSettings,
                                 onOpenLinuxCatalog = onOpenLinuxCatalog,
-                                onToggleShadeInterception = onToggleShadeInterception,
                                 onToggleLockScreenInterception = onToggleLockScreenInterception,
                                 onToggleOemGestureBypass = onToggleOemGestureBypass,
                                 onPreviewLockScreen = onPreviewLockScreen
@@ -553,34 +606,80 @@ fun HubView(
                             )
                         }
 
-                        itemsIndexed(filteredActions, key = { _, item -> "settings_tool_${item.title}" }) { idx, item ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
-                                    .clickable(onClick = item.onClick)
-                                    .padding(horizontal = 12.dp, vertical = 12.dp)
-                                    .testTag("hub_setting_item_$idx"),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .vistaInsetBox(),
-                                    contentAlignment = Alignment.Center
+                        if (isLandscape) {
+                            itemsIndexed(filteredActions.chunked(2), key = { rowIdx, _ -> "settings_tools_row_$rowIdx" }) { rowIdx, rowItems ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Image(
-                                        painter = painterResource(item.iconRes),
-                                        contentDescription = item.title,
-                                        modifier = Modifier.size(18.dp)
+                                    rowItems.forEachIndexed { colIdx, item ->
+                                        val globalIdx = rowIdx * 2 + colIdx
+                                        Row(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .symbianGlossyTile(bucket = globalIdx, isFocused = globalIdx == focusedIndex)
+                                                .clickable(onClick = item.onClick)
+                                                .padding(horizontal = 10.dp, vertical = 10.dp)
+                                                .testTag("hub_setting_item_$globalIdx"),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(26.dp)
+                                                    .vistaInsetBox(),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Image(
+                                                    painter = painterResource(item.iconRes),
+                                                    contentDescription = item.title,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                text = item.title,
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = TextPrimary,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (rowItems.size == 1) {
+                                        Spacer(Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        } else {
+                            itemsIndexed(filteredActions, key = { _, item -> "settings_tool_${item.title}" }) { idx, item ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
+                                        .clickable(onClick = item.onClick)
+                                        .padding(horizontal = 12.dp, vertical = 12.dp)
+                                        .testTag("hub_setting_item_$idx"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .vistaInsetBox(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Image(
+                                            painter = painterResource(item.iconRes),
+                                            contentDescription = item.title,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = TextPrimary
                                     )
                                 }
-                                Spacer(Modifier.width(10.dp))
-                                Text(
-                                    text = item.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = TextPrimary
-                                )
                             }
                         }
                     } else if (!showShizukuCard) {
@@ -602,7 +701,8 @@ fun HubView(
 private data class HubOtherAction(
     val title: String,
     val iconRes: Int,
-    val onClick: () -> Unit
+    val onClick: () -> Unit,
+    val searchKeywords: String = ""
 )
 
 @Composable
@@ -731,10 +831,17 @@ fun AddHubLinkDialog(
     var url by remember { mutableStateOf("") }
     val category = if (initialCategory == HubSubTab.OTHER) HubSubTab.NEWS else initialCategory
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -752,7 +859,9 @@ fun AddHubLinkDialog(
             }
 
             Column(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text("Название", style = MaterialTheme.typography.labelSmall, color = TextSecondary)

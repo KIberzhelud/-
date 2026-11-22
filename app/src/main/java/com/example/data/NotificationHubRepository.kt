@@ -218,11 +218,15 @@ object NotificationHubRepository {
         }
     }
 
+    private val archiveTimeFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("HH:mm", Locale.getDefault())
+    }
+
     fun searchArchivedThreads(context: Context, query: String): List<LockedChatThread> {
         ensureArchiveLoaded(context)
         val clean = query.trim()
         if (clean.length < 2) return emptyList()
-        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val timeFmt = archiveTimeFormat.get()!!
         val snapshot = synchronized(archiveLock) { archivedThreads.values.toList() }
         val activeNotifs = _notifications.value
         return snapshot

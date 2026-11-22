@@ -537,15 +537,6 @@ class AppsRepository(private val context: Context) {
         }
     }
 
-    @SuppressLint("WrongConstant", "PrivateApi")
-    fun expandNotificationShade() {
-        runCatching {
-            val sbService = context.getSystemService("statusbar")
-            val statusBarManager = Class.forName("android.app.StatusBarManager")
-            statusBarManager.getMethod("expandNotificationsPanel").invoke(sbService)
-        }
-    }
-
     private fun classifyHubCategory(
         appInfo: ApplicationInfo?,
         packageName: String,

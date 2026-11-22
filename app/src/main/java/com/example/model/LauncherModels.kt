@@ -191,7 +191,14 @@ data class LocalAudioTrack(
     val formatLabel: String = "",
     val bitrateKbps: Int = 0,
     val sampleRateHz: Int = 0
-)
+) {
+    val isLossless: Boolean
+        get() = formatLabel.equals("FLAC", ignoreCase = true) ||
+            formatLabel.equals("WAV", ignoreCase = true) ||
+            formatLabel.equals("ALAC", ignoreCase = true) ||
+            formatLabel.equals("APE", ignoreCase = true) ||
+            formatLabel.equals("DSD", ignoreCase = true)
+}
 
 data class MediaPlayerState(
     val sessions: List<MediaSessionUi> = emptyList(),
@@ -401,7 +408,6 @@ data class ShizukuState(
     val isAccessibilityEnabled: Boolean = false,
     val hasOverlayPermission: Boolean = false,
     val shizukuVersion: Int = -1,
-    val interceptShadeEnabled: Boolean = false,
     val interceptLockScreenEnabled: Boolean = false,
     val oemGestureBypassEnabled: Boolean = false,
     val lastCommandStatus: String? = null

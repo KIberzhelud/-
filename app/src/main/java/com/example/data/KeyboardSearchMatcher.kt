@@ -150,22 +150,118 @@ object KeyboardSearchMatcher {
         'Ч' to setOf('Ч', 'C')
     )
 
+    private val WORD_SPLIT_REGEX = Regex("[\\s\\p{Punct}_]+")
+    private const val TARGET_CACHE_LIMIT = 640
+    private const val QUERY_CACHE_LIMIT = 48
+
+    private data class PreparedTarget(
+        val norm: String,
+        val words: List<String>,
+        val latinVariants: List<String>,
+        val ruVariants: List<String>,
+        val skeleton: String
+    )
+
+    private data class PreparedQuery(
+        val norm: String,
+        val altRu: String,
+        val altEn: String,
+        val latinVariants: List<String>,
+        val ruVariants: List<String>,
+        val skeleton: String
+    )
+
+    private val targetCacheLock = Any()
+    private val targetCache = object : LinkedHashMap<String, PreparedTarget>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PreparedTarget>?): Boolean =
+            size > TARGET_CACHE_LIMIT
+    }
+
+    private val queryCacheLock = Any()
+    private val queryCache = object : LinkedHashMap<String, PreparedQuery>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PreparedQuery>?): Boolean =
+            size > QUERY_CACHE_LIMIT
+    }
+
     fun normalize(text: String): String = text.lowercase().replace('ё', 'е')
 
-    fun convertLayoutEnToRu(text: String): String =
-        text.lowercase().map { enToRuLayout[it] ?: it }.joinToString("")
+    private fun prepareTarget(candidate: String): PreparedTarget {
+        synchronized(targetCacheLock) {
+            targetCache[candidate]?.let { return it }
+        }
+        val norm = normalize(candidate)
+        val words = WORD_SPLIT_REGEX.split(norm).filter { it.isNotEmpty() }
+        val latVars = transliterateRuToLatinVariants(norm)
+        val ruVars = transliterateLatinToRuVariants(norm)
+        val skel = consonantSkeletonFromLatin(latVars.firstOrNull() ?: norm)
+        val prepared = PreparedTarget(
+            norm = norm,
+            words = words,
+            latinVariants = latVars,
+            ruVariants = ruVars,
+            skeleton = skel
+        )
+        synchronized(targetCacheLock) {
+            targetCache[candidate] = prepared
+        }
+        return prepared
+    }
 
-    fun convertLayoutRuToEn(text: String): String =
-        text.lowercase().map { ruToEnLayout[it] ?: it }.joinToString("")
+    private fun prepareQuery(trimmedQuery: String): PreparedQuery {
+        synchronized(queryCacheLock) {
+            queryCache[trimmedQuery]?.let { return it }
+        }
+        val norm = normalize(trimmedQuery)
+        val altRu = normalize(convertLayoutEnToRu(trimmedQuery))
+        val altEn = normalize(convertLayoutRuToEn(trimmedQuery))
+        val latVars = transliterateRuToLatinVariants(norm)
+        val ruVars = transliterateLatinToRuVariants(norm)
+        val skel = consonantSkeletonFromLatin(latVars.firstOrNull() ?: norm)
+        val prepared = PreparedQuery(
+            norm = norm,
+            altRu = altRu,
+            altEn = altEn,
+            latinVariants = latVars,
+            ruVariants = ruVars,
+            skeleton = skel
+        )
+        synchronized(queryCacheLock) {
+            queryCache[trimmedQuery] = prepared
+        }
+        return prepared
+    }
+
+    fun convertLayoutEnToRu(text: String): String {
+        if (text.isEmpty()) return ""
+        val sb = StringBuilder(text.length)
+        for (i in text.indices) {
+            val ch = text[i].lowercaseChar()
+            sb.append(enToRuLayout[ch] ?: ch)
+        }
+        return sb.toString()
+    }
+
+    fun convertLayoutRuToEn(text: String): String {
+        if (text.isEmpty()) return ""
+        val sb = StringBuilder(text.length)
+        for (i in text.indices) {
+            val ch = text[i].lowercaseChar()
+            sb.append(ruToEnLayout[ch] ?: ch)
+        }
+        return sb.toString()
+    }
 
     fun transliterateRuToLatinVariants(text: String): List<String> {
         val norm = normalize(text)
         var multi = norm
         for ((ru, en) in ruMultiTranslit) {
-            multi = multi.replace(ru, en)
+            if (multi.contains(ru)) {
+                multi = multi.replace(ru, en)
+            }
         }
-        val sb1 = StringBuilder()
-        for (ch in multi) {
+        val sb1 = StringBuilder(multi.length)
+        for (i in multi.indices) {
+            val ch = multi[i]
             val mapped = ruSingleTranslit[ch]
             if (mapped != null) {
                 if (mapped != ' ') sb1.append(mapped)
@@ -173,8 +269,9 @@ object KeyboardSearchMatcher {
                 sb1.append(ch)
             }
         }
-        val sb2 = StringBuilder()
-        for (ch in norm) {
+        val sb2 = StringBuilder(norm.length)
+        for (i in norm.indices) {
+            val ch = norm[i]
             val mapped = ruSingleTranslit[ch]
             if (mapped != null) {
                 if (mapped != ' ') sb2.append(mapped)
@@ -185,32 +282,49 @@ object KeyboardSearchMatcher {
         val v1 = sb1.toString()
         val v2 = sb2.toString()
         // Handle 'c' <-> 'k' variation for Latin words like cat/kot or music/muzyka
-        val cToK = v1.replace("k", "c")
-        return listOf(v1, v2, cToK).filter { it.isNotBlank() }.distinct()
+        val cToK = if (v1.contains('k')) v1.replace('k', 'c') else v1
+        val out = ArrayList<String>(3)
+        if (v1.isNotBlank()) out.add(v1)
+        if (v2.isNotBlank() && v2 != v1) out.add(v2)
+        if (cToK.isNotBlank() && cToK != v1 && cToK != v2) out.add(cToK)
+        return out
     }
 
     fun transliterateLatinToRuVariants(text: String): List<String> {
         var working = normalize(text)
         for ((digraph, ru) in enDigraphToRu) {
-            working = working.replace(digraph, ru)
+            if (working.contains(digraph)) {
+                working = working.replace(digraph, ru)
+            }
         }
-        val sb = StringBuilder()
-        for (ch in working) {
+        val sb = StringBuilder(working.length)
+        for (i in working.indices) {
+            val ch = working[i]
             sb.append(enSingleToRu[ch] ?: ch.toString())
         }
         val base = sb.toString()
-        val cAsTs = working.replace('c', 'с')
-        val sbTs = StringBuilder()
-        for (ch in cAsTs) {
+        val cAsTs = if (working.contains('c')) working.replace('c', 'с') else working
+        val sbTs = StringBuilder(cAsTs.length)
+        for (i in cAsTs.indices) {
+            val ch = cAsTs[i]
             sbTs.append(enSingleToRu[ch] ?: ch.toString())
         }
+        val tsStr = sbTs.toString()
         // e.g. "cat" -> "кат" or "кэт" or "кот" sound-alikes don't replace vowels unless 'a'/'o'
-        val cToS = text.lowercase().replace('c', 's').let { s ->
-            val out = StringBuilder()
-            for (ch in s) out.append(enSingleToRu[ch] ?: ch.toString())
+        val cToS = text.lowercase().let { lower ->
+            val replaced = if (lower.contains('c')) lower.replace('c', 's') else lower
+            val out = StringBuilder(replaced.length)
+            for (i in replaced.indices) {
+                val ch = replaced[i]
+                out.append(enSingleToRu[ch] ?: ch.toString())
+            }
             out.toString()
         }
-        return listOf(base, sbTs.toString(), cToS).filter { it.isNotBlank() }.distinct()
+        val out = ArrayList<String>(3)
+        if (base.isNotBlank()) out.add(base)
+        if (tsStr.isNotBlank() && tsStr != base) out.add(tsStr)
+        if (cToS.isNotBlank() && cToS != base && cToS != tsStr) out.add(cToS)
+        return out
     }
 
     /**
@@ -241,56 +355,72 @@ object KeyboardSearchMatcher {
     fun matches(candidate: String, rawQuery: String): Boolean {
         val query = rawQuery.trim()
         if (query.isEmpty()) return true
+        if (candidate.isEmpty()) return false
 
-        val normTarget = normalize(candidate)
-        val normQuery = normalize(query)
+        // Zero-cache-miss ultra-fast check for plain case-insensitive substring
+        if (candidate.contains(query, ignoreCase = true)) return true
 
-        // 1. Direct normalized substring
+        val pq = prepareQuery(query)
+        val pt = prepareTarget(candidate)
+        return matchesPrepared(pt, pq)
+    }
+
+    private fun matchesPrepared(pt: PreparedTarget, pq: PreparedQuery): Boolean {
+        val normTarget = pt.norm
+        val normQuery = pq.norm
+
+        // 1. Direct normalized substring (handles ё -> е)
         if (normTarget.contains(normQuery)) return true
 
         // 2. Hardware layout swap (QWERTY <-> ЙЦУКЕН)
-        val altRu = normalize(convertLayoutEnToRu(query))
-        if (altRu != normQuery && normTarget.contains(altRu)) return true
-
-        val altEn = normalize(convertLayoutRuToEn(query))
-        if (altEn != normQuery && normTarget.contains(altEn)) return true
+        if (pq.altRu != normQuery && normTarget.contains(pq.altRu)) return true
+        if (pq.altEn != normQuery && normTarget.contains(pq.altEn)) return true
+        if (pq.altEn != normQuery && pq.altEn.length >= 3 && pt.latinVariants.any { it.contains(pq.altEn) }) return true
+        if (pq.altRu != normQuery && pq.altRu.length >= 3 && pt.ruVariants.any { it.contains(pq.altRu) }) return true
 
         // 3. Phonetic / RU <-> EN transliteration on both query & candidate
-        val queryLatinVariants = transliterateRuToLatinVariants(normQuery)
-        val targetLatinVariants = transliterateRuToLatinVariants(normTarget)
-        for (qLat in queryLatinVariants) {
+        for (qLat in pq.latinVariants) {
             if (qLat.length >= 2) {
                 if (normTarget.contains(qLat)) return true
-                if (targetLatinVariants.any { it.contains(qLat) }) return true
+                for (tLat in pt.latinVariants) {
+                    if (tLat.contains(qLat)) return true
+                }
             }
         }
 
-        val queryRuVariants = transliterateLatinToRuVariants(normQuery)
-        val targetRuVariants = transliterateLatinToRuVariants(normTarget)
-        for (qRu in queryRuVariants) {
+        for (qRu in pq.ruVariants) {
             if (qRu.length >= 2) {
                 if (normTarget.contains(qRu)) return true
-                if (targetRuVariants.any { it.contains(qRu) }) return true
+                for (tRu in pt.ruVariants) {
+                    if (tRu.contains(qRu)) return true
+                }
             }
         }
 
         // 4. Multi-word acronym / abbreviation matching (e.g. "Яндекс Музыка" -> "ямз")
-        if (matchesMultiWordAbbrev(normTarget, normQuery)) return true
-        if (altRu != normQuery && matchesMultiWordAbbrev(normTarget, altRu)) return true
-        if (altEn != normQuery && matchesMultiWordAbbrev(normTarget, altEn)) return true
-        if (queryLatinVariants.any { it.length >= 2 && matchesMultiWordAbbrev(normTarget, it) }) return true
+        if (pt.words.size >= 2) {
+            if (matchesMultiWordAbbrev(pt.words, normQuery)) return true
+            if (pq.altRu != normQuery && matchesMultiWordAbbrev(pt.words, pq.altRu)) return true
+            if (pq.altEn != normQuery && matchesMultiWordAbbrev(pt.words, pq.altEn)) return true
+            for (qLat in pq.latinVariants) {
+                if (qLat.length >= 2 && matchesMultiWordAbbrev(pt.words, qLat)) return true
+            }
+        }
 
         // 5. Handle short/strict phonetic pairs like "cat" <-> "kot"
-        if (matchesCompactPhoneticPair(normTarget, normQuery)) return true
+        if (normQuery.length >= 3 && normTarget.length >= 3 &&
+            pq.skeleton.length >= 2 &&
+            normTarget.length <= normQuery.length + 3 &&
+            pt.skeleton == pq.skeleton
+        ) {
+            return true
+        }
 
         return false
     }
 
-    private fun matchesMultiWordAbbrev(normTarget: String, normQuery: String): Boolean {
-        if (normQuery.length < 2) return false
-        val words = normTarget.split(Regex("[\\s\\p{Punct}_]+"))
-            .filter { it.isNotEmpty() }
-        if (words.size < 2) return false
+    private fun matchesMultiWordAbbrev(words: List<String>, normQuery: String): Boolean {
+        if (normQuery.length < 2 || words.size < 2) return false
 
         fun search(wordIdx: Int, qIdx: Int, wordsTouched: Int): Boolean {
             if (qIdx == normQuery.length) return wordsTouched >= 2
@@ -314,43 +444,45 @@ object KeyboardSearchMatcher {
         return search(0, 0, 0)
     }
 
-    private fun matchesCompactPhoneticPair(normTarget: String, normQuery: String): Boolean {
-        if (normQuery.length < 3 || normTarget.length < 3) return false
-        val qSkeleton = consonantSkeleton(normQuery)
-        val tSkeleton = consonantSkeleton(normTarget)
-        if (qSkeleton.length >= 2 && normTarget.length <= normQuery.length + 3) {
-            // Check exact consonant skeleton equality when lengths are close (handles cat<->kot)
-            if (tSkeleton == qSkeleton) return true
-        }
-        return false
+    private fun isLatinVowelOrSpace(ch: Char): Boolean = when (ch) {
+        'a', 'e', 'i', 'o', 'u', 'y', ' ' -> true
+        else -> false
     }
 
-    private fun consonantSkeleton(s: String): String {
-        val lat = transliterateRuToLatinVariants(s).firstOrNull() ?: s
-        val vowels = setOf('a', 'e', 'i', 'o', 'u', 'y', ' ')
-        return lat.map { if (it == 'c') 'k' else it }
-            .filter { it.isLetter() && it !in vowels }
-            .joinToString("")
+    private fun consonantSkeletonFromLatin(lat: String): String {
+        val sb = StringBuilder(lat.length)
+        for (i in lat.indices) {
+            val mapped = if (lat[i] == 'c') 'k' else lat[i]
+            if (mapped.isLetter() && !isLatinVowelOrSpace(mapped)) {
+                sb.append(mapped)
+            }
+        }
+        return sb.toString()
     }
 
     fun matchScore(candidate: String, rawQuery: String): Int {
-        val q = normalize(rawQuery.trim())
-        if (q.isEmpty()) return 0
-        val t = normalize(candidate)
-        val altRu = normalize(convertLayoutEnToRu(rawQuery.trim()))
-        val altEn = normalize(convertLayoutRuToEn(rawQuery.trim()))
+        val query = rawQuery.trim()
+        if (query.isEmpty()) return 0
+        if (candidate.isEmpty()) return 0
+
+        val pq = prepareQuery(query)
+        val pt = prepareTarget(candidate)
+        val t = pt.norm
+        val q = pq.norm
+        val altRu = pq.altRu
+        val altEn = pq.altEn
 
         return when {
             t == q || t == altRu || t == altEn -> 100
             t.startsWith(q) || t.startsWith(altRu) || t.startsWith(altEn) -> 85
             t.contains(q) || t.contains(altRu) || t.contains(altEn) -> 70
-            transliterateRuToLatinVariants(t).any { it.startsWith(q) } ||
-                transliterateRuToLatinVariants(q).any { qLat -> t.startsWith(qLat) } -> 60
-            transliterateLatinToRuVariants(q).any { qRu -> t.contains(qRu) } ||
-                transliterateRuToLatinVariants(q).any { qLat ->
-                    transliterateRuToLatinVariants(t).any { it.contains(qLat) }
+            pt.latinVariants.any { it.startsWith(q) } ||
+                pq.latinVariants.any { qLat -> t.startsWith(qLat) } -> 60
+            pq.ruVariants.any { qRu -> t.contains(qRu) } ||
+                pq.latinVariants.any { qLat ->
+                    pt.latinVariants.any { it.contains(qLat) }
                 } -> 52
-            matches(candidate, rawQuery) -> 42
+            matchesPrepared(pt, pq) -> 42
             else -> 0
         }
     }

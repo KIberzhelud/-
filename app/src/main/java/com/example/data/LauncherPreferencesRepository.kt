@@ -14,6 +14,7 @@ import com.example.model.AppIconOverride
 import com.example.model.AppLanguage
 import com.example.model.CustomColorPalette
 import com.example.model.EqualizerPreset
+import com.example.model.GitHubBuildConfig
 import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
 import com.example.model.MediaQueueTrack
@@ -41,7 +42,6 @@ class LauncherPreferencesRepository(private val context: Context) {
         val ALPHABET_MODE = stringPreferencesKey("alphabet_mode")
         val PREFERRED_MEDIA_PKG = stringPreferencesKey("preferred_media_pkg")
         val HUB_LINKS = stringSetPreferencesKey("hub_quick_links")
-        val INTERCEPT_SHADE = booleanPreferencesKey("shizuku_intercept_shade")
         val INTERCEPT_LOCKSCREEN = booleanPreferencesKey("shizuku_intercept_lockscreen")
         val SEARCH_TREE_URIS = stringSetPreferencesKey("universal_search_tree_uris")
         val CUSTOM_APP_LABELS = stringSetPreferencesKey("custom_app_labels")
@@ -73,6 +73,9 @@ class LauncherPreferencesRepository(private val context: Context) {
         val LYRICS_OVERRIDES_JSON = stringPreferencesKey("lyrics_overrides_json")
         val EQUALIZER_JSON = stringPreferencesKey("equalizer_settings_json")
         val INSTALLED_LINUX_TILES_JSON = stringPreferencesKey("installed_linux_tiles_json")
+        val GITHUB_BUILD_REPO = stringPreferencesKey("github_build_repo")
+        val GITHUB_BUILD_BRANCH = stringPreferencesKey("github_build_branch")
+        val GITHUB_BUILD_TOKEN = stringPreferencesKey("github_build_token")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -91,10 +94,6 @@ class LauncherPreferencesRepository(private val context: Context) {
     val preferredMediaPackage: Flow<String?> = context.launcherDataStore.data
         .map { prefs -> prefs[Keys.PREFERRED_MEDIA_PKG] }
         .onStart { emit(null) }
-
-    val interceptShadeEnabled: Flow<Boolean> = context.launcherDataStore.data
-        .map { prefs -> prefs[Keys.INTERCEPT_SHADE] ?: false }
-        .onStart { emit(false) }
 
     val interceptLockScreenEnabled: Flow<Boolean> = context.launcherDataStore.data
         .map { prefs -> prefs[Keys.INTERCEPT_LOCKSCREEN] ?: false }
@@ -274,6 +273,24 @@ class LauncherPreferencesRepository(private val context: Context) {
         .map { prefs -> parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON]) }
         .onStart { emit(emptyList()) }
 
+    val githubBuildConfig: Flow<GitHubBuildConfig> = context.launcherDataStore.data
+        .map { prefs ->
+            GitHubBuildConfig(
+                repoSlug = prefs[Keys.GITHUB_BUILD_REPO].orEmpty(),
+                branch = prefs[Keys.GITHUB_BUILD_BRANCH]?.ifBlank { "main" } ?: "main",
+                token = prefs[Keys.GITHUB_BUILD_TOKEN].orEmpty()
+            )
+        }
+        .onStart { emit(GitHubBuildConfig()) }
+
+    suspend fun saveGitHubBuildConfig(config: GitHubBuildConfig) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.GITHUB_BUILD_REPO] = config.repoSlug.trim()
+            prefs[Keys.GITHUB_BUILD_BRANCH] = config.branch.trim().ifBlank { "main" }
+            prefs[Keys.GITHUB_BUILD_TOKEN] = config.token.trim()
+        }
+    }
+
     suspend fun upsertInstalledLinuxTile(tile: PersistedLinuxTile) {
         context.launcherDataStore.edit { prefs ->
             val current = parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON])
@@ -309,12 +326,6 @@ class LauncherPreferencesRepository(private val context: Context) {
     suspend fun setPreferredMediaPackage(packageName: String) {
         context.launcherDataStore.edit { prefs ->
             prefs[Keys.PREFERRED_MEDIA_PKG] = packageName
-        }
-    }
-
-    suspend fun setInterceptShadeEnabled(enabled: Boolean) {
-        context.launcherDataStore.edit { prefs ->
-            prefs[Keys.INTERCEPT_SHADE] = enabled
         }
     }
 

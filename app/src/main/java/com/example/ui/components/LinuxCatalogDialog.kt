@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +77,7 @@ fun LinuxCatalogDialog(
         }
     }
 
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -84,7 +86,7 @@ fun LinuxCatalogDialog(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
                 .widthIn(max = 540.dp)
-                .heightIn(max = 600.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(6.dp))
                 .padding(12.dp)
         ) {
@@ -247,6 +249,7 @@ fun LinuxRunnerDialog(
         runCatching { scrollState.animateScrollTo(scrollState.maxValue) }
     }
 
+    val maxRunnerH = (LocalConfiguration.current.screenHeightDp.dp * 0.92f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -255,7 +258,7 @@ fun LinuxRunnerDialog(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
                 .widthIn(max = 580.dp)
-                .heightIn(min = 340.dp, max = 640.dp)
+                .heightIn(max = maxRunnerH)
                 .vistaWindowFrame(RoundedCornerShape(6.dp))
                 .padding(10.dp)
                 .testTag("linux_runner_dialog"),

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -94,15 +95,19 @@ import com.example.model.MediaQueueTrack
 import com.example.model.MusicDrawerTab
 import com.example.ui.L10n
 import com.example.ui.LocalAppLang
+import androidx.compose.ui.text.font.FontFamily
+import com.example.ui.theme.CallIncomingGreen
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
 private val TELEGRAM_CLIENT_TOKENS = listOf(
@@ -664,16 +669,31 @@ fun InlineMusicControlDrawer(
                         var drawerSearchTfv by remember {
                             mutableStateOf(TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length)))
                         }
+                        var lastDispatchedDrawerQuery by remember { mutableStateOf(trackSearchQuery) }
+                        var isPendingDrawerEdit by remember { mutableStateOf(false) }
                         LaunchedEffect(trackSearchQuery) {
-                            if (trackSearchQuery != drawerSearchTfv.text) {
+                            if (!isPendingDrawerEdit && trackSearchQuery != drawerSearchTfv.text) {
                                 drawerSearchTfv = TextFieldValue(trackSearchQuery, TextRange(trackSearchQuery.length))
+                                lastDispatchedDrawerQuery = trackSearchQuery
+                            }
+                        }
+                        LaunchedEffect(drawerSearchTfv.text) {
+                            val latestText = drawerSearchTfv.text
+                            if (latestText != lastDispatchedDrawerQuery) {
+                                isPendingDrawerEdit = true
+                                delay(95L)
+                                lastDispatchedDrawerQuery = latestText
+                                isPendingDrawerEdit = false
+                                onTrackSearchChange(latestText)
+                            } else {
+                                isPendingDrawerEdit = false
                             }
                         }
                         BasicTextField(
                             value = drawerSearchTfv,
                             onValueChange = { next ->
                                 drawerSearchTfv = next
-                                onTrackSearchChange(next.text)
+                                isPendingDrawerEdit = (next.text != lastDispatchedDrawerQuery)
                             },
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodySmall.copy(
@@ -684,8 +704,14 @@ fun InlineMusicControlDrawer(
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(
                                 onSearch = {
-                                    if (drawerSearchTfv.text.isNotBlank()) {
-                                        onSearchAndPlayInStream(drawerSearchTfv.text, active?.packageName)
+                                    val queryText = drawerSearchTfv.text
+                                    if (queryText != lastDispatchedDrawerQuery) {
+                                        lastDispatchedDrawerQuery = queryText
+                                        isPendingDrawerEdit = false
+                                        onTrackSearchChange(queryText)
+                                    }
+                                    if (queryText.isNotBlank()) {
+                                        onSearchAndPlayInStream(queryText, active?.packageName)
                                     }
                                 }
                             ),
@@ -724,14 +750,19 @@ fun InlineMusicControlDrawer(
                             )
                             Spacer(Modifier.width(4.dp))
                         }
-                        if (trackSearchQuery.isNotEmpty()) {
+                        if (drawerSearchTfv.text.isNotEmpty()) {
                             Icon(
                                 imageVector = Icons.Rounded.Close,
                                 contentDescription = "Очистить поиск треков",
                                 tint = TextSecondary,
                                 modifier = Modifier
                                     .size(14.dp)
-                                    .clickable { onTrackSearchChange("") }
+                                    .clickable {
+                                        drawerSearchTfv = TextFieldValue("")
+                                        lastDispatchedDrawerQuery = ""
+                                        isPendingDrawerEdit = false
+                                        onTrackSearchChange("")
+                                    }
                             )
                         }
                     }
@@ -922,12 +953,17 @@ fun InlineMusicControlDrawer(
                             ) {
                                 if (queueItems.isNotEmpty()) {
                                     item(key = "hdr_queue") {
-                                        DrawerSectionLabel("ОЧЕРЕДЬ (${active?.appLabel ?: ""})")
+                                        RetroListSectionStrip(
+                                            title = "ОЧЕРЕДЬ (${active?.appLabel ?: ""})",
+                                            countBadge = "${queueItems.size}"
+                                        )
                                     }
-                                    items(queueItems, key = { "q_${it.queueId}_${it.title}" }) { qItem ->
+                                    itemsIndexed(queueItems, key = { idx, it -> "q_${it.queueId}_${it.title}_$idx" }) { idx, qItem ->
                                         QueueTrackRow(
+                                            index = idx,
                                             item = qItem,
                                             isActive = qItem.isActive,
+                                            isPlaying = qItem.isActive && active?.isPlaying == true,
                                             onClick = { onSkipToQueueItem(qItem.queueId) }
                                         )
                                     }
@@ -935,54 +971,53 @@ fun InlineMusicControlDrawer(
 
                                 if (tgSessions.isNotEmpty()) {
                                     item(key = "tg_sessions_hdr") {
-                                        DrawerSectionLabel("TELEGRAM ПЛЕЕР")
+                                        RetroListSectionStrip(
+                                            title = "TELEGRAM ПЛЕЕР",
+                                            countBadge = "${tgSessions.size}",
+                                            iconRes = R.drawable.ic_symbian_messaging
+                                        )
                                     }
-                                    tgSessions.forEach { sess ->
-                                        item(key = "tg_sess_${sess.id}") {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .vistaAeroButton(isPrimary = true, isActive = sess.id == active?.id)
-                                                    .clickable { onSelectSession(sess.id) }
-                                                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.AutoMirrored.Rounded.Send,
-                                                    contentDescription = null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                                Spacer(Modifier.width(6.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = sess.title,
-                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                                        color = Color.White,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    Text(
-                                                        text = "${sess.appLabel} • ${sess.artist.ifBlank { "Telegram Аудио" }}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = Color.White.copy(alpha = 0.8f),
-                                                        maxLines = 1
+                                    itemsIndexed(tgSessions, key = { _, sess -> "tg_sess_${sess.id}" }) { idx, sess ->
+                                        val isCurrent = sess.id == active?.id
+                                        RetroGlossyTrackRow(
+                                            index = idx,
+                                            title = sess.title,
+                                            subtitle = "${sess.appLabel} • ${sess.artist.ifBlank { "Telegram Аудио" }}",
+                                            badgeText = "TG",
+                                            isActive = isCurrent,
+                                            isPlaying = sess.isPlaying,
+                                            statusBarColor = theme.accent,
+                                            onClick = { onSelectSession(sess.id) },
+                                            leadingSlot = {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(28.dp)
+                                                        .vistaInsetBox(isFocused = isCurrent, shape = RoundedCornerShape(2.dp)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Rounded.Send,
+                                                        contentDescription = null,
+                                                        tint = if (isCurrent) MusicSourceAmber else theme.accent,
+                                                        modifier = Modifier.size(14.dp)
                                                     )
                                                 }
                                             }
-                                        }
+                                        )
                                     }
                                 }
 
                                 if (browserResults.isNotEmpty()) {
                                     item(key = "hdr_browser") {
-                                        DrawerSectionLabel(
-                                            if (mediaState.browserSearchResults.isNotEmpty()) "РЕЗУЛЬТАТЫ В КАТАЛОГЕ"
-                                            else "КАТАЛОГ И ПЛЕЙЛИСТЫ (${browserResults.size})"
+                                        RetroListSectionStrip(
+                                            title = if (mediaState.browserSearchResults.isNotEmpty()) "РЕЗУЛЬТАТЫ В КАТАЛОГЕ"
+                                            else "КАТАЛОГ И ПЛЕЙЛИСТЫ",
+                                            countBadge = "${browserResults.size}"
                                         )
                                     }
-                                    items(browserResults, key = { "br_${it.packageName}_${it.mediaId}" }) { bItem ->
+                                    itemsIndexed(browserResults, key = { idx, it -> "br_${it.packageName}_${it.mediaId}_$idx" }) { idx, bItem ->
                                         BrowserTrackRow(
+                                            index = idx,
                                             item = bItem,
                                             onClick = { onPlayBrowserTrack(bItem) }
                                         )
@@ -991,11 +1026,16 @@ fun InlineMusicControlDrawer(
 
                                 if (tgAudioFiles.isNotEmpty()) {
                                     item(key = "tg_files_hdr") {
-                                        DrawerSectionLabel("АУДИО ИЗ TELEGRAM (${tgAudioFiles.size})")
+                                        RetroListSectionStrip(
+                                            title = "АУДИО ИЗ TELEGRAM",
+                                            countBadge = "${tgAudioFiles.size}",
+                                            iconRes = R.drawable.ic_symbian_messaging
+                                        )
                                     }
-                                    items(tgAudioFiles, key = { "tg_audio_${it.id}" }) { track ->
+                                    itemsIndexed(tgAudioFiles, key = { _, it -> "tg_audio_${it.id}" }) { idx, track ->
                                         val isCurrent = track.id == mediaState.currentLocalTrackId
                                         LocalTrackRow(
+                                            index = idx,
                                             track = track,
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
@@ -1007,12 +1047,18 @@ fun InlineMusicControlDrawer(
 
                                 if (filteredRecent.isNotEmpty()) {
                                     item(key = "hdr_recent") {
-                                        DrawerSectionLabel("НЕДАВНИЕ ТРЕКИ (${filteredRecent.size})")
+                                        RetroListSectionStrip(
+                                            title = "НЕДАВНИЕ ТРЕКИ",
+                                            countBadge = "${filteredRecent.size}"
+                                        )
                                     }
-                                    items(filteredRecent, key = { "rec_${it.packageName}_${it.title}_${it.subtitle}" }) { rItem ->
+                                    itemsIndexed(filteredRecent, key = { idx, it -> "rec_${it.packageName}_${it.title}_${it.subtitle}_$idx" }) { idx, rItem ->
+                                        val isRecActive = active?.title == rItem.title && active.packageName == rItem.packageName
                                         QueueTrackRow(
+                                            index = idx,
                                             item = rItem,
-                                            isActive = active?.title == rItem.title && active.packageName == rItem.packageName,
+                                            isActive = isRecActive,
+                                            isPlaying = isRecActive && active?.isPlaying == true,
                                             onClick = {
                                                 val matchingQueue = active?.queue?.firstOrNull {
                                                     it.title.equals(rItem.title, ignoreCase = true)
@@ -1032,41 +1078,36 @@ fun InlineMusicControlDrawer(
 
                                 if (tgMsgs.isNotEmpty()) {
                                     item(key = "tg_notif_hdr") {
-                                        DrawerSectionLabel("КАНАЛЫ И ЧАТЫ TELEGRAM")
+                                        RetroListSectionStrip(
+                                            title = "КАНАЛЫ И ЧАТЫ TELEGRAM",
+                                            countBadge = "${tgMsgs.size}",
+                                            iconRes = R.drawable.ic_symbian_messaging
+                                        )
                                     }
-                                    items(tgMsgs, key = { "tg_msg_${it.key}" }) { notif ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .vistaAeroButton(shape = RoundedCornerShape(2.dp))
-                                                .clickable { onOpenHubNotification(notif.key) }
-                                                .padding(horizontal = 8.dp, vertical = 5.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.LibraryMusic,
-                                                contentDescription = null,
-                                                tint = theme.accent,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(Modifier.width(6.dp))
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = notif.title,
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    color = TextPrimary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = notif.bigText.ifBlank { notif.text },
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = TextSecondary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
+                                    itemsIndexed(tgMsgs, key = { _, it -> "tg_msg_${it.key}" }) { idx, notif ->
+                                        RetroGlossyTrackRow(
+                                            index = idx,
+                                            title = notif.title,
+                                            subtitle = notif.bigText.ifBlank { notif.text },
+                                            badgeText = "ТГ",
+                                            statusBarColor = theme.accent,
+                                            onClick = { onOpenHubNotification(notif.key) },
+                                            leadingSlot = {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(28.dp)
+                                                        .vistaInsetBox(shape = RoundedCornerShape(2.dp)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.LibraryMusic,
+                                                        contentDescription = null,
+                                                        tint = theme.accent,
+                                                        modifier = Modifier.size(15.dp)
+                                                    )
+                                                }
                                             }
-                                        }
+                                        )
                                     }
                                 }
                             }
@@ -1155,9 +1196,17 @@ fun InlineMusicControlDrawer(
                                     contentPadding = PaddingValues(4.dp),
                                     verticalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
-                                    items(localTracks, key = { it.id }) { track ->
+                                    item(key = "local_files_hdr") {
+                                        RetroListSectionStrip(
+                                            title = "ЛОКАЛЬНЫЕ АУДИОФАЙЛЫ",
+                                            countBadge = "${localTracks.size}",
+                                            iconRes = R.drawable.ic_symbian_files
+                                        )
+                                    }
+                                    itemsIndexed(localTracks, key = { _, it -> it.id }) { idx, track ->
                                         val isCurrent = track.id == mediaState.currentLocalTrackId
                                         LocalTrackRow(
+                                            index = idx,
                                             track = track,
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
@@ -1287,10 +1336,12 @@ fun InlineMusicControlDrawer(
                 )
                 .testTag("inline_music_drawer")
         ) {
+            val maxPortraitDrawerH = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.72f)
+                .coerceIn(260.dp, 470.dp)
             drawerBody(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 340.dp, max = 470.dp)
+                    .heightIn(min = 240.dp, max = maxPortraitDrawerH)
             )
             Row(
                 modifier = Modifier
@@ -1465,184 +1516,88 @@ private fun MusicDrawerTabPill(
 }
 
 @Composable
-private fun DrawerSectionLabel(text: String) {
-    val theme = LocalVistaTheme.current
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall.copy(
-            fontWeight = FontWeight.Bold,
-            fontSize = 9.5.sp
-        ),
-        color = theme.accent,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+private fun QueueTrackRow(
+    index: Int,
+    item: MediaQueueTrack,
+    isActive: Boolean,
+    isPlaying: Boolean = false,
+    onClick: () -> Unit
+) {
+    RetroGlossyTrackRow(
+        index = index,
+        title = item.title,
+        subtitle = listOfNotNull(
+            item.subtitle.takeIf { it.isNotBlank() },
+            item.appLabel.takeIf { it.isNotBlank() }
+        ).joinToString(" • "),
+        badgeText = if (isActive) "LIVE" else "ОЧЕРЕДЬ",
+        isActive = isActive,
+        isPlaying = isPlaying,
+        onClick = onClick
     )
 }
 
 @Composable
-private fun QueueTrackRow(
-    item: MediaQueueTrack,
-    isActive: Boolean,
-    onClick: () -> Unit
-) {
-    val theme = LocalVistaTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (isActive) {
-                    Modifier.vistaAeroButton(isPrimary = false, isActive = true, shape = RoundedCornerShape(2.dp))
-                } else {
-                    Modifier
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(theme.surface.copy(alpha = 0.72f))
-                        .border(0.5.dp, theme.divider.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
-                }
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = if (isActive) Icons.Rounded.GraphicEq else Icons.AutoMirrored.Rounded.QueueMusic,
-            contentDescription = null,
-            tint = if (isActive) MusicSourceAmber else theme.accent,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium
-                ),
-                color = if (isActive) theme.focusBorder else TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (item.subtitle.isNotBlank() || item.appLabel.isNotBlank()) {
-                Text(
-                    text = listOfNotNull(
-                        item.subtitle.takeIf { it.isNotBlank() },
-                        item.appLabel.takeIf { it.isNotBlank() }
-                    ).joinToString(" • "),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                    color = if (isActive) TextPrimary.copy(alpha = 0.85f) else TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun BrowserTrackRow(
+    index: Int,
     item: MediaBrowserTrack,
     onClick: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(2.dp))
-            .background(theme.surface.copy(alpha = 0.72f))
-            .border(0.5.dp, theme.divider.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = if (item.isPlayable) Icons.Rounded.PlayArrow else Icons.Rounded.LibraryMusic,
-            contentDescription = null,
-            tint = theme.accent,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.title,
-                style = MaterialTheme.typography.labelMedium,
-                color = TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (item.subtitle.isNotBlank()) {
-                Text(
-                    text = item.subtitle,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                    color = TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+    RetroGlossyTrackRow(
+        index = index,
+        title = item.title,
+        subtitle = item.subtitle,
+        badgeText = if (item.isPlayable) "STREAM" else "ПАПКА",
+        onClick = onClick,
+        leadingSlot = if (!item.isPlayable) {
+            {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .vistaInsetBox(shape = RoundedCornerShape(2.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.LibraryMusic,
+                        contentDescription = null,
+                        tint = theme.accent,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
+        } else {
+            null
         }
-    }
+    )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LocalTrackRow(
+    index: Int,
     track: LocalAudioTrack,
     isSelected: Boolean,
     isPlaying: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {}
 ) {
-    val theme = LocalVistaTheme.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (isSelected) {
-                    Modifier.vistaAeroButton(isPrimary = false, isActive = true, shape = RoundedCornerShape(2.dp))
-                } else {
-                    Modifier
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(theme.surface.copy(alpha = 0.72f))
-                        .border(0.5.dp, theme.divider.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
-                }
-            )
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .testTag("local_track_row_${track.id}"),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = if (isPlaying) Icons.Rounded.GraphicEq else Icons.Rounded.MusicNote,
-            contentDescription = null,
-            tint = if (isSelected) MusicSourceAmber else theme.accent,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = track.title,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                ),
-                color = if (isSelected) theme.focusBorder else TextPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (track.artist.isNotBlank() || track.album.isNotBlank()) {
-                Text(
-                    text = buildString {
-                        append(track.artist)
-                        if (track.artist.isNotBlank() && track.album.isNotBlank()) append(" • ")
-                        append(track.album)
-                    },
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                    color = if (isSelected) TextPrimary.copy(alpha = 0.85f) else TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+    RetroGlossyTrackRow(
+        index = index,
+        title = track.title,
+        subtitle = buildString {
+            append(track.artist.ifBlank { "Локально" })
+            if (track.album.isNotBlank()) {
+                append(" • ")
+                append(track.album)
             }
-        }
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = if (track.durationMs > 0L) MediaControlRepository.formatTimeMs(track.durationMs) else "",
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-            color = if (isSelected) MusicSourceAmber else TextMuted
-        )
-    }
+        },
+        badgeText = track.formatLabel.ifBlank { "AUDIO" },
+        badgeLossless = track.isLossless,
+        durationText = if (track.durationMs > 0L) MediaControlRepository.formatTimeMs(track.durationMs) else null,
+        isActive = isSelected,
+        isPlaying = isPlaying,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        modifier = Modifier.testTag("local_track_row_${track.id}")
+    )
 }

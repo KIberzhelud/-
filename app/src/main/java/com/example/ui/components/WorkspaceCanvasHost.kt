@@ -93,21 +93,11 @@ fun WorkspaceCanvasHost(
     var showPickerOverride by remember(cell.x, cell.y) { mutableStateOf(false) }
     var appFilterTfv by remember(cell.x, cell.y) { mutableStateOf(TextFieldValue("")) }
     var viewportRect by remember { mutableStateOf<Rect?>(null) }
-    var autoLaunchedKey by remember { mutableStateOf<String?>(null) }
 
     val assignedApp = remember(cell.packageName, cell.activityName, allApps) {
         val pkg = cell.packageName ?: return@remember null
         allApps.firstOrNull { it.packageName == pkg && (cell.activityName == null || it.activityName == cell.activityName) }
             ?: allApps.firstOrNull { it.packageName == pkg }
-    }
-
-    LaunchedEffect(cell.x, cell.y, cell.packageName, viewportRect) {
-        val r = viewportRect ?: return@LaunchedEffect
-        val key = "${cell.x}:${cell.y}:${cell.packageName}"
-        if (cell.hasAssignedApp && !showPickerOverride && autoLaunchedKey != key) {
-            autoLaunchedKey = key
-            onLaunchCellAppInBounds(r)
-        }
     }
 
     var swipeXAcc by remember { mutableFloatStateOf(0f) }
@@ -343,7 +333,8 @@ fun WorkspaceCanvasHost(
                         VistaButton(
                             text = "Открыть в окне",
                             isPrimary = true,
-                            onClick = { viewportRect?.let { onLaunchCellAppInBounds(it) } }
+                            onClick = { viewportRect?.let { onLaunchCellAppInBounds(it) } },
+                            modifier = Modifier.testTag("workspace_launch_btn")
                         )
                         VistaButton(
                             text = "Сменить",

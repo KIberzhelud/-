@@ -22,10 +22,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object ShizukuRuntimeFlags {
     private const val PREFS_NAME = "keydeck_runtime_flags"
     private const val KEY_OEM_GESTURE_BYPASS = "oem_gesture_bypass"
-    private const val KEY_INTERCEPT_SHADE = "intercept_shade"
     private const val KEY_INTERCEPT_LOCKSCREEN = "intercept_lockscreen"
 
-    val interceptShadeEnabled = AtomicBoolean(false)
     val interceptLockScreenEnabled = AtomicBoolean(false)
     val oemGestureBypassEnabled = AtomicBoolean(false)
 
@@ -33,9 +31,6 @@ object ShizukuRuntimeFlags {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (prefs.contains(KEY_OEM_GESTURE_BYPASS)) {
             oemGestureBypassEnabled.set(prefs.getBoolean(KEY_OEM_GESTURE_BYPASS, false))
-        }
-        if (prefs.contains(KEY_INTERCEPT_SHADE)) {
-            interceptShadeEnabled.set(prefs.getBoolean(KEY_INTERCEPT_SHADE, false))
         }
         if (prefs.contains(KEY_INTERCEPT_LOCKSCREEN)) {
             interceptLockScreenEnabled.set(prefs.getBoolean(KEY_INTERCEPT_LOCKSCREEN, false))
@@ -50,12 +45,10 @@ object ShizukuRuntimeFlags {
             .apply()
     }
 
-    fun persistInterceptFlags(context: Context, shadeEnabled: Boolean, lockEnabled: Boolean) {
-        interceptShadeEnabled.set(shadeEnabled)
+    fun persistInterceptFlags(context: Context, lockEnabled: Boolean) {
         interceptLockScreenEnabled.set(lockEnabled)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putBoolean(KEY_INTERCEPT_SHADE, shadeEnabled)
             .putBoolean(KEY_INTERCEPT_LOCKSCREEN, lockEnabled)
             .apply()
     }
@@ -163,7 +156,6 @@ class ShizukuBridge(private val context: Context) {
             isAccessibilityEnabled = a11yGranted,
             hasOverlayPermission = overlayGranted,
             shizukuVersion = version,
-            interceptShadeEnabled = ShizukuRuntimeFlags.interceptShadeEnabled.get(),
             interceptLockScreenEnabled = ShizukuRuntimeFlags.interceptLockScreenEnabled.get(),
             oemGestureBypassEnabled = ShizukuRuntimeFlags.oemGestureBypassEnabled.get(),
             lastCommandStatus = message
@@ -171,11 +163,10 @@ class ShizukuBridge(private val context: Context) {
     }
 
     fun updateInterceptFlags(
-        shadeEnabled: Boolean,
         lockEnabled: Boolean,
         oemGestureBypass: Boolean = ShizukuRuntimeFlags.oemGestureBypassEnabled.get()
     ) {
-        ShizukuRuntimeFlags.persistInterceptFlags(context, shadeEnabled, lockEnabled)
+        ShizukuRuntimeFlags.persistInterceptFlags(context, lockEnabled)
         ShizukuRuntimeFlags.persistOemGestureBypass(context, oemGestureBypass)
         refreshStatus()
     }
@@ -275,15 +266,6 @@ class ShizukuBridge(private val context: Context) {
         }
     }
 
-    suspend fun collapseSystemShadeViaShizuku(): Result<String> {
-        val result = runPrivilegedOrRootShell("cmd statusbar collapse")
-        refreshStatus(
-            if (result.isSuccess) "Системная шторка свернута (перехвачена Хабом)"
-            else result.exceptionOrNull()?.message
-        )
-        return result
-    }
-
     suspend fun dismissSystemKeyguardViaShizuku(): Result<String> {
         return runPrivilegedOrRootShell("wm dismiss-keyguard")
     }
@@ -372,12 +354,15 @@ class ShizukuBridge(private val context: Context) {
                 "am start -n \"\$comp\" --windowingMode 5; " +
                 "else monkey -p $safePkg -c android.intent.category.LAUNCHER 1; fi"
         }
-        val resizePart = "tid=\$(dumpsys activity recents 2>/dev/null | grep -B 3 \"$safePkg\" | head -n 8 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
+        val resizePart = "tid=\$(dumpsys activity activities 2>/dev/null | grep -E \"Task\\{.*$safePkg|topActivity=.*$safePkg|realActivity=.*$safePkg\" -B 1 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
+            "if [ -z \"\$tid\" ]; then " +
+            "tid=\$(dumpsys activity recents 2>/dev/null | grep -E \"Recent #.*$safePkg|$safePkg\" -B 1 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
+            "fi; " +
             "if [ -n \"\$tid\" ]; then " +
             "cmd activity task set-windowing-mode \$tid 5 2>/dev/null; " +
             "cmd activity task resize \$tid $left $top $right $bottom 2>/dev/null || am task resize \$tid $left $top $right $bottom 2>/dev/null; " +
             "fi"
-        return runPrivilegedOrRootShell("$prepCmd$launchPart; sleep 0.25; $resizePart")
+        return runPrivilegedOrRootShell("$prepCmd$launchPart; sleep 0.35; $resizePart; sleep 0.25; $resizePart")
     }
 
     suspend fun dumpUiTreeXmlViaRoot(): String? {

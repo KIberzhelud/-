@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -53,12 +54,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.AutoCloseManager
 import com.example.data.KeyboardSearchMatcher
 import com.example.model.AppEntry
@@ -112,11 +115,16 @@ fun AppearanceSettingsDialog(
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 600.dp)
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 560.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("appearance_settings_dialog")
         ) {
@@ -893,11 +901,16 @@ fun AutoKillSettingsDialog(
             )
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 580.dp)
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 540.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("autokill_settings_dialog")
         ) {
@@ -940,7 +953,9 @@ fun AutoKillSettingsDialog(
             }
 
             Column(
-                modifier = Modifier.padding(12.dp),
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
@@ -1033,7 +1048,8 @@ fun AutoKillSettingsDialog(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 180.dp, max = 320.dp)
+                        .weight(1f, fill = false)
+                        .heightIn(min = 100.dp, max = 320.dp)
                         .vistaInsetBox()
                         .padding(4.dp)
                         .testTag("autokill_apps_list"),

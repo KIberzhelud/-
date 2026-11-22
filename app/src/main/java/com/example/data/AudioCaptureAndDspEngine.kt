@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.MediaScannerConnection
@@ -243,8 +244,43 @@ object StreamAudioCaptureRuntime {
     private val _captureState = MutableStateFlow(AudioCaptureState())
     val captureState: StateFlow<AudioCaptureState> = _captureState.asStateFlow()
 
-    private val _completedCaptures = MutableSharedFlow<CompletedAudioCapture>(extraBufferCapacity = 4)
+    private val _completedCaptures = MutableSharedFlow<CompletedAudioCapture>(extraBufferCapacity = 8)
     val completedCaptures = _completedCaptures.asSharedFlow()
+
+    @Volatile
+    internal var pendingTrackChange: Triple<String, String, Long>? = null
+
+    fun setCaptureModes(autoSplitEnabled: Boolean, silentMuteMode: Boolean) {
+        _captureState.update {
+            it.copy(autoSplitEnabled = autoSplitEnabled, silentMuteMode = silentMuteMode)
+        }
+    }
+
+    fun updateActiveTrackMetadata(title: String, artist: String, durationMs: Long) {
+        val state = _captureState.value
+        if (!state.isCapturing) return
+        val cleanTitle = title.trim().ifBlank { "Captured_Track" }
+        val cleanArtist = artist.trim()
+        val sameTrack = cleanTitle.equals(state.targetTitle, ignoreCase = true) &&
+            cleanArtist.equals(state.targetArtist, ignoreCase = true)
+        if (!sameTrack) {
+            if (state.autoSplitEnabled) {
+                pendingTrackChange = Triple(cleanTitle, cleanArtist, durationMs)
+            }
+        } else if (durationMs > 0L && state.expectedDurationMs <= 0L) {
+            _captureState.update { it.copy(expectedDurationMs = durationMs) }
+        }
+    }
+
+    internal fun shouldDiscardIncompleteRecording(recordedMs: Long, expectedMs: Long): Boolean {
+        if (expectedMs < 15_000L) return false
+        return recordedMs < (expectedMs * 0.70).toLong()
+    }
+
+    internal fun computeProgressPercent(recordedMs: Long, expectedMs: Long): Int {
+        if (expectedMs <= 0L) return 0
+        return ((recordedMs * 100L) / expectedMs).toInt().coerceIn(0, 100)
+    }
 
     internal fun updateState(transform: (AudioCaptureState) -> AudioCaptureState) {
         _captureState.update(transform)
@@ -268,6 +304,9 @@ class StreamAudioCaptureService : Service() {
         const val EXTRA_ARTIST = "track_artist"
         const val EXTRA_PACKAGE = "track_pkg"
         const val EXTRA_ALBUM_ID = "target_album_id"
+        const val EXTRA_DURATION_MS = "expected_duration_ms"
+        const val EXTRA_AUTO_SPLIT = "auto_split_enabled"
+        const val EXTRA_SILENT_MUTE = "silent_mute_mode"
 
         fun startCapture(
             context: Context,
@@ -276,7 +315,10 @@ class StreamAudioCaptureService : Service() {
             title: String,
             artist: String,
             packageName: String,
-            targetAlbumId: String? = null
+            targetAlbumId: String? = null,
+            expectedDurationMs: Long = 0L,
+            autoSplitEnabled: Boolean = false,
+            silentMuteMode: Boolean = false
         ) {
             val intent = Intent(context, StreamAudioCaptureService::class.java).apply {
                 action = ACTION_START_CAPTURE
@@ -285,6 +327,9 @@ class StreamAudioCaptureService : Service() {
                 putExtra(EXTRA_TITLE, title)
                 putExtra(EXTRA_ARTIST, artist)
                 putExtra(EXTRA_PACKAGE, packageName)
+                putExtra(EXTRA_DURATION_MS, expectedDurationMs.coerceAtLeast(0L))
+                putExtra(EXTRA_AUTO_SPLIT, autoSplitEnabled)
+                putExtra(EXTRA_SILENT_MUTE, silentMuteMode)
                 targetAlbumId?.let { putExtra(EXTRA_ALBUM_ID, it) }
             }
             runCatching {
@@ -308,6 +353,7 @@ class StreamAudioCaptureService : Service() {
     private var captureJob: Job? = null
     private var mediaProjection: MediaProjection? = null
     private var audioRecord: AudioRecord? = null
+    private var savedStreamVolumeBeforeMute: Int? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -348,6 +394,9 @@ class StreamAudioCaptureService : Service() {
         val artist = intent?.getStringExtra(EXTRA_ARTIST).orEmpty()
         val pkg = intent?.getStringExtra(EXTRA_PACKAGE).orEmpty()
         val albumId = intent?.getStringExtra(EXTRA_ALBUM_ID)
+        val expectedDurationMs = intent?.getLongExtra(EXTRA_DURATION_MS, 0L) ?: 0L
+        val autoSplit = intent?.getBooleanExtra(EXTRA_AUTO_SPLIT, false) ?: false
+        val silentMute = intent?.getBooleanExtra(EXTRA_SILENT_MUTE, false) ?: false
 
         val notif = buildNotification("Захват потока: $title")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -356,21 +405,46 @@ class StreamAudioCaptureService : Service() {
             startForeground(NOTIFICATION_ID, notif)
         }
 
-        startPlaybackCapture(resultCode, projectionData, title, artist, pkg, albumId)
+        startPlaybackCapture(resultCode, projectionData, title, artist, pkg, albumId, expectedDurationMs, autoSplit, silentMute)
         return START_NOT_STICKY
+    }
+
+    private fun restoreMutedVolumeIfNeeded() {
+        val prev = savedStreamVolumeBeforeMute ?: return
+        savedStreamVolumeBeforeMute = null
+        runCatching {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@runCatching
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, prev, 0)
+        }
+    }
+
+    private fun applySilentMuteIfEnabled(silentMute: Boolean) {
+        if (!silentMute) return
+        runCatching {
+            val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return@runCatching
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (cur > 0) {
+                savedStreamVolumeBeforeMute = cur
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun startPlaybackCapture(
         resultCode: Int,
         data: Intent,
-        title: String,
-        artist: String,
+        initialTitle: String,
+        initialArtist: String,
         pkg: String,
-        albumId: String?
+        albumId: String?,
+        initialExpectedDurationMs: Long,
+        autoSplit: Boolean,
+        silentMute: Boolean
     ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         captureJob?.cancel()
+        StreamAudioCaptureRuntime.pendingTrackChange = null
         runCatching {
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val projection = mgr.getMediaProjection(resultCode, data)
@@ -392,6 +466,7 @@ class StreamAudioCaptureService : Service() {
             val sampleRate = 44100
             val channelMask = AudioFormat.CHANNEL_IN_STEREO
             val encoding = AudioFormat.ENCODING_PCM_16BIT
+            val bytesPerSecond = sampleRate * 2 * 2 // 44100 * stereo * 16-bit
             val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelMask, encoding).coerceAtLeast(8192)
             val audioFormat = AudioFormat.Builder()
                 .setEncoding(encoding)
@@ -416,83 +491,153 @@ class StreamAudioCaptureService : Service() {
             }
 
             audioRecord = record
-            val outputFile = createOutputWavFile(title, artist)
+            applySilentMuteIfEnabled(silentMute)
 
             StreamAudioCaptureRuntime.updateState {
                 AudioCaptureState(
                     isCapturing = true,
-                    targetTitle = title,
-                    targetArtist = artist,
+                    targetTitle = initialTitle,
+                    targetArtist = initialArtist,
                     targetPackage = pkg,
                     targetAlbumId = albumId,
+                    expectedDurationMs = initialExpectedDurationMs,
+                    progressPercent = 0,
+                    autoSplitEnabled = autoSplit,
+                    silentMuteMode = silentMute,
+                    capturedFilesCount = 0,
+                    discardReason = null,
                     elapsedSec = 0,
                     bytesWritten = 0L,
-                    statusText = "Идёт захват потока…"
+                    statusText = if (silentMute) "Тихий захват потока…" else "Идёт захват потока…"
                 )
             }
 
             captureJob = serviceScope.launch {
                 val buffer = ByteArray(minBuf)
-                var totalAudioBytes = 0L
-                val startedAt = System.currentTimeMillis()
-                RandomAccessFile(outputFile, "rw").use { raf ->
-                    writeWavHeader(raf, sampleRate, 2, 16, 0L)
+                var curTitle = initialTitle
+                var curArtist = initialArtist
+                var curExpectedDurMs = initialExpectedDurationMs
+                var filesSavedCount = 0
+
+                try {
                     record.startRecording()
-                    while (isActive && StreamAudioCaptureRuntime.captureState.value.isCapturing) {
-                        val read = record.read(buffer, 0, buffer.size)
-                        if (read > 0) {
-                            raf.write(buffer, 0, read)
-                            totalAudioBytes += read
-                            val sec = ((System.currentTimeMillis() - startedAt) / 1000L).toInt()
-                            StreamAudioCaptureRuntime.updateState { cur ->
-                                cur.copy(elapsedSec = sec, bytesWritten = totalAudioBytes)
+                    outer@ while (isActive && StreamAudioCaptureRuntime.captureState.value.isCapturing) {
+                        val outputFile = createOutputWavFile(curTitle, curArtist)
+                        var totalAudioBytes = 0L
+                        val segmentStartMs = System.currentTimeMillis()
+                        var switchedTrack: Triple<String, String, Long>? = null
+
+                        RandomAccessFile(outputFile, "rw").use { raf ->
+                            writeWavHeader(raf, sampleRate, 2, 16, 0L)
+                            while (isActive && StreamAudioCaptureRuntime.captureState.value.isCapturing) {
+                                val nextMeta = StreamAudioCaptureRuntime.pendingTrackChange
+                                if (nextMeta != null && StreamAudioCaptureRuntime.captureState.value.autoSplitEnabled) {
+                                    StreamAudioCaptureRuntime.pendingTrackChange = null
+                                    switchedTrack = nextMeta
+                                    break
+                                }
+                                val read = record.read(buffer, 0, buffer.size)
+                                if (read > 0) {
+                                    raf.write(buffer, 0, read)
+                                    totalAudioBytes += read
+                                    val elapsedMs = System.currentTimeMillis() - segmentStartMs
+                                    val recordedAudioMs = (totalAudioBytes * 1000L) / bytesPerSecond
+                                    val refMs = maxOf(elapsedMs, recordedAudioMs)
+                                    val pct = StreamAudioCaptureRuntime.computeProgressPercent(refMs, curExpectedDurMs)
+                                    val sec = (elapsedMs / 1000L).toInt()
+                                    StreamAudioCaptureRuntime.updateState { cur ->
+                                        cur.copy(
+                                            elapsedSec = sec,
+                                            bytesWritten = totalAudioBytes,
+                                            progressPercent = pct
+                                        )
+                                    }
+                                    if (curExpectedDurMs >= 15_000L &&
+                                        !StreamAudioCaptureRuntime.captureState.value.autoSplitEnabled &&
+                                        recordedAudioMs >= curExpectedDurMs + 4_000L
+                                    ) {
+                                        break
+                                    }
+                                }
                             }
+                            raf.seek(0L)
+                            writeWavHeader(raf, sampleRate, 2, 16, totalAudioBytes)
+                        }
+
+                        val recordedAudioMs = (totalAudioBytes * 1000L) / bytesPerSecond
+                        val tooShort = StreamAudioCaptureRuntime.shouldDiscardIncompleteRecording(recordedAudioMs, curExpectedDurMs)
+                        if (totalAudioBytes <= 4096L || tooShort) {
+                            runCatching { outputFile.delete() }
+                            val reason = if (tooShort) {
+                                "Удалена неполная запись «$curTitle» (${recordedAudioMs / 1000}с из ${curExpectedDurMs / 1000}с)"
+                            } else {
+                                "Захват пустой записи отменён"
+                            }
+                            StreamAudioCaptureRuntime.updateState {
+                                it.copy(discardReason = reason, statusText = reason)
+                            }
+                        } else {
+                            filesSavedCount++
+                            runCatching {
+                                MediaScannerConnection.scanFile(
+                                    applicationContext,
+                                    arrayOf(outputFile.absolutePath),
+                                    arrayOf("audio/wav"),
+                                    null
+                                )
+                            }
+                            StreamAudioCaptureRuntime.updateState {
+                                it.copy(
+                                    capturedFilesCount = filesSavedCount,
+                                    lastSavedPath = outputFile.absolutePath,
+                                    discardReason = null,
+                                    statusText = "Сохранено: ${outputFile.name}"
+                                )
+                            }
+                            StreamAudioCaptureRuntime.emitCompleted(
+                                CompletedAudioCapture(
+                                    filePath = outputFile.absolutePath,
+                                    title = curTitle,
+                                    artist = curArtist,
+                                    targetAlbumId = albumId
+                                )
+                            )
+                        }
+
+                        if (switchedTrack != null && StreamAudioCaptureRuntime.captureState.value.isCapturing) {
+                            curTitle = switchedTrack!!.first
+                            curArtist = switchedTrack!!.second
+                            curExpectedDurMs = switchedTrack!!.third
+                            StreamAudioCaptureRuntime.updateState { cur ->
+                                cur.copy(
+                                    targetTitle = curTitle,
+                                    targetArtist = curArtist,
+                                    expectedDurationMs = curExpectedDurMs,
+                                    progressPercent = 0,
+                                    elapsedSec = 0,
+                                    bytesWritten = 0L,
+                                    statusText = "Авто-нарезка: $curTitle"
+                                )
+                            }
+                            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                            nm?.notify(NOTIFICATION_ID, buildNotification("Авто-нарезка: $curTitle"))
+                        } else {
+                            break@outer
                         }
                     }
-                    // Patch final RIFF/WAV header sizes
-                    raf.seek(0L)
-                    writeWavHeader(raf, sampleRate, 2, 16, totalAudioBytes)
+                } finally {
+                    restoreMutedVolumeIfNeeded()
+                    runCatching { record.stop() }
+                    runCatching { record.release() }
+                    audioRecord = null
+                    runCatching { projection.stop() }
+                    mediaProjection = null
+                    StreamAudioCaptureRuntime.updateState { it.copy(isCapturing = false) }
+                    stopSelf()
                 }
-
-                runCatching { record.stop() }
-                runCatching { record.release() }
-                audioRecord = null
-                runCatching { projection.stop() }
-                mediaProjection = null
-
-                if (totalAudioBytes > 4096L) {
-                    runCatching {
-                        MediaScannerConnection.scanFile(
-                            applicationContext,
-                            arrayOf(outputFile.absolutePath),
-                            arrayOf("audio/wav"),
-                            null
-                        )
-                    }
-                    StreamAudioCaptureRuntime.updateState {
-                        it.copy(
-                            isCapturing = false,
-                            lastSavedPath = outputFile.absolutePath,
-                            statusText = "Сохранено: ${outputFile.name}"
-                        )
-                    }
-                    StreamAudioCaptureRuntime.emitCompleted(
-                        CompletedAudioCapture(
-                            filePath = outputFile.absolutePath,
-                            title = title,
-                            artist = artist,
-                            targetAlbumId = albumId
-                        )
-                    )
-                } else {
-                    runCatching { outputFile.delete() }
-                    StreamAudioCaptureRuntime.updateState {
-                        it.copy(isCapturing = false, statusText = "Захват завершён (аудиопоток пуст)")
-                    }
-                }
-                stopSelf()
             }
         }.onFailure { err ->
+            restoreMutedVolumeIfNeeded()
             StreamAudioCaptureRuntime.updateState {
                 it.copy(isCapturing = false, statusText = err.message ?: "Ошибка захвата потока")
             }
@@ -563,6 +708,7 @@ class StreamAudioCaptureService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        restoreMutedVolumeIfNeeded()
         captureJob?.cancel()
         runCatching { audioRecord?.stop(); audioRecord?.release() }
         runCatching { mediaProjection?.stop() }

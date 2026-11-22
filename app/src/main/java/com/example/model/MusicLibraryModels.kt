@@ -26,7 +26,8 @@ enum class PowerampTab(val title: String) {
     EQUALIZER("EQ"),
     LYRICS("Текст"),
     SEARCH("Поиск"),
-    ALBUMS("Альбомы")
+    ALBUMS("Альбомы"),
+    LIBRARY("Файлы")
 }
 
 data class TrackSourceCandidate(
@@ -158,6 +159,12 @@ data class AudioCaptureState(
     val targetArtist: String = "",
     val targetPackage: String = "",
     val targetAlbumId: String? = null,
+    val expectedDurationMs: Long = 0L,
+    val progressPercent: Int = 0,
+    val autoSplitEnabled: Boolean = false,
+    val silentMuteMode: Boolean = false,
+    val capturedFilesCount: Int = 0,
+    val discardReason: String? = null,
     val elapsedSec: Int = 0,
     val bytesWritten: Long = 0L,
     val lastSavedPath: String? = null,

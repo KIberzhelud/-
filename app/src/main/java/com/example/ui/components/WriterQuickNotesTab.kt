@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,10 +22,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.BookmarkAdd
@@ -36,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +77,7 @@ fun WriterQuickNotesTab(
     searchQuery: String,
     pinnedOnly: Boolean,
     hasActiveBook: Boolean,
+    isLandscape: Boolean = false,
     onSearchChange: (String) -> Unit,
     onTogglePinnedOnly: () -> Unit,
     onAddNote: (text: String, tag: String) -> Unit,
@@ -95,8 +100,7 @@ fun WriterQuickNotesTab(
         draftTag = ""
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        // Vista inset Filter & Search bar
+    val searchAndFilterBar: @Composable () -> Unit = {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -156,13 +160,12 @@ fun WriterQuickNotesTab(
                 )
             }
         }
-        HorizontalDivider(color = theme.divider)
+    }
 
-        // Saved Messages feed
+    val notesFeed: @Composable (Modifier) -> Unit = { feedModifier ->
         if (notes.isEmpty()) {
             Box(
-                modifier = Modifier
-                    .weight(1f)
+                modifier = feedModifier
                     .fillMaxWidth()
                     .padding(24.dp),
                 contentAlignment = Alignment.Center
@@ -189,8 +192,7 @@ fun WriterQuickNotesTab(
             }
         } else {
             LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
+                modifier = feedModifier
                     .fillMaxWidth()
                     .testTag("quick_notes_list"),
                 contentPadding = PaddingValues(10.dp),
@@ -212,23 +214,32 @@ fun WriterQuickNotesTab(
                 }
             }
         }
+    }
 
-        HorizontalDivider(color = theme.divider)
-
-        // Bottom Saved-Messages-style composer
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .symbianMetallicBar()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+    if (isLandscape) {
+        Row(modifier = modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .weight(0.38f)
+                    .fillMaxHeight()
+                    .background(
+                        if (theme.isGlassMode) theme.surface.copy(alpha = 0.44f)
+                        else theme.surface.copy(alpha = 0.90f)
+                    )
+                    .verticalScroll(rememberScrollState())
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                searchAndFilterBar()
+                HorizontalDivider(color = theme.divider)
+                Text(
+                    text = "Новая быстрая заметка",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = theme.accent
+                )
                 Box(
                     modifier = Modifier
-                        .width(100.dp)
+                        .fillMaxWidth()
                         .vistaInsetBox()
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
@@ -244,10 +255,9 @@ fun WriterQuickNotesTab(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                Spacer(Modifier.width(6.dp))
                 Box(
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
                         .vistaInsetBox()
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                 ) {
@@ -261,7 +271,8 @@ fun WriterQuickNotesTab(
                     BasicTextField(
                         value = draftText,
                         onValueChange = { draftText = it },
-                        maxLines = 4,
+                        minLines = 3,
+                        maxLines = 6,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
                         cursorBrush = SolidColor(theme.accent),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -271,21 +282,98 @@ fun WriterQuickNotesTab(
                             .testTag("quick_note_composer_input")
                     )
                 }
-                Spacer(Modifier.width(6.dp))
-                Box(
+                VistaButton(
+                    text = "Отправить в заметки",
+                    isPrimary = draftText.isNotBlank(),
+                    enabled = draftText.isNotBlank(),
+                    onClick = { submitNote() },
                     modifier = Modifier
-                        .size(40.dp)
-                        .vistaAeroButton(isPrimary = draftText.isNotBlank())
-                        .clickable(enabled = draftText.isNotBlank(), onClick = { submitNote() })
-                        .testTag("quick_note_send_button"),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .testTag("quick_note_send_button")
+                )
+            }
+            VerticalDivider(color = theme.divider)
+            notesFeed(Modifier.weight(0.62f).fillMaxHeight())
+        }
+    } else {
+        Column(modifier = modifier.fillMaxSize()) {
+            searchAndFilterBar()
+            HorizontalDivider(color = theme.divider)
+            notesFeed(Modifier.weight(1f))
+            HorizontalDivider(color = theme.divider)
+
+            // Bottom Saved-Messages-style composer
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .symbianMetallicBar()
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.Send,
-                        contentDescription = "Сохранить заметку",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .width(100.dp)
+                            .vistaInsetBox()
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        if (draftTag.isEmpty()) {
+                            Text("#тег", style = MaterialTheme.typography.bodySmall, color = TextMuted)
+                        }
+                        BasicTextField(
+                            value = draftTag,
+                            onValueChange = { draftTag = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall.copy(color = theme.accent),
+                            cursorBrush = SolidColor(theme.accent),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .vistaInsetBox()
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        if (draftText.isEmpty()) {
+                            Text(
+                                text = "Быстрая заметка (Enter — отправить)…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted
+                            )
+                        }
+                        BasicTextField(
+                            value = draftText,
+                            onValueChange = { draftText = it },
+                            maxLines = 4,
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                            cursorBrush = SolidColor(theme.accent),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { submitNote() }),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("quick_note_composer_input")
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .vistaAeroButton(isPrimary = draftText.isNotBlank())
+                            .clickable(enabled = draftText.isNotBlank(), onClick = { submitNote() })
+                            .testTag("quick_note_send_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Send,
+                            contentDescription = "Сохранить заметку",
+                            tint = TextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

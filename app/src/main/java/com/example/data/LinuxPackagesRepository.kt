@@ -297,24 +297,34 @@ class LinuxPackagesRepository(
                 if (debInfo != null && debInfo.packageName.isNotBlank()) {
                     log.appendLine("Package: ${debInfo.packageName} (${debInfo.version} / ${debInfo.arch})")
                 }
-                // Inspect tar listing cleanly if toybox/tar is available
+                // Unpack data.tar.* locally into rootfs via toybox/tar with gzip/xz/bzip2 fallback (no Termux)
                 val dataMember = extracted.firstOrNull { it.startsWith("data.tar") }
+                val rootfsDir = File(installDir, "rootfs").apply { mkdirs() }
                 if (dataMember != null) {
                     val dataFile = File(membersDir, dataMember)
+                    val tarFlags = when {
+                        dataMember.endsWith(".gz") -> "-xzf"
+                        dataMember.endsWith(".xz") -> "-xJf"
+                        dataMember.endsWith(".bz2") -> "-xjf"
+                        else -> "-xf"
+                    }
                     val unpackRes = executeLocalShellCommand(
-                        command = "mkdir -p \"${installDir.absolutePath}/rootfs\" && tar -xf \"${dataFile.absolutePath}\" -C \"${installDir.absolutePath}/rootfs\" 2>&1 || ls -lh \"${membersDir.absolutePath}\"",
+                        command = "(toybox tar $tarFlags \"${dataFile.absolutePath}\" -C \"${rootfsDir.absolutePath}\" 2>&1 || tar $tarFlags \"${dataFile.absolutePath}\" -C \"${rootfsDir.absolutePath}\" 2>&1 || tar -xf \"${dataFile.absolutePath}\" -C \"${rootfsDir.absolutePath}\" 2>&1 || ls -lh \"${membersDir.absolutePath}\")",
                         workingDir = installDir
                     )
                     unpackRes.getOrNull()?.let { if (it.isNotBlank()) log.appendLine(it.trim()) }
                 }
+                val discoveredBin = File(rootfsDir, "usr/bin").listFiles()?.firstOrNull()?.absolutePath
+                    ?: File(rootfsDir, "bin").listFiles()?.firstOrNull()?.absolutePath
                 val wrapper = File(installDir, "run.sh")
                 wrapper.writeText(
                     """
                     |#!/system/bin/sh
                     |echo "KeyDeck Linux Package: ${entry.packageName} (${entry.version})"
-                    |echo "Root dir: ${installDir.absolutePath}"
-                    |ls -la "${installDir.absolutePath}"
-                    |find "${installDir.absolutePath}/rootfs" -maxdepth 4 2>/dev/null | head -n 25
+                    |echo "Root dir: ${rootfsDir.absolutePath}"
+                    |export PATH="${rootfsDir.absolutePath}/usr/bin:${rootfsDir.absolutePath}/bin:${'$'}PATH"
+                    |export LD_LIBRARY_PATH="${rootfsDir.absolutePath}/usr/lib:${rootfsDir.absolutePath}/lib:${'$'}LD_LIBRARY_PATH"
+                    |${if (!discoveredBin.isNullOrBlank()) "chmod +x \"$discoveredBin\" 2>/dev/null; \"$discoveredBin\" --version 2>&1 || \"$discoveredBin\" --help 2>&1 || ls -la \"${rootfsDir.absolutePath}\"" else "find \"${rootfsDir.absolutePath}\" -maxdepth 4 2>/dev/null | head -n 25"}
                     """.trimMargin() + "\n"
                 )
                 wrapper.setExecutable(true, false)

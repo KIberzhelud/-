@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -135,11 +137,16 @@ fun AndroidOptimizationAndSpoofDialog(
             )
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 620.dp)
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 560.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("optimization_and_spoof_dialog")
         ) {
@@ -567,6 +574,7 @@ fun BackgroundWebAudioDialog(
         view.loadUrl(clean)
     }
 
+    val verticalPad = if (LocalConfiguration.current.screenHeightDp < 440) 6.dp else 14.dp
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -574,7 +582,7 @@ fun BackgroundWebAudioDialog(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 14.dp)
+                .padding(horizontal = 8.dp, vertical = verticalPad)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("background_web_audio_dialog")
         ) {

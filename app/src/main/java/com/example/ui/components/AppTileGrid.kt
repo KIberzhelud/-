@@ -107,6 +107,7 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -189,6 +190,38 @@ fun AppTileGrid(
     }
 
     val keyboardController = LocalSoftwareKeyboardController.current
+    var appsSearchTfv by remember {
+        mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
+    }
+    var isPendingLocalEdit by remember { mutableStateOf(false) }
+    var lastDispatchedQuery by remember { mutableStateOf(searchQuery) }
+
+    LaunchedEffect(searchQuery) {
+        if (searchQuery != appsSearchTfv.text &&
+            (!isPendingLocalEdit || searchQuery.isEmpty()) &&
+            searchQuery != lastDispatchedQuery
+        ) {
+            appsSearchTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+            lastDispatchedQuery = searchQuery
+            isPendingLocalEdit = false
+        } else if (searchQuery == lastDispatchedQuery && searchQuery == appsSearchTfv.text) {
+            isPendingLocalEdit = false
+        }
+    }
+
+    LaunchedEffect(appsSearchTfv.text) {
+        val localText = appsSearchTfv.text
+        if (localText != lastDispatchedQuery) {
+            if (localText.isNotEmpty()) {
+                delay(145L)
+            }
+            isPendingLocalEdit = false
+            lastDispatchedQuery = localText
+            onSearchQueryChange(localText)
+        } else {
+            isPendingLocalEdit = false
+        }
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         // Windows Vista / Symbian metallic search & shortcuts strip
@@ -202,7 +235,7 @@ fun AppTileGrid(
                     indication = null,
                     onClick = {}
                 )
-                .padding(horizontal = 8.dp, vertical = 5.dp),
+                .padding(horizontal = 8.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
@@ -213,38 +246,39 @@ fun AppTileGrid(
                         onRequestSearchFocus()
                         keyboardController?.show()
                     }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Image(
                     painter = painterResource(R.drawable.ic_symbian_search),
                     contentDescription = "Search",
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(15.dp)
                 )
                 Spacer(Modifier.width(7.dp))
-                var appsSearchTfv by remember {
-                    mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
-                }
-                LaunchedEffect(searchQuery, isSearchFocused) {
-                    if (searchQuery != appsSearchTfv.text && (!isSearchFocused || searchQuery.isEmpty())) {
-                        appsSearchTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
-                    }
-                }
+
                 BasicTextField(
                     value = appsSearchTfv,
                     onValueChange = { next ->
                         appsSearchTfv = next
-                        onSearchQueryChange(next.text)
+                        if (next.text != lastDispatchedQuery) {
+                            isPendingLocalEdit = true
+                        }
                     },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         color = TextPrimary,
-                        fontSize = 12.5.sp
+                        fontSize = 12.sp
                     ),
                     cursorBrush = SolidColor(theme.accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                     keyboardActions = KeyboardActions(
                         onGo = {
+                            if (appsSearchTfv.text != lastDispatchedQuery) {
+                                isPendingLocalEdit = false
+                                lastDispatchedQuery = appsSearchTfv.text
+                                onSearchQueryChange(appsSearchTfv.text)
+                            }
+                            val effectiveTrimmed = appsSearchTfv.text.trim()
                             val firstApp = apps.firstOrNull()
                             val firstChat = chatSearchResults.firstOrNull()
                             val firstFile = searchFiles.firstOrNull()
@@ -258,7 +292,7 @@ fun AppTileGrid(
                                 firstImg != null -> onOpenSearchFile(firstImg)
                                 firstLinux != null -> onRunLinuxPackage(firstLinux)
                                 firstMusic != null -> onLaunchMusicMatch(firstMusic)
-                                trimmedQuery.isNotEmpty() -> onSearchWeb(trimmedQuery, "google")
+                                effectiveTrimmed.isNotEmpty() -> onSearchWeb(effectiveTrimmed, "google")
                             }
                         }
                     ),
@@ -266,7 +300,7 @@ fun AppTileGrid(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(min = 34.dp),
+                                .heightIn(min = 24.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
                             if (appsSearchTfv.text.isEmpty()) {
@@ -298,11 +332,16 @@ fun AppTileGrid(
 
             Spacer(Modifier.width(6.dp))
 
-            if (searchQuery.isNotEmpty() || highlightedLetter != null) {
+            if (appsSearchTfv.text.isNotEmpty() || searchQuery.isNotEmpty() || highlightedLetter != null) {
                 Box(
                     modifier = Modifier
                         .vistaAeroButton()
-                        .clickable(onClick = onClearSearch)
+                        .clickable {
+                            isPendingLocalEdit = false
+                            lastDispatchedQuery = ""
+                            appsSearchTfv = TextFieldValue("")
+                            onClearSearch()
+                        }
                         .padding(horizontal = 8.dp, vertical = 5.dp)
                         .testTag("apps_search_clear")
                 ) {
@@ -986,18 +1025,21 @@ private fun AppGlossyTileItem(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            val tileShadow = remember(theme.isGlassMode) {
+                if (theme.isGlassMode) {
+                    Shadow(
+                        color = Color.Black.copy(alpha = 0.85f),
+                        offset = Offset(0f, 1.5f),
+                        blurRadius = 4f
+                    )
+                } else null
+            }
             Text(
                 text = app.label,
                 style = MaterialTheme.typography.titleSmall.copy(
                     fontSize = 13.5.sp,
                     fontWeight = FontWeight.Medium,
-                    shadow = if (theme.isGlassMode) {
-                        Shadow(
-                            color = Color.Black.copy(alpha = 0.85f),
-                            offset = Offset(0f, 1.5f),
-                            blurRadius = 4f
-                        )
-                    } else null
+                    shadow = tileShadow
                 ),
                 color = TextPrimary,
                 maxLines = 2,

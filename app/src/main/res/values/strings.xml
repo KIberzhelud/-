@@ -23,6 +23,6 @@
     <string name="favorites_empty">Удерживайте или Ctrl+D</string>
     <string name="keyboard_shortcuts_title">Горячие клавиши</string>
     <string name="accessibility_service_label">KeyDeck Жесты и Оптимизация</string>
-    <string name="accessibility_service_description">Обеспечивает жестовую навигацию (домой, назад, недавние), перехват системной шторки в Хаб, автозакрытие одноразовых приложений и превью активных окон.</string>
+    <string name="accessibility_service_description">Обеспечивает жестовую навигацию (домой, назад, недавние), автозакрытие одноразовых приложений и превью активных окон.</string>
     <string name="background_guard_channel_name">Фоновый аудио-обход плееров</string>
 </resources>

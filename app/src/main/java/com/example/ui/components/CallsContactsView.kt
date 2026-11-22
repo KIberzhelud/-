@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -25,7 +27,9 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -78,6 +82,7 @@ import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.delay
 
 @Composable
 fun CallsContactsView(
@@ -137,7 +142,7 @@ fun CallsContactsView(
 
         // Vista inset Search & Action Strip: [icon] [Поиск или номер...] [ВЫЗОВ] [+КОНТАКТ] [СБРОС]
         val keyboardController = LocalSoftwareKeyboardController.current
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(theme.surface.copy(alpha = 0.92f))
@@ -146,9 +151,46 @@ fun CallsContactsView(
                     indication = null,
                     onClick = {}
                 )
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 8.dp, vertical = 5.dp)
         ) {
+            val tightStrip = maxWidth < 460.dp
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+            var callsTfv by remember {
+                mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
+            }
+            var isPendingCallsEdit by remember { mutableStateOf(false) }
+            var lastDispatchedCallsQuery by remember { mutableStateOf(searchQuery) }
+
+            LaunchedEffect(searchQuery) {
+                if (searchQuery != callsTfv.text &&
+                    (!isPendingCallsEdit || searchQuery.isEmpty()) &&
+                    searchQuery != lastDispatchedCallsQuery
+                ) {
+                    callsTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
+                    lastDispatchedCallsQuery = searchQuery
+                    isPendingCallsEdit = false
+                } else if (searchQuery == lastDispatchedCallsQuery && searchQuery == callsTfv.text) {
+                    isPendingCallsEdit = false
+                }
+            }
+
+            LaunchedEffect(callsTfv.text) {
+                val localText = callsTfv.text
+                if (localText != lastDispatchedCallsQuery) {
+                    if (localText.isNotEmpty()) {
+                        delay(95L)
+                    }
+                    isPendingCallsEdit = false
+                    lastDispatchedCallsQuery = localText
+                    onSearchQueryChange(localText)
+                } else {
+                    isPendingCallsEdit = false
+                }
+            }
+
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -166,19 +208,14 @@ fun CallsContactsView(
                     modifier = Modifier.size(14.dp)
                 )
                 Spacer(Modifier.width(6.dp))
-                var callsTfv by remember {
-                    mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
-                }
-                LaunchedEffect(searchQuery) {
-                    if (searchQuery != callsTfv.text) {
-                        callsTfv = TextFieldValue(searchQuery, TextRange(searchQuery.length))
-                    }
-                }
+
                 BasicTextField(
                     value = callsTfv,
                     onValueChange = { next ->
                         callsTfv = next
-                        onSearchQueryChange(next.text)
+                        if (next.text != lastDispatchedCallsQuery) {
+                            isPendingCallsEdit = true
+                        }
                     },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
@@ -218,30 +255,36 @@ fun CallsContactsView(
                         .testTag("calls_search_input")
                 )
             }
-            Spacer(Modifier.width(5.dp))
+            Spacer(Modifier.width(if (tightStrip) 4.dp else 5.dp))
             ActionChipButton(
-                text = "ВЫЗОВ",
+                text = if (tightStrip) "Звон." else "ВЫЗОВ",
                 iconRes = R.drawable.ic_symbian_phone,
                 isPrimary = true,
-                onClick = { onCallClick(searchQuery) },
+                onClick = { onCallClick(callsTfv.text) },
                 modifier = Modifier.testTag("calls_dial_button")
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(if (tightStrip) 3.dp else 4.dp))
             ActionChipButton(
-                text = "+КОНТ.",
+                text = if (tightStrip) "+Конт" else "+КОНТ.",
                 iconRes = R.drawable.ic_symbian_add_contact,
                 isPrimary = false,
                 onClick = onAddContactClick,
                 modifier = Modifier.testTag("calls_add_contact_button")
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(if (tightStrip) 3.dp else 4.dp))
             ActionChipButton(
-                text = "СБРОС",
+                text = if (tightStrip) "✕" else "СБРОС",
                 iconRes = R.drawable.ic_symbian_clear,
                 isPrimary = false,
-                onClick = onResetClick,
+                onClick = {
+                    isPendingCallsEdit = false
+                    lastDispatchedCallsQuery = ""
+                    callsTfv = TextFieldValue("")
+                    onResetClick()
+                },
                 modifier = Modifier.testTag("calls_reset_button")
             )
+            }
         }
         HorizontalDivider(color = NavyDivider, thickness = 1.dp)
 
@@ -547,12 +590,14 @@ private fun PermissionPromptCard(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 460.dp)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -587,7 +632,13 @@ private fun PermissionPromptCard(
 
 @Composable
 private fun EmptyCallsState(iconRes: Int, message: String) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Image(
                 painter = painterResource(iconRes),

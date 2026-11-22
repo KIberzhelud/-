@@ -3,33 +3,48 @@ package com.example
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.os.Looper
 import android.view.KeyEvent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.LinuxPackagesRepository
 import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.data.NotificationHubRepository
 import com.example.data.RecentForegroundTracker
+import com.example.data.StreamAudioCaptureRuntime
 import com.example.data.UniversalSearchRepository
 import com.example.data.WeatherRepository
+import com.example.data.ZipUpdateRepository
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import com.example.model.AlbumExpectedTrack
 import com.example.model.AudioCaptureState
 import com.example.model.ConsensusWeatherReport
+import com.example.model.CustomColorPalette
 import com.example.model.DailyWeatherForecast
 import com.example.model.DeviceSearchFile
 import com.example.model.EqualizerState
+import com.example.model.HubQuickLink
 import com.example.model.HubSubTab
 import com.example.model.LocalAudioTrack
 import com.example.model.MediaPlayerState
@@ -45,15 +60,23 @@ import com.example.model.SyncedLyricLine
 import com.example.model.TrackLyricsData
 import com.example.model.TrackSourceCandidate
 import com.example.model.WeatherSourceReading
+import com.example.model.WorkspaceCell
+import com.example.model.WorkspaceGridState
+import com.example.model.ZipArchiveKind
+import com.example.model.ZipUpdateInspection
 import com.example.ui.HardwareKeyHandler
 import com.example.ui.SymbianLockScreen
 import com.example.ui.components.HubView
+import com.example.ui.components.PowerampFilesLibraryTab
 import com.example.ui.components.PowerampPlayerScreen
 import com.example.ui.components.WeatherForecastDialog
+import com.example.ui.components.WorkspaceCanvasHost
+import com.example.ui.components.ZipUpdateDialog
 import com.example.ui.theme.KeyDeckTheme
 import com.example.viewmodel.LauncherViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -426,7 +449,6 @@ class PowerampAndWeatherFeaturesTest {
                     onRequestShizukuPermission = {},
                     onOpenShizukuApp = {},
                     onGrantNotificationViaShizuku = {},
-                    onToggleShadeInterception = {},
                     onToggleLockScreenInterception = {},
                     onPreviewLockScreen = {},
                     onOpenAppearanceSettings = {},
@@ -596,6 +618,8 @@ class PowerampAndWeatherFeaturesTest {
         composeTestRule.onNodeWithTag("poweramp_tab_lyrics").performClick()
         composeTestRule.onNodeWithTag("poweramp_tab_search").performClick()
         composeTestRule.onNodeWithTag("poweramp_tab_albums").performClick()
+        composeTestRule.onNodeWithTag("poweramp_tab_library").performClick()
+        composeTestRule.onNodeWithTag("poweramp_library_tab").assertIsDisplayed()
         composeTestRule.onNodeWithTag("poweramp_tab_player").performClick()
         composeTestRule.onNodeWithText("Starlight").assertIsDisplayed()
     }
@@ -776,5 +800,528 @@ class PowerampAndWeatherFeaturesTest {
         } finally {
             tmpDeb.delete()
         }
+    }
+
+    @Test
+    fun `poweramp retro local track list renders lazily with delete action`() {
+        val track1 = LocalAudioTrack(
+            id = "track_flac_1",
+            title = "Knights of Cydonia",
+            artist = "Muse",
+            album = "Black Holes",
+            durationMs = 366_000L,
+            uriString = "file:///sdcard/Music/knights.flac",
+            filePath = "/sdcard/Music/knights.flac",
+            formatLabel = "FLAC"
+        )
+        val track2 = LocalAudioTrack(
+            id = "track_mp3_2",
+            title = "Supermassive Black Hole",
+            artist = "Muse",
+            album = "Black Holes",
+            durationMs = 209_000L,
+            uriString = "file:///sdcard/Music/supermassive.mp3",
+            filePath = "/sdcard/Music/supermassive.mp3",
+            formatLabel = "MP3"
+        )
+        val session = MediaSessionUi(
+            id = "local_test",
+            packageName = "com.example",
+            appLabel = "KeyDeck",
+            title = "Knights of Cydonia",
+            artist = "Muse",
+            album = "Black Holes",
+            isPlaying = true,
+            positionMs = 12_000L,
+            durationMs = 366_000L,
+            playbackSpeed = 1.0f,
+            lastUpdateElapsedMs = 0L,
+            formatLabel = "FLAC",
+            bitrateKbps = 1411
+        )
+        var playedTrackId: String? = null
+
+        composeTestRule.setContent {
+            KeyDeckTheme {
+                PowerampPlayerScreen(
+                    mediaState = MediaPlayerState(
+                        sessions = listOf(session),
+                        selectedSessionId = session.id,
+                        currentLocalTrackId = track1.id
+                    ),
+                    livePositionMs = 12_000L,
+                    coverStyle = PlayerCoverStyle.COVER,
+                    activeTab = PowerampTab.PLAYER,
+                    isLandscape = false,
+                    sourceSelectionMode = SourceSelectionMode.AUTO,
+                    localTracks = listOf(track1, track2),
+                    unifiedSearchQuery = "",
+                    unifiedSearchResults = emptyList(),
+                    isSearchingOnline = false,
+                    currentLyrics = null,
+                    isFetchingLyrics = false,
+                    equalizerState = EqualizerState(enabled = true),
+                    audioCaptureState = AudioCaptureState(),
+                    smartAlbums = emptyList(),
+                    selectedAlbumId = null,
+                    onClose = {},
+                    onSelectTab = {},
+                    onToggleSourceMode = {},
+                    onSelectSession = {},
+                    onTogglePlayPause = {},
+                    onSkipPrevious = {},
+                    onSkipNext = {},
+                    onSeekTo = {},
+                    onSeekBy = {},
+                    onSkipToQueueItem = {},
+                    onOpenActivePlayer = {},
+                    onPlayLocalTrack = { playedTrackId = it.id },
+                    onDeleteLocalTrack = {},
+                    onDeleteActiveTrack = {},
+                    onSetPlaybackSpeed = {},
+                    onCycleRepeatMode = {},
+                    onToggleShuffle = {},
+                    onSearchMusicEverywhere = {},
+                    onUnifiedTrackAction = { _, _ -> },
+                    onOpenSourcePicker = { _, _ -> },
+                    onStopAudioCapture = {},
+                    onAutoFetchLyrics = {},
+                    onSaveLyrics = {},
+                    onDeleteLyrics = {},
+                    onSetEqualizerEnabled = {},
+                    onApplyEqualizerPreset = {},
+                    onSetEqualizerBand = { _, _ -> },
+                    onSetBassBoost = {},
+                    onSetVirtualizer = {},
+                    onSelectAlbum = {},
+                    onCreateAlbum = { _, _ -> },
+                    onRefreshAlbumOnline = {},
+                    onAttachLocalTracksToAlbum = { _, _ -> },
+                    onDetachLocalTrackFromAlbum = { _, _ -> },
+                    onPickCustomAlbumCover = {},
+                    onSelectAlternateCoverUrl = { _, _ -> },
+                    onDeleteAlbum = {},
+                    onDownloadMissingAlbumTrack = { _, _ -> },
+                    onDownloadAllMissingAlbumTracks = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("poweramp_player_lazy_list")
+            .performScrollToNode(hasTestTag("poweramp_list_delete_${track1.id}"))
+        composeTestRule.onNodeWithTag("poweramp_list_delete_${track1.id}").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_player_lazy_list")
+            .performScrollToNode(hasTestTag("poweramp_list_delete_${track2.id}"))
+        composeTestRule.onNodeWithTag("poweramp_list_delete_${track2.id}").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_player_lazy_list")
+            .performScrollToNode(hasText("Supermassive Black Hole"))
+        composeTestRule.onNodeWithText("Supermassive Black Hole").performClick()
+        assertEquals(track2.id, playedTrackId)
+    }
+
+    @Test
+    fun `wikimedia commons, lrclib candidates, lyrics ovh parsers and six poweramp tabs work`() {
+        assertTrue(PowerampTab.entries.contains(PowerampTab.LIBRARY))
+        assertEquals("Файлы", PowerampTab.LIBRARY.title)
+
+        val wikiJson = """
+            {
+              "query": {
+                "pages": {
+                  "101": {
+                    "title": "File:Moonlight_Sonata.flac",
+                    "imageinfo": [{"url": "https://upload.wikimedia.org/moonlight.flac", "size": 1048576}]
+                  },
+                  "102": {
+                    "title": "File:Cover_Image.jpg",
+                    "imageinfo": [{"url": "https://upload.wikimedia.org/cover.jpg", "size": 2048}]
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val wikiTracks = MusicCatalogAndLyricsRepository.parseWikimediaCommonsJson(wikiJson)
+        assertEquals(1, wikiTracks.size)
+        assertEquals("Moonlight Sonata", wikiTracks.first().title)
+        assertEquals(MusicSourceKind.ARCHIVE_FLAC, wikiTracks.first().sourceKind)
+
+        val lrclibArray = """
+            [
+              {"trackName": "Starlight", "artistName": "Muse", "syncedLyrics": "[00:01.00] Far away", "plainLyrics": "Far away"},
+              {"trackName": "Starlight (Live)", "artistName": "Muse", "syncedLyrics": "[00:02.00] Live version", "plainLyrics": "Live version"}
+            ]
+        """.trimIndent()
+        val candidates = MusicCatalogAndLyricsRepository.parseLrclibSearchCandidates(
+            rawJson = lrclibArray,
+            trackKey = "muse|starlight",
+            title = "Starlight",
+            artist = "Muse"
+        )
+        assertEquals(2, candidates.size)
+        assertEquals("LRCLIB #1", candidates[0].sourceLabel)
+        assertEquals("LRCLIB #2", candidates[1].sourceLabel)
+
+        val ovhLyrics = MusicCatalogAndLyricsRepository.parseLyricsOvhJson(
+            rawJson = """{"lyrics":"Line one\nLine two"}""",
+            trackKey = "muse|starlight",
+            title = "Starlight",
+            artist = "Muse"
+        )
+        assertEquals("Line one\nLine two", ovhLyrics?.plainText)
+    }
+
+    @Test
+    fun `stream capture runtime checks auto-discard threshold, percent progress and auto-split`() {
+        assertTrue(StreamAudioCaptureRuntime.shouldDiscardIncompleteRecording(recordedMs = 40_000L, expectedMs = 100_000L))
+        assertFalse(StreamAudioCaptureRuntime.shouldDiscardIncompleteRecording(recordedMs = 75_000L, expectedMs = 100_000L))
+        assertFalse(StreamAudioCaptureRuntime.shouldDiscardIncompleteRecording(recordedMs = 5_000L, expectedMs = 10_000L))
+
+        assertEquals(50, StreamAudioCaptureRuntime.computeProgressPercent(recordedMs = 90_000L, expectedMs = 180_000L))
+        assertEquals(0, StreamAudioCaptureRuntime.computeProgressPercent(recordedMs = 10_000L, expectedMs = 0L))
+
+        StreamAudioCaptureRuntime.pendingTrackChange = null
+        StreamAudioCaptureRuntime.updateState {
+            AudioCaptureState(
+                isCapturing = true,
+                targetTitle = "First Song",
+                targetArtist = "Artist A",
+                expectedDurationMs = 180_000L,
+                autoSplitEnabled = true,
+                silentMuteMode = true
+            )
+        }
+        StreamAudioCaptureRuntime.updateActiveTrackMetadata("Second Song", "Artist B", 210_000L)
+        assertEquals(Triple("Second Song", "Artist B", 210_000L), StreamAudioCaptureRuntime.pendingTrackChange)
+
+        StreamAudioCaptureRuntime.pendingTrackChange = null
+        StreamAudioCaptureRuntime.updateState { AudioCaptureState() }
+    }
+
+    @Test
+    fun `poweramp library tab renders downloaded tracks cleanly`() {
+        val localTrack = LocalAudioTrack(
+            id = "lib_track_1",
+            title = "Unique Library File",
+            artist = "Band X",
+            album = "KeyDeck Singles",
+            durationMs = 195_000L,
+            uriString = "file:///sdcard/Music/KeyDeck/downloaded.mp3",
+            filePath = "/sdcard/Music/KeyDeck/downloaded.mp3",
+            formatLabel = "MP3"
+        )
+        val session = MediaSessionUi(
+            id = "local_test",
+            packageName = "com.example",
+            appLabel = "KeyDeck",
+            title = "Active Deck Song",
+            artist = "Band X",
+            album = "KeyDeck Singles",
+            isPlaying = false,
+            positionMs = 0L,
+            durationMs = 195_000L,
+            playbackSpeed = 1.0f,
+            lastUpdateElapsedMs = 0L,
+            formatLabel = "MP3",
+            bitrateKbps = 320
+        )
+
+        var renamedTo: String? = null
+        composeTestRule.setContent {
+            KeyDeckTheme {
+                PowerampFilesLibraryTab(
+                    localTracks = listOf(localTrack),
+                    mediaState = MediaPlayerState(sessions = listOf(session), selectedSessionId = session.id),
+                    audioCaptureState = AudioCaptureState(),
+                    smartAlbums = emptyList(),
+                    onPlayTrack = {},
+                    onRenameTrack = { _, newTitle -> renamedTo = newTitle },
+                    onDeleteTrack = {},
+                    onOpenLyricsForTrack = {},
+                    onAttachTrackToAlbum = { _, _ -> },
+                    onToggleCaptureAutoSplit = {},
+                    onToggleCaptureSilentMute = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("poweramp_library_tab").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Unique Library File").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("track_rename_btn_lib_track_1").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("track_rename_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("track_rename_save_btn").performClick()
+        assertEquals("Unique Library File", renamedTo)
+    }
+
+    @Test
+    fun `workspace canvas host renders launch and single delete button cleanly`() {
+        val grid = WorkspaceGridState(
+            cells = listOf(
+                WorkspaceCell(0, 0),
+                WorkspaceCell(1, 0, packageName = "com.test.app", label = "TestApp")
+            ),
+            activeX = 1,
+            activeY = 0
+        )
+
+        composeTestRule.setContent {
+            KeyDeckTheme {
+                WorkspaceCanvasHost(
+                    workspaceGrid = grid,
+                    allApps = emptyList(),
+                    onNavigateWorkspace = { _, _ -> },
+                    onAssignApp = {},
+                    onLaunchCellAppInBounds = {},
+                    onOpenHome = {},
+                    onDeleteWorkspace = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("workspace_launch_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("workspace_delete_btn").assertIsDisplayed()
+    }
+
+    @Test
+    fun `zip update repository guards zip slip parses config packs and classifies source archives`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val repo = ZipUpdateRepository(app, com.example.data.ShizukuBridge(app))
+
+        val destRoot = File(app.cacheDir, "zip_slip_test_root").apply { mkdirs() }
+        assertNull(ZipUpdateRepository.safeResolveEntryFile(destRoot, "../evil.apk"))
+        assertNull(ZipUpdateRepository.safeResolveEntryFile(destRoot, "sub/../../escape.apk"))
+        assertNotNull(ZipUpdateRepository.safeResolveEntryFile(destRoot, "apks/base.apk"))
+
+        val palette = CustomColorPalette(
+            id = "pal_retro",
+            name = "Vista Retro",
+            dominantDarkArgb = 0xFF0E1A2B,
+            accentArgb = 0xFF2882D8,
+            highlightArgb = 0xFF8CD3FF
+        )
+        val link = HubQuickLink(
+            id = "lnk_1",
+            title = "Archive",
+            url = "https://archive.org",
+            category = HubSubTab.NEWS
+        )
+        val manifestJson = ZipUpdateRepository.buildBackupManifestJson(
+            versionName = "2.4",
+            versionCode = 24L,
+            palettes = listOf(palette),
+            quickLinks = listOf(link)
+        )
+        val parsedManifest = ZipUpdateRepository.parseConfigManifestJson(manifestJson)
+        assertNotNull(parsedManifest)
+        assertEquals("2.4", parsedManifest?.versionName)
+        assertEquals(1, parsedManifest?.palettes?.size)
+        assertEquals("Vista Retro", parsedManifest?.palettes?.first()?.name)
+        assertEquals(1, parsedManifest?.quickLinks?.size)
+
+        val lrcEntry = ZipUpdateRepository.parseLrcArchiveEntry(
+            "Muse - Starlight.lrc",
+            "[00:05.00] Far away\n[00:12.00] Hold you in my arms"
+        )
+        assertNotNull(lrcEntry)
+        assertEquals("Muse", lrcEntry?.artist)
+        assertEquals("Starlight", lrcEntry?.title)
+        assertEquals(2, lrcEntry?.syncedLines?.size)
+
+        val packZip = File.createTempFile("config_pack", ".zip", app.cacheDir)
+        val srcZip = File.createTempFile("source_code", ".zip", app.cacheDir)
+        try {
+            ZipOutputStream(packZip.outputStream()).use { zos ->
+                zos.putNextEntry(ZipEntry("keydeck-update.json"))
+                zos.write(manifestJson.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+                zos.putNextEntry(ZipEntry("lyrics/Muse - Starlight.lrc"))
+                zos.write("[00:01.00] Far away".toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            val packInspection = runBlocking {
+                repo.inspectZipArchive(Uri.fromFile(packZip), packZip.absolutePath, "config_pack.zip")
+            }.getOrThrow()
+            assertEquals(ZipArchiveKind.KEYDECK_CONFIG_PACK, packInspection.kind)
+            assertEquals(1, packInspection.paletteCount)
+            assertEquals(1, packInspection.quickLinkCount)
+            assertEquals(1, packInspection.lrcCount)
+            assertTrue(packInspection.canApplyConfigPack)
+
+            ZipOutputStream(srcZip.outputStream()).use { zos ->
+                zos.putNextEntry(ZipEntry("app/build.gradle.kts"))
+                zos.write("plugins { }".toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+                zos.putNextEntry(ZipEntry("app/src/main/java/com/example/MainActivity.kt"))
+                zos.write("package com.example".toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            val srcInspection = runBlocking {
+                repo.inspectZipArchive(Uri.fromFile(srcZip), srcZip.absolutePath, "source_code.zip")
+            }.getOrThrow()
+            assertEquals(ZipArchiveKind.SOURCE_CODE_ARCHIVE, srcInspection.kind)
+            assertEquals(2, srcInspection.sourceCodeFileCount)
+            assertFalse(srcInspection.canInstallApks)
+        } finally {
+            packZip.delete()
+            srcZip.delete()
+            destRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `zip update dialog renders controls and install action cleanly`() {
+        val inspection = ZipUpdateInspection(
+            sourceUriString = "file:///sdcard/Download/keydeck_update.zip",
+            archiveName = "keydeck_update.zip",
+            archiveSizeBytes = 14_500_000L,
+            kind = ZipArchiveKind.APK_UPDATE,
+            isSamePackageUpdate = true,
+            targetPackageName = "com.example",
+            targetVersionName = "2.5",
+            targetVersionCode = 25L,
+            currentVersionName = "2.4",
+            currentVersionCode = 24L,
+            extractedApkPaths = listOf("/tmp/base.apk"),
+            changelog = "Обновление плеера и поворот экрана",
+            summaryMessage = "Найден APK обновления KeyDeck"
+        )
+        var applyClicked = false
+        composeTestRule.setContent {
+            KeyDeckTheme {
+                ZipUpdateDialog(
+                    currentVersionName = "2.4",
+                    currentVersionCode = 24L,
+                    inspection = inspection,
+                    isBusy = false,
+                    statusMessage = null,
+                    shizukuState = ShizukuState(),
+                    onPickZipFile = {},
+                    onExportBackupZip = {},
+                    onApplyUpdate = { applyClicked = true },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("zip_update_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("zip_pick_file_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("zip_export_backup_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("zip_inspection_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("zip_apply_update_btn").performScrollTo().assertIsDisplayed().performClick()
+        assertTrue(applyClicked)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h380dp-land")
+    fun `landscape poweramp player preserves non-crushed repeat button alongside lyrics and list`() {
+        val lyrics = TrackLyricsData(
+            trackKey = "muse|starlight",
+            title = "Starlight",
+            artist = "Muse",
+            syncedLines = listOf(
+                SyncedLyricLine(0L, "Hold you in my arms"),
+                SyncedLyricLine(10_000L, "Far away")
+            ),
+            plainText = "Hold you in my arms\nFar away"
+        )
+        val session = MediaSessionUi(
+            id = "local_test",
+            packageName = "com.example",
+            appLabel = "KeyDeck",
+            title = "Starlight",
+            artist = "Muse",
+            album = "Black Holes",
+            isPlaying = true,
+            positionMs = 11_000L,
+            durationMs = 240_000L,
+            playbackSpeed = 1.0f,
+            lastUpdateElapsedMs = 0L,
+            formatLabel = "FLAC",
+            bitrateKbps = 1411
+        )
+
+        var densityValue = 1f
+        composeTestRule.setContent {
+            densityValue = LocalDensity.current.density
+            KeyDeckTheme {
+                Box(modifier = Modifier.size(width = 800.dp, height = 380.dp)) {
+                    PowerampPlayerScreen(
+                        mediaState = MediaPlayerState(sessions = listOf(session), selectedSessionId = session.id),
+                        livePositionMs = 11_000L,
+                        coverStyle = PlayerCoverStyle.COVER,
+                        activeTab = PowerampTab.PLAYER,
+                        isLandscape = true,
+                        sourceSelectionMode = SourceSelectionMode.AUTO,
+                        localTracks = emptyList(),
+                        unifiedSearchQuery = "",
+                        unifiedSearchResults = emptyList(),
+                        isSearchingOnline = false,
+                        currentLyrics = lyrics,
+                        isFetchingLyrics = false,
+                        equalizerState = EqualizerState(enabled = true),
+                        audioCaptureState = AudioCaptureState(),
+                        smartAlbums = emptyList(),
+                        selectedAlbumId = null,
+                        onClose = {},
+                        onSelectTab = {},
+                        onToggleSourceMode = {},
+                        onSelectSession = {},
+                        onTogglePlayPause = {},
+                        onSkipPrevious = {},
+                        onSkipNext = {},
+                        onSeekTo = {},
+                        onSeekBy = {},
+                        onSkipToQueueItem = {},
+                        onOpenActivePlayer = {},
+                        onPlayLocalTrack = {},
+                        onDeleteLocalTrack = {},
+                        onDeleteActiveTrack = {},
+                        onSetPlaybackSpeed = {},
+                        onCycleRepeatMode = {},
+                        onToggleShuffle = {},
+                        onSearchMusicEverywhere = {},
+                        onUnifiedTrackAction = { _, _ -> },
+                        onOpenSourcePicker = { _, _ -> },
+                        onStopAudioCapture = {},
+                        onAutoFetchLyrics = {},
+                        onSaveLyrics = {},
+                        onDeleteLyrics = {},
+                        onSetEqualizerEnabled = {},
+                        onApplyEqualizerPreset = {},
+                        onSetEqualizerBand = { _, _ -> },
+                        onSetBassBoost = {},
+                        onSetVirtualizer = {},
+                        onSelectAlbum = {},
+                        onCreateAlbum = { _, _ -> },
+                        onRefreshAlbumOnline = {},
+                        onAttachLocalTracksToAlbum = { _, _ -> },
+                        onDetachLocalTrackFromAlbum = { _, _ -> },
+                        onPickCustomAlbumCover = {},
+                        onSelectAlternateCoverUrl = { _, _ -> },
+                        onDeleteAlbum = {},
+                        onDownloadMissingAlbumTrack = { _, _ -> },
+                        onDownloadAllMissingAlbumTracks = {}
+                    )
+                }
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        val paneBounds = composeTestRule.onNodeWithTag("poweramp_landscape_three_pane").fetchSemanticsNode().boundsInRoot
+        val shuffleBounds = composeTestRule.onNodeWithTag("poweramp_shuffle_btn").fetchSemanticsNode().boundsInRoot
+        val playBounds = composeTestRule.onNodeWithTag("poweramp_play_pause_btn").fetchSemanticsNode().boundsInRoot
+        val repeatBounds = composeTestRule.onNodeWithTag("poweramp_repeat_btn").fetchSemanticsNode().boundsInRoot
+        val repeatWidthDp = repeatBounds.width / densityValue
+
+        assertTrue(
+            "Shuffle must fit above fold: pane=$paneBounds shuffle=$shuffleBounds play=$playBounds repeat=$repeatBounds density=$densityValue",
+            shuffleBounds.height > 0f && shuffleBounds.bottom <= paneBounds.bottom + 1f
+        )
+        composeTestRule.onNodeWithTag("poweramp_landscape_three_pane").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_landscape_lyrics_pane").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_shuffle_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_play_pause_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("poweramp_repeat_btn").assertIsDisplayed()
+
+        assertTrue("Expected repeat button width >= 30dp in 800x380 landscape, got $repeatWidthDp dp", repeatWidthDp >= 30f)
     }
 }

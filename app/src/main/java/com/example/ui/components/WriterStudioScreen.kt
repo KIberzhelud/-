@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -339,6 +340,7 @@ fun WriterStudioScreen(
                         searchQuery = state.notesSearchQuery,
                         pinnedOnly = state.notesPinnedOnly,
                         hasActiveBook = state.activeBook != null,
+                        isLandscape = isLandscape,
                         onSearchChange = writerViewModel::updateNotesSearch,
                         onTogglePinnedOnly = writerViewModel::toggleNotesPinnedFilter,
                         onAddNote = writerViewModel::addQuickNote,
@@ -540,7 +542,8 @@ private fun BooksWorkspace(
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 Column(
                     modifier = Modifier
-                        .width(245.dp)
+                        .weight(0.36f)
+                        .widthIn(min = 190.dp, max = 300.dp)
                         .fillMaxHeight()
                         .background(
                             if (theme.isGlassMode) theme.surface.copy(alpha = 0.42f)
@@ -596,7 +599,7 @@ private fun BooksWorkspace(
                         writerViewModel.updateChapterContent(ch, title, content)
                     },
                     onAddChapter = onOpenAddChapter,
-                    modifier = Modifier.weight(1f).fillMaxHeight()
+                    modifier = Modifier.weight(0.64f).fillMaxHeight()
                 )
             }
         } else {

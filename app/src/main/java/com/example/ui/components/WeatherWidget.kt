@@ -1,5 +1,7 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -21,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,10 +34,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,9 +56,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.R
 import com.example.model.ConsensusWeatherReport
 import com.example.model.WeatherCityResult
 import com.example.ui.theme.LocalVistaTheme
+import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -51,7 +68,10 @@ import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 fun weatherSymbol(iconKey: String): String = when (iconKey) {
     "sun" -> "☀"
@@ -61,6 +81,192 @@ fun weatherSymbol(iconKey: String): String = when (iconKey) {
     "storm" -> "⛈"
     "fog" -> "🌫"
     else -> "☁"
+}
+
+private fun weatherBackdropRes(iconKey: String): Int = when (iconKey) {
+    "sun", "partly" -> R.drawable.img_weather_sunny
+    "rain" -> R.drawable.img_weather_rain
+    "storm" -> R.drawable.img_weather_storm
+    else -> R.drawable.img_weather_cloudy
+}
+
+@Composable
+private fun TouchWizFlipClockTempBadge(
+    tempText: String,
+    compact: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val badgeShape = RoundedCornerShape(4.dp)
+    Box(
+        modifier = modifier
+            .clip(badgeShape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF434850),
+                        Color(0xFF23272D),
+                        Color(0xFF0E1014),
+                        Color(0xFF1A1E24)
+                    )
+                )
+            )
+            .border(1.dp, Color(0xFF8C97A6), badgeShape)
+            .padding(horizontal = if (compact) 8.dp else 11.dp, vertical = if (compact) 4.dp else 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = tempText,
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontFamily = FontFamily.SansSerif,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = if (compact) 15.sp else 20.sp,
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.88f),
+                    offset = Offset(0f, 1.5f),
+                    blurRadius = 3f
+                )
+            ),
+            color = Color(0xFFF6F9FC),
+            maxLines = 1,
+            softWrap = false
+        )
+        // Classic HTC Sense / TouchWiz split-flap hinge line across the flip plate
+        HorizontalDivider(
+            color = Color.Black.copy(alpha = 0.65f),
+            thickness = 1.dp,
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+@Composable
+private fun WeatherAtmosphereOverlay(
+    iconKey: String,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        fun drawSoftCloud(cx: Float, cy: Float, scale: Float, tintTop: Color, tintBottom: Color) {
+            val rMain = 18.dp.toPx() * scale
+            val baseBrush = Brush.verticalGradient(listOf(tintTop, tintBottom))
+            drawCircle(brush = baseBrush, radius = rMain * 0.72f, center = Offset(cx - rMain * 0.68f, cy + rMain * 0.14f))
+            drawCircle(brush = baseBrush, radius = rMain, center = Offset(cx - rMain * 0.08f, cy - rMain * 0.14f))
+            drawCircle(brush = baseBrush, radius = rMain * 0.78f, center = Offset(cx + rMain * 0.62f, cy + rMain * 0.08f))
+            drawRoundRect(
+                brush = baseBrush,
+                topLeft = Offset(cx - rMain * 1.1f, cy),
+                size = androidx.compose.ui.geometry.Size(rMain * 2.25f, rMain * 0.74f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(rMain * 0.38f, rMain * 0.38f)
+            )
+            // Soft upper rim specular gloss
+            drawCircle(
+                color = Color.White.copy(alpha = 0.22f),
+                radius = rMain * 0.45f,
+                center = Offset(cx - rMain * 0.18f, cy - rMain * 0.45f)
+            )
+        }
+
+        when (iconKey) {
+            "sun" -> {
+                val sunCenter = Offset(w * 0.84f, h * 0.30f)
+                val sunR = 17.dp.toPx()
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color(0x99FFE79B), Color(0x33FFA726), Color.Transparent),
+                        center = sunCenter,
+                        radius = sunR * 2.5f
+                    ),
+                    radius = sunR * 2.5f,
+                    center = sunCenter
+                )
+                for (i in 0 until 10) {
+                    val rad = (i * 36.0) * (PI / 180.0)
+                    val inner = Offset(sunCenter.x + (sunR * 1.1f) * cos(rad).toFloat(), sunCenter.y + (sunR * 1.1f) * sin(rad).toFloat())
+                    val outer = Offset(sunCenter.x + (sunR * 1.65f) * cos(rad).toFloat(), sunCenter.y + (sunR * 1.65f) * sin(rad).toFloat())
+                    drawLine(
+                        color = Color(0xCCFFE082),
+                        start = inner,
+                        end = outer,
+                        strokeWidth = 2.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color(0xFFFFF8D6), Color(0xFFFFC107)), center = sunCenter, radius = sunR),
+                    radius = sunR,
+                    center = sunCenter
+                )
+            }
+            "partly" -> {
+                val sunCenter = Offset(w * 0.80f, h * 0.28f)
+                val sunR = 14.dp.toPx()
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(Color(0xBBFFE082), Color(0x22FFA000), Color.Transparent), center = sunCenter, radius = sunR * 2.1f),
+                    radius = sunR * 2.1f,
+                    center = sunCenter
+                )
+                drawCircle(color = Color(0xFFFFD54F), radius = sunR, center = sunCenter)
+                drawSoftCloud(w * 0.72f, h * 0.56f, 0.92f, Color(0xFFF4F8FC), Color(0xFFB5C4D4))
+                drawSoftCloud(w * 0.26f, h * 0.22f, 0.55f, Color(0x88FFFFFF), Color(0x55B8C8D8))
+            }
+            "rain" -> {
+                drawSoftCloud(w * 0.78f, h * 0.30f, 0.96f, Color(0xFFD2DCE6), Color(0xFF7B8C9E))
+                drawSoftCloud(w * 0.55f, h * 0.26f, 0.70f, Color(0xBBE2EAF2), Color(0xFF6B7B8C))
+                for (i in 0 until 9) {
+                    val rx = w * (0.48f + i * 0.055f)
+                    val ry = h * (0.46f + (i % 3) * 0.14f)
+                    drawLine(
+                        color = Color(0xCC9AD6FF),
+                        start = Offset(rx, ry),
+                        end = Offset(rx - 6.dp.toPx(), ry + 13.dp.toPx()),
+                        strokeWidth = 1.6.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+            "snow" -> {
+                drawSoftCloud(w * 0.78f, h * 0.28f, 0.90f, Color(0xFFEAF2FA), Color(0xFF9FB2C6))
+                for (i in 0 until 10) {
+                    val sx = w * (0.42f + i * 0.055f)
+                    val sy = h * (0.45f + ((i * 37) % 45) / 100f)
+                    drawCircle(color = Color(0xEEFFFFFF), radius = 2.4.dp.toPx(), center = Offset(sx, sy))
+                }
+            }
+            "storm" -> {
+                drawSoftCloud(w * 0.76f, h * 0.28f, 1.0f, Color(0xFF9BA8B8), Color(0xFF475361))
+                val bolt = Path().apply {
+                    moveTo(w * 0.76f, h * 0.42f)
+                    lineTo(w * 0.70f, h * 0.62f)
+                    lineTo(w * 0.77f, h * 0.62f)
+                    lineTo(w * 0.69f, h * 0.88f)
+                    lineTo(w * 0.83f, h * 0.56f)
+                    lineTo(w * 0.75f, h * 0.56f)
+                    close()
+                }
+                drawPath(path = bolt, color = Color(0xFFFFD54F))
+                drawPath(path = bolt, color = Color(0xAAFFFFFF), style = Stroke(width = 1.dp.toPx()))
+            }
+            "fog" -> {
+                drawSoftCloud(w * 0.76f, h * 0.30f, 0.88f, Color(0xFFDDE5ED), Color(0xFF9AA8B5))
+                for (band in 0..2) {
+                    val y = h * (0.58f + band * 0.13f)
+                    drawLine(
+                        color = Color(0x88E4EEF8),
+                        start = Offset(w * 0.36f, y),
+                        end = Offset(w * 0.94f, y),
+                        strokeWidth = 3.5.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+            else -> {
+                drawSoftCloud(w * 0.80f, h * 0.34f, 0.98f, Color(0xFFF2F6FA), Color(0xFFA0B1C2))
+                drawSoftCloud(w * 0.56f, h * 0.26f, 0.68f, Color(0xCCE8F0F8), Color(0xFF8FA0B2))
+            }
+        }
+    }
 }
 
 @Composable
@@ -75,85 +281,132 @@ fun WeatherWidgetCard(
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
-    Column(
+    val iconKey = report?.iconKey ?: "partly"
+    val cardShape = RoundedCornerShape(5.dp)
+
+    Box(
         modifier = modifier
             .testTag("weather_widget_card")
-            .symbianGlossyTile(bucket = 1, shape = RoundedCornerShape(4.dp))
+            .clip(cardShape)
+            .symbianGlossyTile(bucket = 1, shape = cardShape)
+            .border(1.2.dp, Color(0xFF7B9AB8), cardShape)
             .clickable(onClick = { if (report != null) onOpenForecast() else onRefresh() })
-            .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = if (compact) 6.dp else 8.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        // Real atmospheric backdrop photo (old TouchWiz / HTC Sense style)
+        Image(
+            painter = painterResource(weatherBackdropRes(iconKey)),
+            contentDescription = report?.condition ?: "Погода",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.matchParentSize()
+        )
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color(0xC908111D),
+                            Color(0x880B1726),
+                            Color(0x550C1B2E)
+                        )
+                    )
+                )
+        )
+        WeatherAtmosphereOverlay(
+            iconKey = iconKey,
+            modifier = Modifier.matchParentSize()
+        )
+        // Top Vista glass specular gloss
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(if (compact) 22.dp else 28.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.White.copy(alpha = 0.24f), Color.Transparent)
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = if (compact) 7.dp else 9.dp)
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    TouchWizFlipClockTempBadge(
+                        tempText = if (report != null) "${report.tempC}°" else if (isLoading) "…" else "--°",
+                        compact = compact
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = report?.cityName ?: selectedCity.name,
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = if (compact) 12.5.sp else 14.sp,
+                                shadow = Shadow(Color.Black, Offset(0f, 1.2f), 3f)
+                            ),
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${weatherSymbol(iconKey)} ${report?.condition ?: if (isLoading) "Обновление…" else "Нажмите для прогноза"}",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 10.5.sp,
+                                shadow = Shadow(Color.Black, Offset(0f, 1f), 2f)
+                            ),
+                            color = Color(0xFFE3F2FD),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("weather_city_picker_btn")
+                            .vistaAeroButton(isPrimary = false, isActive = false)
+                            .clickable(onClick = onOpenCityPicker),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("⌖", color = Color.White, fontSize = 12.sp)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("weather_refresh_btn")
+                            .vistaAeroButton(isPrimary = false, isActive = isLoading)
+                            .clickable(onClick = onRefresh),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("↻", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            }
+            if (report != null) {
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = weatherSymbol(report?.iconKey ?: "partly"),
-                    fontSize = if (compact) 18.sp else 22.sp
+                    text = "Ощущ. ${report.feelsLikeC}° • 💨 ${report.windKmh} км/ч • 💧 ${report.humidityPercent}% • ${report.sources.size} ист.",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.5.sp,
+                        shadow = Shadow(Color.Black, Offset(0f, 1f), 2f)
+                    ),
+                    color = Color(0xFFD6E8FA),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.width(6.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (report != null) "${report.tempC}°C" else if (isLoading) "…" else "--°",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = if (compact) 14.sp else 16.sp
-                        ),
-                        color = TextPrimary,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = report?.cityName ?: selectedCity.name,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = theme.accent,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .testTag("weather_city_picker_btn")
-                        .vistaAeroButton(isPrimary = false, isActive = false)
-                        .clickable(onClick = onOpenCityPicker),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("⌖", color = TextPrimary, fontSize = 12.sp)
-                }
-                Box(
-                    modifier = Modifier
-                        .size(26.dp)
-                        .testTag("weather_refresh_btn")
-                        .vistaAeroButton(isPrimary = false, isActive = isLoading)
-                        .clickable(onClick = onRefresh),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("↻", color = TextPrimary, fontSize = 12.sp)
-                }
-            }
-        }
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = report?.condition ?: if (isLoading) "Обновление…" else "Нажмите для прогноза",
-            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-            color = TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (report != null) {
-            Text(
-                text = "💨 ${report.windKmh} км/ч  •  💧 ${report.humidityPercent}%  •  ${report.sources.size} ист.",
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                color = TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -170,6 +423,7 @@ fun WeatherForecastDialog(
     onToggleHomeTile: () -> Unit = {}
 ) {
     val theme = LocalVistaTheme.current
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -178,32 +432,87 @@ fun WeatherForecastDialog(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
                 .widthIn(max = 520.dp)
-                .heightIn(max = 620.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(6.dp))
-                .padding(12.dp)
+                .padding(10.dp)
                 .testTag("weather_forecast_dialog")
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            // HTC Sense / Samsung TouchWiz Skeuomorphic Hero Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(5.dp))
+                    .border(1.dp, Color(0xFF7FA6CC), RoundedCornerShape(5.dp))
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Image(
+                    painter = painterResource(weatherBackdropRes(report.iconKey)),
+                    contentDescription = report.condition,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xB809131F), Color(0xD608101A))
+                            )
+                        )
+                )
+                WeatherAtmosphereOverlay(
+                    iconKey = report.iconKey,
+                    modifier = Modifier.matchParentSize()
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(11.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            TouchWizFlipClockTempBadge(tempText = "${report.tempC}°C", compact = false)
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${weatherSymbol(report.iconKey)} ${report.cityName}",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        shadow = Shadow(Color.Black, Offset(0f, 1.5f), 3f)
+                                    ),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${report.condition} • Ощущ. ${report.feelsLikeC}°C",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        shadow = Shadow(Color.Black, Offset(0f, 1f), 2f)
+                                    ),
+                                    color = Color(0xFFE0F1FF),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            VistaButton(text = "Город", onClick = onPickCity)
+                            VistaButton(text = "↻", onClick = onRefresh)
+                            VistaButton(text = "✕", onClick = onDismiss)
+                        }
+                    }
                     Text(
-                        text = "${weatherSymbol(report.iconKey)} ${report.cityName} — ${report.tempC}°C",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "${report.condition} • Ощущается ${report.feelsLikeC}°C • Консенсус ${report.sources.size} источников",
+                        text = "💨 Ветер ${report.windKmh} км/ч  •  💧 Влажность ${report.humidityPercent}%  •  Консенсус ${report.sources.size} источников",
                         style = MaterialTheme.typography.labelSmall,
-                        color = theme.accent
+                        color = MusicSourceAmber
                     )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    VistaButton(text = "Город", onClick = onPickCity)
-                    VistaButton(text = "↻", onClick = onRefresh)
-                    VistaButton(text = "✕", onClick = onDismiss)
                 }
             }
 
@@ -287,7 +596,8 @@ fun WeatherForecastDialog(
                                 text = if (showInHubOther) "✓ В Хаб → Прочее" else "В Хаб → Прочее",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (showInHubOther) Color.White else TextPrimary,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Box(
@@ -302,7 +612,8 @@ fun WeatherForecastDialog(
                                 text = if (showInHomeTile) "✓ На Главном экране" else "На Главном экране",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (showInHomeTile) Color.White else TextPrimary,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -389,6 +700,7 @@ fun WeatherCityPickerDialog(
         )
     }
 
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -396,8 +708,8 @@ fun WeatherCityPickerDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .widthIn(max = 440.dp)
-                .heightIn(max = 520.dp)
+                .widthIn(max = 480.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(6.dp))
                 .padding(12.dp)
         ) {

@@ -27,4 +27,28 @@ class KeyboardSearchMatcherTest {
         assertEquals('А', AppsRepository.computeInitialChar("Авито"))
         assertEquals('Е', AppsRepository.computeInitialChar("Ёлка"))
     }
+
+    @Test
+    fun cachedMatchesRemainConsistentAcrossRepeatedQueriesAndTranslit() {
+        val candidates = listOf(
+            "Telegram Desktop",
+            "Яндекс Музыка",
+            "Poweramp Player",
+            "VLC Media Player",
+            "Киберпортал_2026"
+        )
+        val queries = listOf("teleg", "вуыл", "zyltrc", "ьгя", "vlc", "kiber", "xyz_miss")
+        repeat(3) {
+            for (q in queries) {
+                val results = candidates.filter { KeyboardSearchMatcher.matches(it, q) }
+                when (q) {
+                    "teleg" -> assertEquals(listOf("Telegram Desktop"), results)
+                    "zyltrc", "ьгя" -> assertEquals(listOf("Яндекс Музыка"), results)
+                    "vlc" -> assertEquals(listOf("VLC Media Player"), results)
+                    "kiber" -> assertEquals(listOf("Киберпортал_2026"), results)
+                    "xyz_miss" -> assertTrue(results.isEmpty())
+                }
+            }
+        }
+    }
 }

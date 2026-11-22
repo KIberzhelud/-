@@ -1,17 +1,24 @@
 package com.example.data
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
+import android.media.MediaScannerConnection
 import android.media.browse.MediaBrowser
 import android.media.session.MediaController
 import android.media.session.MediaSession
@@ -27,7 +34,10 @@ import android.provider.Settings
 import android.view.KeyEvent
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.example.MainActivity
+import com.example.R
 import com.example.model.AppEntry
 import com.example.model.LocalAudioTrack
 import com.example.model.MediaBrowserTrack
@@ -163,6 +173,18 @@ class MediaControlRepository(private val context: Context) {
     private var localRepeatMode: RepeatMode = RepeatMode.OFF
     private var localShuffleEnabled: Boolean = false
 
+    private var localPlatformSession: MediaSession? = null
+    private var focusRequest: AudioFocusRequest? = null
+    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                pauseLocalPlayerFromExternalSignal()
+            }
+        }
+    }
+
     val dspController = AudioDspController()
 
     private var activeBrowser: MediaBrowser? = null
@@ -205,6 +227,8 @@ class MediaControlRepository(private val context: Context) {
         clearControllers()
         disconnectMediaBrowser()
         releaseLocalPlayer()
+        releaseLocalPlatformSession()
+        abandonLocalAudioFocus()
         dspController.releaseEffects()
         sessionsListener?.let { listener ->
             runCatching { mediaSessionManager?.removeOnActiveSessionsChangedListener(listener) }
@@ -406,8 +430,191 @@ class MediaControlRepository(private val context: Context) {
         }
     }
 
+    private fun requestLocalAudioFocusAndPauseOthers() {
+        // Pause any active external MediaControllers so only 1 audio source plays at once
+        controllers.values.forEach { ctrl ->
+            if (ctrl.packageName != context.packageName &&
+                ctrl.playbackState?.state == PlaybackState.STATE_PLAYING
+            ) {
+                MediaGuardRuntime.recordUserPause(ctrl.packageName)
+                runCatching { ctrl.transportControls.pause() }
+            }
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val req = focusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener(audioFocusListener)
+                    .build()
+                    .also { focusRequest = it }
+                audioManager.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(
+                    audioFocusListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+                )
+            }
+        }
+    }
+
+    private fun abandonLocalAudioFocus() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(audioFocusListener)
+            }
+        }
+    }
+
+    private fun pauseLocalPlayerFromExternalSignal() {
+        val mp = localPlayer
+        if (mp != null && localPrepared && localIsPlaying) {
+            runCatching {
+                localPositionMs = mp.currentPosition.toLong().coerceAtLeast(0L)
+                localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
+                if (mp.isPlaying) mp.pause()
+            }
+            localIsPlaying = false
+            syncLocalPlatformSessionAndNotification()
+            rebuildSessionsSnapshot()
+        }
+    }
+
+    private fun ensureLocalPlatformSession(): MediaSession? {
+        localPlatformSession?.let { return it }
+        return runCatching {
+            MediaSession(context, "KeyDeckLocalPlayer").apply {
+                setCallback(object : MediaSession.Callback() {
+                    override fun onPlay() {
+                        if (isLocalSessionActive() && !localIsPlaying) togglePlayPause()
+                        else currentLocalTrack?.let { playLocalTrack(it) }
+                    }
+                    override fun onPause() {
+                        if (localIsPlaying) pauseLocalPlayerFromExternalSignal()
+                    }
+                    override fun onSkipToNext() {
+                        skipNext()
+                    }
+                    override fun onSkipToPrevious() {
+                        skipPrevious()
+                    }
+                    override fun onSeekTo(pos: Long) {
+                        seekTo(pos)
+                    }
+                    override fun onStop() {
+                        stopPlayback()
+                    }
+                })
+                isActive = true
+            }.also { localPlatformSession = it }
+        }.getOrNull()
+    }
+
+    private fun releaseLocalPlatformSession() {
+        runCatching {
+            localPlatformSession?.isActive = false
+            localPlatformSession?.release()
+        }
+        localPlatformSession = null
+        cancelLocalMediaNotification()
+    }
+
+    private fun syncLocalPlatformSessionAndNotification() {
+        val track = currentLocalTrack
+        if (track == null) {
+            releaseLocalPlatformSession()
+            return
+        }
+        val session = ensureLocalPlatformSession() ?: return
+        val curPos = if (localPrepared && localPlayer != null) {
+            runCatching { localPlayer?.currentPosition?.toLong()?.coerceAtLeast(0L) }.getOrNull() ?: localPositionMs
+        } else {
+            localPositionMs
+        }
+        val dur = localDurationMs.coerceAtLeast(track.durationMs)
+        val actions = PlaybackState.ACTION_PLAY or
+            PlaybackState.ACTION_PAUSE or
+            PlaybackState.ACTION_PLAY_PAUSE or
+            PlaybackState.ACTION_SKIP_TO_NEXT or
+            PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackState.ACTION_SEEK_TO or
+            PlaybackState.ACTION_STOP
+
+        val pbState = PlaybackState.Builder()
+            .setActions(actions)
+            .setState(
+                if (localIsPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                curPos,
+                if (localIsPlaying) localPlaybackSpeed else 0f,
+                SystemClock.elapsedRealtime()
+            )
+            .build()
+
+        val meta = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist.ifBlank { "KeyDeck Poweramp" })
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album.ifBlank { track.formatLabel })
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, dur)
+            .build()
+
+        runCatching {
+            session.setMetadata(meta)
+            session.setPlaybackState(pbState)
+            session.isActive = true
+        }
+        postLocalMediaNotification(session, track)
+    }
+
+    private fun postLocalMediaNotification(session: MediaSession, track: LocalAudioTrack) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val ch = NotificationChannel(
+                    LOCAL_MEDIA_CHANNEL_ID,
+                    "KeyDeck • Локальный плеер",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply { setShowBadge(false) }
+                nm.createNotificationChannel(ch)
+            }
+            val openIntent = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val style = Notification.MediaStyle()
+                .setMediaSession(session.sessionToken)
+            val notif = Notification.Builder(context, LOCAL_MEDIA_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_symbian_music)
+                .setContentTitle(track.title)
+                .setContentText(track.artist.ifBlank { track.formatLabel })
+                .setContentIntent(openIntent)
+                .setOngoing(localIsPlaying)
+                .setStyle(style)
+                .build()
+            nm.notify(LOCAL_MEDIA_NOTIF_ID, notif)
+        }
+    }
+
+    private fun cancelLocalMediaNotification() {
+        runCatching {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return@runCatching
+            nm.cancel(LOCAL_MEDIA_NOTIF_ID)
+        }
+    }
+
     fun playLocalTrack(track: LocalAudioTrack) {
         runCatching {
+            requestLocalAudioFocusAndPauseOthers()
             localPlayer?.release()
             localPlayer = null
             localPrepared = false
@@ -433,6 +640,7 @@ class MediaControlRepository(private val context: Context) {
                     runCatching { dspController.attachAudioSession(mp.audioSessionId) }
                     applyLocalPlaybackSpeed(mp, localPlaybackSpeed)
                     mp.start()
+                    syncLocalPlatformSessionAndNotification()
                     rebuildSessionsSnapshot(forceSelectId = LOCAL_SESSION_ID)
                 }
                 setOnCompletionListener {
@@ -444,6 +652,7 @@ class MediaControlRepository(private val context: Context) {
                             val tracks = _localTracks.value
                             if (tracks.isEmpty()) {
                                 localIsPlaying = false
+                                syncLocalPlatformSessionAndNotification()
                                 rebuildSessionsSnapshot()
                             } else if (localShuffleEnabled && tracks.size > 1) {
                                 val next = tracks.filter { it.id != track.id }.randomOrNull() ?: tracks.first()
@@ -467,6 +676,7 @@ class MediaControlRepository(private val context: Context) {
                                     localIsPlaying = false
                                     localPositionMs = localDurationMs
                                     localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
+                                    syncLocalPlatformSessionAndNotification()
                                     rebuildSessionsSnapshot()
                                 }
                             }
@@ -481,6 +691,7 @@ class MediaControlRepository(private val context: Context) {
             localPositionMs = 0L
             localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
             localIsPlaying = true
+            syncLocalPlatformSessionAndNotification()
             rebuildSessionsSnapshot(forceSelectId = LOCAL_SESSION_ID)
         }
     }
@@ -534,11 +745,70 @@ class MediaControlRepository(private val context: Context) {
         localIsPlaying = false
     }
 
+    suspend fun renameLocalTrack(track: LocalAudioTrack, newTitle: String): LocalAudioTrack? = withContext(Dispatchers.IO) {
+        val cleanedTitle = newTitle.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        if (cleanedTitle.isEmpty()) return@withContext null
+
+        var updatedTrack = track.copy(title = cleanedTitle)
+        val rawPath = track.filePath
+        if (!rawPath.isNullOrBlank()) {
+            val oldFile = File(rawPath)
+            if (oldFile.exists() && oldFile.canRead()) {
+                val ext = oldFile.extension
+                val newFileName = if (ext.isNotBlank()) "$cleanedTitle.$ext" else cleanedTitle
+                val newFile = File(oldFile.parentFile, newFileName)
+                if (newFile.absolutePath == oldFile.absolutePath) {
+                    return@withContext track.copy(title = cleanedTitle)
+                }
+                val renamed = if (!newFile.exists()) runCatching { oldFile.renameTo(newFile) }.getOrDefault(false) else false
+                if (renamed) {
+                    val oldLrc = File(oldFile.parentFile, "${oldFile.nameWithoutExtension}.lrc")
+                    if (oldLrc.exists()) {
+                        runCatching { oldLrc.renameTo(File(oldFile.parentFile, "${newFile.nameWithoutExtension}.lrc")) }
+                    }
+                    runCatching {
+                        MediaScannerConnection.scanFile(
+                            context,
+                            arrayOf(oldFile.absolutePath, newFile.absolutePath),
+                            null,
+                            null
+                        )
+                    }
+                    updatedTrack = track.copy(
+                        id = if (track.id.startsWith("fs:")) "fs:${newFile.absolutePath}" else track.id,
+                        title = cleanedTitle,
+                        uriString = Uri.fromFile(newFile).toString(),
+                        filePath = newFile.absolutePath,
+                        displayPath = newFile.absolutePath
+                    )
+                }
+            }
+        } else if (track.uriString.startsWith("content://")) {
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.TITLE, cleanedTitle)
+            }
+            val rows = runCatching { context.contentResolver.update(Uri.parse(track.uriString), values, null, null) }.getOrDefault(0)
+            if (rows <= 0) return@withContext null
+        }
+
+        _localTracks.update { list ->
+            list.map { if (it.id == track.id) updatedTrack else it }
+        }
+        if (currentLocalTrack?.id == track.id) {
+            currentLocalTrack = updatedTrack
+            syncLocalPlatformSessionAndNotification()
+        }
+        rebuildSessionsSnapshot()
+        updatedTrack
+    }
+
     suspend fun deleteLocalTrack(track: LocalAudioTrack): Boolean = withContext(Dispatchers.IO) {
         if (currentLocalTrack?.id == track.id) {
             withContext(Dispatchers.Main.immediate) {
                 releaseLocalPlayer()
                 currentLocalTrack = null
+                releaseLocalPlatformSession()
+                abandonLocalAudioFocus()
             }
         }
 
@@ -653,11 +923,14 @@ class MediaControlRepository(private val context: Context) {
                     if (mp.isPlaying) {
                         mp.pause()
                         localIsPlaying = false
+                        abandonLocalAudioFocus()
                     } else {
+                        requestLocalAudioFocusAndPauseOthers()
                         mp.start()
                         localIsPlaying = true
                     }
                 }
+                syncLocalPlatformSessionAndNotification()
                 rebuildSessionsSnapshot(forceSelectId = LOCAL_SESSION_ID)
                 return
             }
@@ -669,6 +942,7 @@ class MediaControlRepository(private val context: Context) {
                 MediaGuardRuntime.recordUserPause(controller.packageName)
                 controller.transportControls.pause()
             } else {
+                pauseLocalPlayerFromExternalSignal()
                 MediaGuardRuntime.recordUserPlay(controller.packageName)
                 controller.transportControls.play()
             }
@@ -742,6 +1016,8 @@ class MediaControlRepository(private val context: Context) {
         if (isLocalSessionActive()) {
             releaseLocalPlayer()
             currentLocalTrack = null
+            releaseLocalPlatformSession()
+            abandonLocalAudioFocus()
             rebuildSessionsSnapshot()
             return
         }
@@ -763,6 +1039,7 @@ class MediaControlRepository(private val context: Context) {
                     mp.seekTo(target.toInt())
                     localPositionMs = target
                     localPositionUpdatedAtMs = SystemClock.elapsedRealtime()
+                    syncLocalPlatformSessionAndNotification()
                     rebuildSessionsSnapshot(forceSelectId = LOCAL_SESSION_ID)
                 }
                 return
@@ -1347,11 +1624,17 @@ class MediaControlRepository(private val context: Context) {
     private fun bindControllers(newList: List<MediaController>) {
         clearControllers()
         newList.forEach { controller ->
+            if (controller.packageName == context.packageName) return@forEach
             val id = controllerId(controller)
             controllers[id] = controller
             val callback = object : MediaController.Callback() {
                 override fun onPlaybackStateChanged(state: PlaybackState?) {
-                    state?.let { MediaGuardRuntime.onSessionPlaybackState(controller.packageName, it.state) }
+                    state?.let {
+                        MediaGuardRuntime.onSessionPlaybackState(controller.packageName, it.state)
+                        if (it.state == PlaybackState.STATE_PLAYING && localIsPlaying) {
+                            pauseLocalPlayerFromExternalSignal()
+                        }
+                    }
                     rebuildSessionsSnapshot()
                 }
 
@@ -1596,6 +1879,8 @@ class MediaControlRepository(private val context: Context) {
 
     companion object {
         const val LOCAL_SESSION_ID = "keydeck:local_player"
+        private const val LOCAL_MEDIA_CHANNEL_ID = "keydeck_local_player_media"
+        private const val LOCAL_MEDIA_NOTIF_ID = 4792
 
         fun selectPreferredSessionId(
             sessions: List<MediaSessionUi>,

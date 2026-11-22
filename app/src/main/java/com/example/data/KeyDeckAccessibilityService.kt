@@ -12,8 +12,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -33,10 +31,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
-import android.widget.SeekBar
 import android.widget.TextView
-import android.widget.Toast
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.MainActivity
 import com.example.ui.LockScreenActivity
@@ -52,10 +47,9 @@ import kotlin.math.abs
  * KeyDeck AccessibilityService:
  * 1. Tracks foreground window transitions for Auto-Close of one-time apps & BB10 Recents Previews.
  * 2. Captures scaled window thumbnails via API 30+ takeScreenshot() into AppPreviewCache.
- * 3. Intercepts System Notification Shade -> floating Vista Aero Shade Overlay (toggles, brightness, music, live notifs).
- * 4. Intercepts Screen-Off & Screen-On -> KeyDeck LockScreen immediately before unlock.
- * 5. Provides IME-aware invisible bottom gesture handle & full-height side-edge Back strips.
- * 6. Hosts a collapsible Docked Workspace Top Bar with Music/Search/Ctrl+V Paste/Workspace switcher.
+ * 3. Intercepts Screen-Off & Screen-On -> KeyDeck LockScreen immediately before unlock.
+ * 4. Provides IME-aware invisible bottom gesture handle & full-height side-edge Back strips.
+ * 5. Hosts a collapsible Docked Workspace Top Bar with Music/Search/Ctrl+V Paste/Workspace switcher.
  */
 class KeyDeckAccessibilityService : AccessibilityService() {
 
@@ -79,10 +73,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
 
         fun hideDockedWorkspaceBar() {
             getInstance()?.dismissWorkspaceBar()
-        }
-
-        fun showVistaShade() {
-            getInstance()?.showVistaShadeOverlay()
         }
 
         fun performGlobalPaste(): Boolean {
@@ -112,17 +102,14 @@ class KeyDeckAccessibilityService : AccessibilityService() {
     private var edgeGestureViewLeft: View? = null
     private var edgeGestureViewRight: View? = null
 
-    private var vistaShadeOverlayView: View? = null
     private var workspaceBarView: View? = null
     private var workspaceBarCollapsed = false
     private var currentWorkspaceLabel: String = "Рабочий стол"
     private var workspaceBarTickRunnable: Runnable? = null
-    private var isTorchOn = false
 
     private var currentForegroundPkg: String? = null
     private var pendingScreenshotRunnable: Runnable? = null
     private var screenReceiverRegistered = false
-    private var lastShadeInterceptAtMs = 0L
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -191,10 +178,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                 currentForegroundPkg = pkg
             }
         }
-
-        if (pkg == "com.android.systemui" && ShizukuRuntimeFlags.interceptShadeEnabled.get()) {
-            maybeInterceptSystemShade(currentWindows)
-        }
     }
 
     private fun isImeWindowVisible(currentWindows: List<AccessibilityWindowInfo>): Boolean {
@@ -204,85 +187,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
             win.getBoundsInScreen(rect)
             rect.height() > 40
         }
-    }
-
-    private fun maybeInterceptSystemShade(currentWindows: List<AccessibilityWindowInfo>) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastShadeInterceptAtMs < 650L) return
-
-        val screenH = resources.displayMetrics.heightPixels.coerceAtLeast(1)
-        val hasExpandedSysWindow = currentWindows.any { win ->
-            if (win.type != AccessibilityWindowInfo.TYPE_SYSTEM) return@any false
-            val rootPkg = runCatching { win.root?.packageName?.toString() }.getOrNull()
-            if (rootPkg != "com.android.systemui") return@any false
-            val bounds = android.graphics.Rect()
-            win.getBoundsInScreen(bounds)
-            bounds.height() > (screenH * 0.25f)
-        }
-
-        val root = runCatching { rootInActiveWindow }.getOrNull()
-        val hasShadeNode = if (root != null && root.packageName?.toString() == "com.android.systemui") {
-            containsShadeMarker(root, depth = 0)
-        } else {
-            false
-        }
-
-        if (!hasExpandedSysWindow && !hasShadeNode) return
-        lastShadeInterceptAtMs = now
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
-        } else {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }
-        serviceScope.launch {
-            shizukuBridge?.collapseSystemShadeViaShizuku()
-        }
-
-        mainHandler.postDelayed({
-            if (ShizukuBridge.hasOverlayPermission(this) || Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                showVistaShadeOverlay()
-            } else {
-                openLauncherHub()
-            }
-        }, 80L)
-    }
-
-    private fun openLauncherHub() {
-        runCatching {
-            val intent = Intent(this, MainActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                )
-                putExtra(EXTRA_OPEN_HUB, true)
-            }
-            startActivity(intent)
-        }
-    }
-
-    private fun containsShadeMarker(node: AccessibilityNodeInfo?, depth: Int): Boolean {
-        if (node == null || depth > 4) return false
-        val id = node.viewIdResourceName.orEmpty().lowercase()
-        val desc = node.contentDescription?.toString().orEmpty().lowercase()
-        val text = node.text?.toString().orEmpty().lowercase()
-        if (id.contains("notification_stack_scroller") ||
-            id.contains("qs_frame") ||
-            id.contains("quick_settings") ||
-            id.contains("notification_panel") ||
-            id.contains("qs_container") ||
-            id.contains("control_center") ||
-            desc.contains("notificationshade") ||
-            (text.contains("уведомления") && id.contains("systemui"))
-        ) {
-            return true
-        }
-        val count = node.childCount.coerceAtMost(10)
-        for (i in 0 until count) {
-            if (containsShadeMarker(node.getChild(i), depth + 1)) return true
-        }
-        return false
     }
 
     private fun launchLockScreenImmediately(dismissNonSecureKeyguard: Boolean) {
@@ -323,361 +227,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
             return true
         }
         return false
-    }
-
-    @SuppressLint("SetTextI18n")
-    fun showVistaShadeOverlay() {
-        mainHandler.post {
-            val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return@post
-            dismissVistaShadeOverlay()
-
-            val density = resources.displayMetrics.density
-            fun dp(v: Int): Int = (v * density).toInt()
-
-            val rootOverlay = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(Color.argb(185, 4, 8, 14))
-                setPadding(dp(12), getStatusBarHeightPx() + dp(8), dp(12), dp(16))
-            }
-
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.argb(245, 22, 34, 52), Color.argb(245, 11, 18, 28))
-                ).apply {
-                    cornerRadius = dp(8).toFloat()
-                    setStroke(dp(1), Color.argb(200, 96, 174, 240))
-                }
-                setPadding(dp(10), dp(10), dp(10), dp(10))
-            }
-
-            // Header bar
-            val header = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.rgb(42, 62, 88), Color.rgb(22, 33, 49))
-                ).apply { cornerRadius = dp(4).toFloat() }
-                setPadding(dp(10), dp(7), dp(8), dp(7))
-            }
-            val titleTv = TextView(this).apply {
-                text = "KEYDECK • ШТОРКА"
-                setTextColor(Color.rgb(168, 220, 255))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                paint.isFakeBoldText = true
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val hubBtn = createShadePillButton("Хаб", Color.rgb(36, 98, 168)) {
-                dismissVistaShadeOverlay()
-                openLauncherHub()
-            }
-            val closeBtn = createShadePillButton("✕", Color.rgb(92, 42, 52)) {
-                dismissVistaShadeOverlay()
-            }
-            header.addView(titleTv)
-            header.addView(hubBtn)
-            header.addView(spaceView(dp(6)))
-            header.addView(closeBtn)
-            card.addView(header)
-            card.addView(spaceView(dp(8)))
-
-            // Quick toggles row 1: Wi-Fi, Bluetooth, Torch
-            val row1 = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            row1.addView(createShadeTileButton("Wi-Fi", true) {
-                dismissVistaShadeOverlay()
-                runCatching {
-                    val intent = Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                }
-            })
-            row1.addView(spaceView(dp(6)))
-            row1.addView(createShadeTileButton("Bluetooth", true) {
-                dismissVistaShadeOverlay()
-                runCatching {
-                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                }
-            })
-            row1.addView(spaceView(dp(6)))
-            var torchBtn: TextView? = null
-            torchBtn = createShadeTileButton(if (isTorchOn) "Фонарь: ВКЛ" else "Фонарик", isTorchOn) {
-                val next = !isTorchOn
-                if (setFlashlightEnabled(next)) {
-                    isTorchOn = next
-                    torchBtn?.text = if (next) "Фонарь: ВКЛ" else "Фонарик"
-                    torchBtn?.background = shadeButtonDrawable(next)
-                }
-            }
-            row1.addView(torchBtn)
-            card.addView(row1)
-            card.addView(spaceView(dp(6)))
-
-            // Quick toggles row 2: Sound, Auto-Rotate, DND
-            val am = getSystemService(AUDIO_SERVICE) as? AudioManager
-            val ringerMuted = am?.ringerMode != AudioManager.RINGER_MODE_NORMAL
-            val row2 = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            var soundBtn: TextView? = null
-            soundBtn = createShadeTileButton(if (ringerMuted) "Звук: Тихо" else "Звук: ВКЛ", !ringerMuted) {
-                am?.let { audio ->
-                    val nextMode = if (audio.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                        AudioManager.RINGER_MODE_VIBRATE
-                    } else {
-                        AudioManager.RINGER_MODE_NORMAL
-                    }
-                    runCatching { audio.ringerMode = nextMode }
-                    val nowNormal = audio.ringerMode == AudioManager.RINGER_MODE_NORMAL
-                    soundBtn?.text = if (nowNormal) "Звук: ВКЛ" else "Звук: Тихо"
-                    soundBtn?.background = shadeButtonDrawable(nowNormal)
-                }
-            }
-            row2.addView(soundBtn)
-            row2.addView(spaceView(dp(6)))
-
-            val rotOn = runCatching {
-                Settings.System.getInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, 0) == 1
-            }.getOrDefault(false)
-            var rotBtn: TextView? = null
-            rotBtn = createShadeTileButton(if (rotOn) "Поворот: ВКЛ" else "Поворот: ВЫКЛ", rotOn) {
-                if (Settings.System.canWrite(this)) {
-                    val cur = Settings.System.getInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, 0) == 1
-                    val next = !cur
-                    Settings.System.putInt(contentResolver, Settings.System.ACCELEROMETER_ROTATION, if (next) 1 else 0)
-                    rotBtn?.text = if (next) "Поворот: ВКЛ" else "Поворот: ВЫКЛ"
-                    rotBtn?.background = shadeButtonDrawable(next)
-                } else {
-                    dismissVistaShadeOverlay()
-                    runCatching {
-                        startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    }
-                }
-            }
-            row2.addView(rotBtn)
-            row2.addView(spaceView(dp(6)))
-
-            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-            val dndActive = nm?.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
-            var dndBtn: TextView? = null
-            dndBtn = createShadeTileButton(if (dndActive) "Не бесп.: ВКЛ" else "Не бесп.", dndActive) {
-                if (nm != null && nm.isNotificationPolicyAccessGranted) {
-                    val curDnd = nm.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
-                    val nextFilter = if (curDnd) NotificationManager.INTERRUPTION_FILTER_ALL else NotificationManager.INTERRUPTION_FILTER_PRIORITY
-                    nm.setInterruptionFilter(nextFilter)
-                    val nowDnd = !curDnd
-                    dndBtn?.text = if (nowDnd) "Не бесп.: ВКЛ" else "Не бесп."
-                    dndBtn?.background = shadeButtonDrawable(nowDnd)
-                } else {
-                    dismissVistaShadeOverlay()
-                    runCatching {
-                        startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    }
-                }
-            }
-            row2.addView(dndBtn)
-            card.addView(row2)
-            card.addView(spaceView(dp(8)))
-
-            // Brightness bar
-            val curBright = runCatching {
-                Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 140)
-            }.getOrDefault(140).coerceIn(10, 255)
-            val brightRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = shadeInsetDrawable()
-                setPadding(dp(8), dp(5), dp(8), dp(5))
-            }
-            val brightLbl = TextView(this).apply {
-                text = "Яркость"
-                setTextColor(Color.rgb(185, 206, 232))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            }
-            val brightSeek = SeekBar(this).apply {
-                max = 245
-                progress = (curBright - 10).coerceIn(0, 245)
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (!fromUser) return
-                        if (Settings.System.canWrite(this@KeyDeckAccessibilityService)) {
-                            runCatching {
-                                Settings.System.putInt(
-                                    contentResolver,
-                                    Settings.System.SCREEN_BRIGHTNESS_MODE,
-                                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
-                                )
-                                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, progress + 10)
-                            }
-                        }
-                    }
-
-                    override fun onStartTrackingTouch(sb: SeekBar?) = Unit
-                    override fun onStopTrackingTouch(sb: SeekBar?) {
-                        if (!Settings.System.canWrite(this@KeyDeckAccessibilityService)) {
-                            Toast.makeText(
-                                this@KeyDeckAccessibilityService,
-                                "Разрешите изменение системных настроек для яркости",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    }
-                })
-            }
-            brightRow.addView(brightLbl)
-            brightRow.addView(brightSeek)
-            card.addView(brightRow)
-            card.addView(spaceView(dp(8)))
-
-            // Live music transport strip
-            val activeSession = mediaRepo?.mediaState?.value?.activeSession
-            val musicBox = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = shadeInsetDrawable()
-                setPadding(dp(8), dp(6), dp(8), dp(6))
-            }
-            val trackTv = TextView(this).apply {
-                text = if (activeSession != null) {
-                    "♫ ${activeSession.title} — ${activeSession.artist.ifBlank { activeSession.appLabel }}"
-                } else {
-                    "♫ Плеер не активен"
-                }
-                setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            musicBox.addView(trackTv)
-            musicBox.addView(createShadePillButton("⏮", Color.rgb(38, 52, 72)) {
-                mediaRepo?.skipPrevious() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
-            })
-            musicBox.addView(spaceView(dp(4)))
-            musicBox.addView(createShadePillButton(if (activeSession?.isPlaying == true) "⏸" else "▶", Color.rgb(36, 102, 174)) {
-                mediaRepo?.togglePlayPause() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
-            })
-            musicBox.addView(spaceView(dp(4)))
-            musicBox.addView(createShadePillButton("⏭", Color.rgb(38, 52, 72)) {
-                mediaRepo?.skipNext() ?: dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
-            })
-            card.addView(musicBox)
-            card.addView(spaceView(dp(8)))
-
-            // Notifications list + Clear All
-            val notifHeader = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val notifs = NotificationHubRepository.notifications.value
-            val notifCountTv = TextView(this).apply {
-                text = "УВЕДОМЛЕНИЯ (${notifs.size})"
-                setTextColor(Color.rgb(142, 198, 250))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
-                paint.isFakeBoldText = true
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val clearAllBtn = createShadePillButton("Очистить всё", Color.rgb(66, 42, 48)) {
-                NotificationHubRepository.clearAllNotifications()
-                dismissVistaShadeOverlay()
-            }
-            notifHeader.addView(notifCountTv)
-            if (notifs.isNotEmpty()) notifHeader.addView(clearAllBtn)
-            card.addView(notifHeader)
-            card.addView(spaceView(dp(4)))
-
-            val scroll = ScrollView(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    (resources.displayMetrics.heightPixels * 0.36f).toInt()
-                )
-            }
-            val listCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            if (notifs.isEmpty()) {
-                listCol.addView(
-                    TextView(this).apply {
-                        text = "Нет активных уведомлений"
-                        setTextColor(Color.rgb(150, 170, 194))
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                        setPadding(dp(8), dp(14), dp(8), dp(14))
-                    }
-                )
-            } else {
-                notifs.take(15).forEach { item ->
-                    val row = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        background = shadeInsetDrawable()
-                        setPadding(dp(8), dp(7), dp(8), dp(7))
-                    }
-                    val textCol = LinearLayout(this).apply {
-                        orientation = LinearLayout.VERTICAL
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    }
-                    textCol.addView(TextView(this).apply {
-                        text = "${item.appName} • ${item.title} (${item.timeFormatted})"
-                        setTextColor(Color.rgb(122, 200, 255))
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                        paint.isFakeBoldText = true
-                        maxLines = 1
-                        ellipsize = TextUtils.TruncateAt.END
-                    })
-                    textCol.addView(TextView(this).apply {
-                        text = item.bigText.ifBlank { item.text }
-                        setTextColor(Color.WHITE)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-                        maxLines = 2
-                        ellipsize = TextUtils.TruncateAt.END
-                    })
-                    row.addView(textCol)
-                    row.addView(spaceView(dp(6)))
-                    row.addView(createShadePillButton("Откр", Color.rgb(34, 88, 152)) {
-                        dismissVistaShadeOverlay()
-                        NotificationHubRepository.openNotification(this@KeyDeckAccessibilityService, item.key)
-                    })
-                    row.addView(spaceView(dp(4)))
-                    row.addView(createShadePillButton("✕", Color.rgb(74, 40, 44)) {
-                        NotificationHubRepository.dismissNotification(item.key)
-                        listCol.removeView(row)
-                    })
-                    listCol.addView(row)
-                    listCol.addView(spaceView(dp(5)))
-                }
-            }
-            scroll.addView(listCol)
-            card.addView(scroll)
-
-            rootOverlay.addView(card)
-            rootOverlay.setOnClickListener { dismissVistaShadeOverlay() }
-
-            val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                overlayWindowType(),
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP
-            }
-            runCatching {
-                wm.addView(rootOverlay, params)
-                vistaShadeOverlayView = rootOverlay
-            }
-        }
-    }
-
-    fun dismissVistaShadeOverlay() {
-        val v = vistaShadeOverlayView ?: return
-        vistaShadeOverlayView = null
-        val wm = getSystemService(WINDOW_SERVICE) as? WindowManager ?: return
-        runCatching { wm.removeViewImmediate(v) }
     }
 
     @SuppressLint("SetTextI18n")
@@ -912,17 +461,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
         am.dispatchMediaKeyEvent(KeyEvent(ts, ts, KeyEvent.ACTION_UP, keyCode, 0))
     }
 
-    private fun setFlashlightEnabled(enabled: Boolean): Boolean {
-        val cm = getSystemService(CAMERA_SERVICE) as? CameraManager ?: return false
-        return runCatching {
-            val camId = cm.cameraIdList.firstOrNull { id ->
-                cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            } ?: return@runCatching false
-            cm.setTorchMode(camId, enabled)
-            true
-        }.getOrDefault(false)
-    }
-
     private fun getStatusBarHeightPx(): Int {
         val resId = resources.getIdentifier("status_bar_height", "dimen", "android")
         return if (resId > 0) resources.getDimensionPixelSize(resId) else (28 * resources.displayMetrics.density).toInt()
@@ -934,37 +472,11 @@ class KeyDeckAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun shadeButtonDrawable(active: Boolean): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            if (active) intArrayOf(Color.rgb(48, 128, 214), Color.rgb(24, 72, 138))
-            else intArrayOf(Color.rgb(42, 56, 76), Color.rgb(24, 34, 48))
-        ).apply {
-            cornerRadius = 5f * resources.displayMetrics.density
-            setStroke((1f * resources.displayMetrics.density).toInt(), Color.argb(170, 120, 185, 240))
-        }
-    }
-
     private fun shadeInsetDrawable(): GradientDrawable {
         return GradientDrawable().apply {
             setColor(Color.argb(215, 10, 16, 25))
             cornerRadius = 5f * resources.displayMetrics.density
             setStroke((1f * resources.displayMetrics.density).toInt(), Color.argb(120, 74, 118, 164))
-        }
-    }
-
-    private fun createShadeTileButton(label: String, active: Boolean, onClick: () -> Unit): TextView {
-        val d = resources.displayMetrics.density
-        return TextView(this).apply {
-            text = label
-            setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            background = shadeButtonDrawable(active)
-            setPadding((6 * d).toInt(), (10 * d).toInt(), (6 * d).toInt(), (10 * d).toInt())
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { onClick() }
         }
     }
 
@@ -1269,7 +781,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        dismissVistaShadeOverlay()
         dismissWorkspaceBar()
         (getSystemService(WINDOW_SERVICE) as? WindowManager)?.let { removeEdgeStrips(it) }
     }
@@ -1280,7 +791,6 @@ class KeyDeckAccessibilityService : AccessibilityService() {
             serviceRef = null
         }
         pendingScreenshotRunnable?.let { mainHandler.removeCallbacks(it) }
-        dismissVistaShadeOverlay()
         dismissWorkspaceBar()
         unregisterScreenReceiver()
         shizukuBridge?.stopObserving()

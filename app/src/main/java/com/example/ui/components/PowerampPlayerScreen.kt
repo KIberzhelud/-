@@ -19,6 +19,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -34,8 +35,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Equalizer
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Lyrics
@@ -98,6 +102,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -108,6 +113,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -138,10 +144,12 @@ import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.symbianGlossyTile
 import com.example.ui.theme.symbianMetallicBar
 import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.PI
 import kotlin.math.abs
@@ -213,11 +221,48 @@ fun PowerampPlayerScreen(
     onDeleteAlbum: (String) -> Unit,
     onDownloadMissingAlbumTrack: (SmartAlbum, AlbumExpectedTrack) -> Unit,
     onDownloadAllMissingAlbumTracks: (String) -> Unit,
+    onRenameLocalTrack: (LocalAudioTrack, String) -> Unit = { _, _ -> },
+    onToggleCaptureAutoSplit: () -> Unit = {},
+    onToggleCaptureSilentMute: () -> Unit = {},
+    applySafeInsets: Boolean = true,
     livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
     val active = mediaState.activeSession
+
+    var dismissArmedUntilMs by remember { mutableLongStateOf(0L) }
+    val isDismissArmed = dismissArmedUntilMs > 0L
+    LaunchedEffect(dismissArmedUntilMs) {
+        if (dismissArmedUntilMs > 0L) {
+            delay(1800L)
+            dismissArmedUntilMs = 0L
+        }
+    }
+
+    val swipeUpDismissModifier = Modifier.pointerInput(onClose) {
+        var dragAcc = 0f
+        detectVerticalDragGestures(
+            onDragStart = { dragAcc = 0f },
+            onVerticalDrag = { _, dragAmount -> dragAcc += dragAmount },
+            onDragEnd = {
+                if (dragAcc < -65f) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (dismissArmedUntilMs > now) {
+                        dismissArmedUntilMs = 0L
+                        onClose()
+                    } else {
+                        dismissArmedUntilMs = now + 1800L
+                    }
+                }
+                dragAcc = 0f
+            },
+            onDragCancel = { dragAcc = 0f }
+        )
+    }
+
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val isShortLandscapeScreen = isLandscape && screenHeightDp < 440
 
     Column(
         modifier = modifier
@@ -232,7 +277,8 @@ fun PowerampPlayerScreen(
                 )
             )
             .pointerInput(Unit) { detectTapGestures {} }
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .then(swipeUpDismissModifier)
+            .let { if (applySafeInsets) it.windowInsetsPadding(WindowInsets.safeDrawing) else it }
             .imePadding()
             .testTag("poweramp_full_player_screen")
     ) {
@@ -241,7 +287,8 @@ fun PowerampPlayerScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .symbianMetallicBar()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .then(swipeUpDismissModifier)
+                .padding(horizontal = 8.dp, vertical = if (isShortLandscapeScreen) 3.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -249,7 +296,7 @@ fun PowerampPlayerScreen(
                 modifier = Modifier
                     .vistaAeroButton()
                     .clickable(onClick = onClose)
-                    .padding(horizontal = 9.dp, vertical = 6.dp)
+                    .padding(horizontal = 9.dp, vertical = if (isShortLandscapeScreen) 4.dp else 6.dp)
                     .testTag("poweramp_close_button")
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -264,41 +311,65 @@ fun PowerampPlayerScreen(
                 }
             }
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "KEYDECK POWERAMP DSP",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 11.5.sp),
-                    color = theme.focusBorder,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val techLine = buildString {
-                    val fmt = active?.formatLabel?.ifBlank { null } ?: "AUDIO"
-                    append(fmt)
-                    if ((active?.sampleRateHz ?: 0) > 0) {
-                        append(" • ${"%.1f".format((active!!.sampleRateHz / 1000f))} kHz")
-                    }
-                    if ((active?.bitrateKbps ?: 0) > 0) {
-                        append(" • ${active!!.bitrateKbps} kbps")
-                    }
-                    if (equalizerState.enabled) {
-                        append(if (equalizerState.dspHardwareAttached) " • DSP EQ" else " • EQ")
-                    }
+            val techLine = buildString {
+                val fmt = active?.formatLabel?.ifBlank { null } ?: "AUDIO"
+                append(fmt)
+                if ((active?.sampleRateHz ?: 0) > 0) {
+                    append(" • ${"%.1f".format((active!!.sampleRateHz / 1000f))} kHz")
                 }
-                Text(
-                    text = techLine,
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                    color = MusicSourceAmber,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if ((active?.bitrateKbps ?: 0) > 0) {
+                    append(" • ${active!!.bitrateKbps} kbps")
+                }
+                if (equalizerState.enabled) {
+                    append(if (equalizerState.dspHardwareAttached) " • DSP EQ" else " • EQ")
+                }
+            }
+            if (isShortLandscapeScreen) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "KEYDECK POWERAMP DSP",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                        color = theme.focusBorder,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = techLine,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                        color = MusicSourceAmber,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+            } else {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "KEYDECK POWERAMP DSP",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 11.5.sp),
+                        color = theme.focusBorder,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = techLine,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                        color = MusicSourceAmber,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             Box(
                 modifier = Modifier
                     .vistaAeroButton(isPrimary = sourceSelectionMode == SourceSelectionMode.PICK, isActive = sourceSelectionMode == SourceSelectionMode.PICK)
                     .clickable(onClick = onToggleSourceMode)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp, vertical = if (isShortLandscapeScreen) 4.dp else 6.dp)
                     .testTag("poweramp_source_mode_toggle")
             ) {
                 Text(
@@ -310,67 +381,142 @@ fun PowerampPlayerScreen(
             }
         }
 
-        // Active Stream Audio Capture Banner
-        if (audioCaptureState.isCapturing) {
+        if (isDismissArmed) {
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(theme.accent.copy(alpha = 0.22f))
+                    .border(1.dp, theme.focusBorder.copy(alpha = 0.7f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .testTag("poweramp_swipe_dismiss_hint"),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "▲ Свайпните вверх ещё раз, чтобы свернуть плеер",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                    color = Color.White,
+                    maxLines = 1
+                )
+            }
+        }
+
+        // Active Stream Audio Capture Banner + Progress % + Auto-Discard Notice
+        if (audioCaptureState.isCapturing) {
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0xFF3E1218))
                     .border(1.dp, CallMissedRed)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .clip(CircleShape)
+                                .background(CallMissedRed)
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Захват: ${audioCaptureState.targetTitle}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (audioCaptureState.silentMuteMode) {
+                                    Text(
+                                        text = "🔇 Тихий",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                                        color = MusicSourceAmber
+                                    )
+                                }
+                            }
+                            val kb = audioCaptureState.bytesWritten / 1024L
+                            val pctLabel = if (audioCaptureState.expectedDurationMs > 0L) "${audioCaptureState.progressPercent}% • " else ""
+                            val filesLabel = if (audioCaptureState.capturedFilesCount > 0) " • Файлов: ${audioCaptureState.capturedFilesCount}" else ""
+                            Text(
+                                text = "$pctLabel${audioCaptureState.elapsedSec} сек • $kb КБ WAV$filesLabel",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                color = MusicSourceAmber
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
-                            .clip(CircleShape)
-                            .background(CallMissedRed)
-                    )
-                    Spacer(Modifier.width(7.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Захват потока: ${audioCaptureState.targetTitle}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val kb = audioCaptureState.bytesWritten / 1024L
-                        Text(
-                            text = "${audioCaptureState.elapsedSec} сек • $kb КБ WAV",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
-                            color = MusicSourceAmber
-                        )
+                            .vistaAeroButton(isPrimary = true)
+                            .clickable(onClick = onStopAudioCapture)
+                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                            .testTag("poweramp_stop_capture_button")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Stop, contentDescription = "Стоп", tint = Color.White, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Стоп WAV", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+                        }
                     }
                 }
                 Box(
                     modifier = Modifier
-                        .vistaAeroButton(isPrimary = true)
-                        .clickable(onClick = onStopAudioCapture)
-                        .padding(horizontal = 9.dp, vertical = 5.dp)
-                        .testTag("poweramp_stop_capture_button")
+                        .fillMaxWidth()
+                        .height(5.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .testTag("poweramp_capture_progress_bar")
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Stop, contentDescription = "Стоп", tint = Color.White, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Стоп WAV", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+                    val frac = if (audioCaptureState.expectedDurationMs > 0L) {
+                        (audioCaptureState.progressPercent / 100f).coerceIn(0.03f, 1f)
+                    } else {
+                        ((audioCaptureState.elapsedSec % 15) / 15f).coerceIn(0.1f, 1f)
                     }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(frac)
+                            .background(MusicSourceAmber)
+                    )
                 }
+            }
+        } else if (!audioCaptureState.discardReason.isNullOrBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF3A2410))
+                    .border(1.dp, MusicSourceAmber.copy(alpha = 0.7f))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                    .testTag("poweramp_capture_discard_banner"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = audioCaptureState.discardReason,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                    color = MusicSourceAmber,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
 
-        // 2. Poweramp 5-Tab Bar
+        // 2. Poweramp 6-Tab Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(theme.surface.copy(alpha = 0.94f))
-                .padding(horizontal = 6.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(horizontal = 5.dp, vertical = if (isShortLandscapeScreen) 3.dp else 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
             PowerampTab.entries.forEach { tab ->
                 val selected = activeTab == tab
@@ -380,6 +526,7 @@ fun PowerampPlayerScreen(
                     PowerampTab.LYRICS -> Icons.Rounded.Lyrics
                     PowerampTab.SEARCH -> Icons.Rounded.Search
                     PowerampTab.ALBUMS -> Icons.Rounded.Album
+                    PowerampTab.LIBRARY -> Icons.Rounded.FolderOpen
                 }
                 val tag = "poweramp_tab_${tab.name.lowercase()}"
                 Row(
@@ -387,7 +534,7 @@ fun PowerampPlayerScreen(
                         .weight(1f)
                         .vistaAeroButton(isPrimary = selected, isActive = selected)
                         .clickable { onSelectTab(tab) }
-                        .padding(vertical = 7.dp, horizontal = 4.dp)
+                        .padding(vertical = if (isShortLandscapeScreen) 3.dp else if (isLandscape) 5.dp else 7.dp, horizontal = 2.dp)
                         .testTag(tag),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
@@ -396,13 +543,13 @@ fun PowerampPlayerScreen(
                         imageVector = icon,
                         contentDescription = tab.title,
                         tint = if (selected) Color.White else theme.accent,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(13.dp)
                     )
-                    Spacer(Modifier.width(3.dp))
+                    Spacer(Modifier.width(2.dp))
                     Text(
                         text = tab.title,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.5.sp,
+                            fontSize = 9.5.sp,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                         ),
                         color = if (selected) Color.White else TextSecondary,
@@ -456,6 +603,7 @@ fun PowerampPlayerScreen(
 
                 PowerampTab.EQUALIZER -> PowerampEqualizerTab(
                     equalizerState = equalizerState,
+                    isLandscape = isLandscape,
                     onSetEnabled = onSetEqualizerEnabled,
                     onApplyPreset = onApplyEqualizerPreset,
                     onSetBand = onSetEqualizerBand,
@@ -470,6 +618,7 @@ fun PowerampPlayerScreen(
                     livePositionFlow = livePositionFlow,
                     lyrics = currentLyrics,
                     isFetching = isFetchingLyrics,
+                    isLandscape = isLandscape,
                     onSeekTo = onSeekTo,
                     onAutoFetch = onAutoFetchLyrics,
                     onSaveLyrics = onSaveLyrics,
@@ -481,6 +630,7 @@ fun PowerampPlayerScreen(
                     results = unifiedSearchResults,
                     isSearching = isSearchingOnline,
                     sourceSelectionMode = sourceSelectionMode,
+                    isLandscape = isLandscape,
                     onQueryChange = onSearchMusicEverywhere,
                     onToggleSourceMode = onToggleSourceMode,
                     onPlayOrPick = { res -> onUnifiedTrackAction(res, false) },
@@ -492,6 +642,7 @@ fun PowerampPlayerScreen(
                     albums = smartAlbums,
                     selectedAlbumId = selectedAlbumId,
                     localTracks = localTracks,
+                    isLandscape = isLandscape,
                     onSelectAlbum = onSelectAlbum,
                     onCreateAlbum = onCreateAlbum,
                     onRefreshAlbumOnline = onRefreshAlbumOnline,
@@ -507,6 +658,24 @@ fun PowerampPlayerScreen(
                     },
                     onDownloadMissingTrack = onDownloadMissingAlbumTrack,
                     onDownloadAllMissingTracks = onDownloadAllMissingAlbumTracks
+                )
+
+                PowerampTab.LIBRARY -> PowerampFilesLibraryTab(
+                    localTracks = localTracks,
+                    mediaState = mediaState,
+                    audioCaptureState = audioCaptureState,
+                    smartAlbums = smartAlbums,
+                    isLandscape = isLandscape,
+                    onPlayTrack = onPlayLocalTrack,
+                    onRenameTrack = onRenameLocalTrack,
+                    onDeleteTrack = onDeleteLocalTrack,
+                    onOpenLyricsForTrack = { lt ->
+                        onPlayLocalTrack(lt)
+                        onSelectTab(PowerampTab.LYRICS)
+                    },
+                    onAttachTrackToAlbum = onAttachLocalTracksToAlbum,
+                    onToggleCaptureAutoSplit = onToggleCaptureAutoSplit,
+                    onToggleCaptureSilentMute = onToggleCaptureSilentMute
                 )
             }
         }
@@ -696,12 +865,29 @@ private fun PowerampPlayerMainTab(
     val theme = LocalVistaTheme.current
     val active = mediaState.activeSession
     var quickListTfv by remember { mutableStateOf(TextFieldValue("")) }
-    val quickListQuery = quickListTfv.text
+    var quickListQuery by remember { mutableStateOf("") }
+    LaunchedEffect(quickListTfv.text) {
+        val next = quickListTfv.text
+        if (next.isEmpty()) {
+            quickListQuery = ""
+        } else {
+            delay(85L)
+            quickListQuery = next
+        }
+    }
     var pendingDeleteLocal by remember { mutableStateOf<LocalAudioTrack?>(null) }
     var confirmDeleteActive by remember { mutableStateOf(false) }
 
+    val queueItems = remember(active?.queue, quickListQuery) {
+        val raw = active?.queue.orEmpty()
+        if (quickListQuery.isBlank()) raw.take(15)
+        else raw.filter {
+            KeyboardSearchMatcher.matches(it.title, quickListQuery) ||
+                KeyboardSearchMatcher.matches(it.subtitle, quickListQuery)
+        }.take(15)
+    }
     val filteredLocal = remember(localTracks, quickListQuery) {
-        if (quickListQuery.isBlank()) localTracks.take(40)
+        if (quickListQuery.isBlank()) localTracks
         else localTracks.filter {
             KeyboardSearchMatcher.matches(it.title, quickListQuery) ||
                 KeyboardSearchMatcher.matches(it.artist, quickListQuery) ||
@@ -709,10 +895,10 @@ private fun PowerampPlayerMainTab(
         }
     }
 
-    val playerDeck: @Composable () -> Unit = {
+    val playerDeck: @Composable (showInlineLyrics: Boolean, compactDeck: Boolean) -> Unit = { showInlineLyrics, compactDeck ->
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(if (compactDeck) 5.dp else 8.dp)
         ) {
             // Session switcher pills if multiple sessions
             if (mediaState.sessions.size > 1) {
@@ -742,47 +928,72 @@ private fun PowerampPlayerMainTab(
             }
 
             // Cover Art + Track Info + Live Visualizer Bars
+            val screenHeightDp = LocalConfiguration.current.screenHeightDp
+            val isShortLandscape = compactDeck || (isLandscape && screenHeightDp < 440)
+            val coverSize = when {
+                compactDeck -> 60.dp
+                isShortLandscape -> 80.dp
+                isLandscape -> 96.dp
+                else -> 112.dp
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .vistaWindowFrame(RoundedCornerShape(6.dp))
-                    .padding(12.dp),
+                    .padding(if (compactDeck) 6.dp else if (isShortLandscape) 9.dp else 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(if (isShortLandscape) 8.dp else 12.dp)
                 ) {
                     AlbumArtThumb(
                         artwork = active?.artwork,
-                        size = if (isLandscape) 104.dp else 112.dp,
+                        size = coverSize,
                         coverStyle = coverStyle,
                         isPlaying = active?.isPlaying == true
                     )
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (compactDeck) 2.dp else 3.dp)) {
                         Text(
                             text = active?.title ?: "Трек не выбран",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 15.5.sp),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = if (compactDeck) 14.sp else 15.5.sp
+                            ),
                             color = TextPrimary,
                             maxLines = 1,
                             modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                         )
-                        Text(
-                            text = active?.artist?.ifBlank { active.appLabel } ?: "Запустите плеер или выберите трек ниже",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = theme.accent,
-                            maxLines = 1,
-                            modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                        )
-                        if (!active?.album.isNullOrBlank()) {
+                        val artistText = active?.artist?.ifBlank { active.appLabel } ?: "Запустите плеер или выберите трек ниже"
+                        val albumText = active?.album.orEmpty()
+                        if (compactDeck) {
+                            val combinedMeta = if (albumText.isNotBlank()) "$artistText • $albumText" else artistText
                             Text(
-                                text = active?.album.orEmpty(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
+                                text = combinedMeta,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = theme.accent,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                             )
+                        } else {
+                            Text(
+                                text = artistText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = theme.accent,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                            )
+                            if (albumText.isNotBlank()) {
+                                Text(
+                                    text = albumText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -814,8 +1025,11 @@ private fun PowerampPlayerMainTab(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-                PowerampSpectrumVisualizer(isPlaying = active?.isPlaying == true)
+                Spacer(Modifier.height(if (compactDeck) 3.dp else 8.dp))
+                PowerampSpectrumVisualizer(
+                    isPlaying = active?.isPlaying == true,
+                    barHeight = if (compactDeck) 12.dp else 22.dp
+                )
 
                 // Precision Vista Seekbar (isolated in leaf composable)
                 if (active != null && active.durationMs > 0L) {
@@ -824,69 +1038,83 @@ private fun PowerampPlayerMainTab(
                         durationMs = active.durationMs,
                         fallbackPositionMs = livePositionMs,
                         livePositionFlow = livePositionFlow,
+                        compact = compactDeck,
                         onSeekTo = onSeekTo
                     )
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(if (compactDeck) 4.dp else if (isShortLandscape) 6.dp else 8.dp))
 
-                // Main Transport Deck
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    DeckIconBtn(
-                        active = equalizerState.shuffleEnabled,
-                        onClick = onToggleShuffle,
-                        tag = "poweramp_shuffle_btn"
+                // Main Transport Deck — adapts when narrow so Repeat/Shuffle are never crushed
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val isTightDeck = maxWidth < 310.dp
+                    val sideBtnSize = if (isTightDeck) 34.dp else 36.dp
+                    val playW = if (isTightDeck) 48.dp else 58.dp
+                    val playH = if (isTightDeck) 38.dp else 42.dp
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(if (isTightDeck) 4.dp else 5.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Rounded.Shuffle, contentDescription = "Перемешать", tint = if (equalizerState.shuffleEnabled) Color.White else TextMuted, modifier = Modifier.size(16.dp))
-                    }
-                    DeckIconBtn(onClick = onSkipPrevious, tag = "poweramp_prev_btn") {
-                        Icon(Icons.Rounded.SkipPrevious, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(19.dp))
-                    }
-                    DeckIconBtn(onClick = { onSeekBy(-10_000L) }) {
-                        Icon(Icons.Rounded.Replay10, contentDescription = "-10с", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(width = 58.dp, height = 42.dp)
-                            .vistaAeroButton(isPrimary = true)
-                            .clickable(onClick = onTogglePlayPause)
-                            .testTag("poweramp_play_pause_btn"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = "Играть / Пауза",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    DeckIconBtn(onClick = { onSeekBy(10_000L) }) {
-                        Icon(Icons.Rounded.Forward10, contentDescription = "+10с", tint = TextSecondary, modifier = Modifier.size(18.dp))
-                    }
-                    DeckIconBtn(onClick = onSkipNext, tag = "poweramp_next_btn") {
-                        Icon(Icons.Rounded.SkipNext, contentDescription = "Вперёд", tint = TextPrimary, modifier = Modifier.size(19.dp))
-                    }
-                    DeckIconBtn(
-                        active = equalizerState.repeatMode != TrackRepeatMode.OFF,
-                        onClick = onCycleRepeatMode,
-                        tag = "poweramp_repeat_btn"
-                    ) {
-                        Icon(
-                            imageVector = if (equalizerState.repeatMode == TrackRepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-                            contentDescription = "Повтор",
-                            tint = if (equalizerState.repeatMode != TrackRepeatMode.OFF) Color.White else TextMuted,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        DeckIconBtn(
+                            active = equalizerState.shuffleEnabled,
+                            onClick = onToggleShuffle,
+                            btnSize = sideBtnSize,
+                            tag = "poweramp_shuffle_btn"
+                        ) {
+                            Icon(Icons.Rounded.Shuffle, contentDescription = "Перемешать", tint = if (equalizerState.shuffleEnabled) Color.White else TextMuted, modifier = Modifier.size(16.dp))
+                        }
+                        DeckIconBtn(onClick = onSkipPrevious, btnSize = sideBtnSize, tag = "poweramp_prev_btn") {
+                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(19.dp))
+                        }
+                        if (!isTightDeck) {
+                            DeckIconBtn(onClick = { onSeekBy(-10_000L) }, btnSize = sideBtnSize) {
+                                Icon(Icons.Rounded.Replay10, contentDescription = "-10с", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(width = playW, height = playH)
+                                .vistaAeroButton(isPrimary = true)
+                                .clickable(onClick = onTogglePlayPause)
+                                .testTag("poweramp_play_pause_btn"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (active?.isPlaying == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = "Играть / Пауза",
+                                tint = Color.White,
+                                modifier = Modifier.size(if (isTightDeck) 24.dp else 26.dp)
+                            )
+                        }
+                        if (!isTightDeck) {
+                            DeckIconBtn(onClick = { onSeekBy(10_000L) }, btnSize = sideBtnSize) {
+                                Icon(Icons.Rounded.Forward10, contentDescription = "+10с", tint = TextSecondary, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        DeckIconBtn(onClick = onSkipNext, btnSize = sideBtnSize, tag = "poweramp_next_btn") {
+                            Icon(Icons.Rounded.SkipNext, contentDescription = "Вперёд", tint = TextPrimary, modifier = Modifier.size(19.dp))
+                        }
+                        DeckIconBtn(
+                            active = equalizerState.repeatMode != TrackRepeatMode.OFF,
+                            onClick = onCycleRepeatMode,
+                            btnSize = sideBtnSize,
+                            tag = "poweramp_repeat_btn"
+                        ) {
+                            Icon(
+                                imageVector = if (equalizerState.repeatMode == TrackRepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                                contentDescription = "Повтор",
+                                tint = if (equalizerState.repeatMode != TrackRepeatMode.OFF) Color.White else TextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(if (isShortLandscape) 6.dp else 8.dp))
 
-                // Speed & Utility Row (Delete Track, Open Source App)
+                // Speed & Utility Row (-10s/+10s move here cleanly when column is narrow, plus Speed, Delete, Source)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -894,6 +1122,26 @@ private fun PowerampPlayerMainTab(
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (isLandscape) {
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton()
+                                .clickable { onSeekBy(-10_000L) }
+                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                                .testTag("poweramp_seek_back10_chip")
+                        ) {
+                            Text("-10с", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = TextSecondary)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton()
+                                .clickable { onSeekBy(10_000L) }
+                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                                .testTag("poweramp_seek_fwd10_chip")
+                        ) {
+                            Text("+10с", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = TextSecondary)
+                        }
+                    }
                     listOf(0.85f, 1.0f, 1.25f, 1.5f).forEach { spd ->
                         val isCur = abs(equalizerState.playbackSpeed - spd) < 0.03f
                         Box(
@@ -935,45 +1183,44 @@ private fun PowerampPlayerMainTab(
                 }
             }
 
-            // Live Synced Lyrics Quick Card (directly in Player tab)
-            InlineSyncedLyricsPreviewCard(
-                livePositionMs = livePositionMs,
-                livePositionFlow = livePositionFlow,
-                lyrics = currentLyrics,
-                isFetching = isFetchingLyrics,
-                onSeekTo = onSeekTo,
-                onAutoFetch = onAutoFetchLyrics,
-                onOpenEditor = onOpenFullLyricsEditor,
-                onDeleteLyrics = onDeleteLyrics
-            )
+            // Live Synced Lyrics Quick Card (directly in Player tab on Portrait)
+            if (showInlineLyrics) {
+                InlineSyncedLyricsPreviewCard(
+                    livePositionMs = livePositionMs,
+                    livePositionFlow = livePositionFlow,
+                    lyrics = currentLyrics,
+                    isFetching = isFetchingLyrics,
+                    onSeekTo = onSeekTo,
+                    onAutoFetch = onAutoFetchLyrics,
+                    onOpenEditor = onOpenFullLyricsEditor,
+                    onDeleteLyrics = onDeleteLyrics
+                )
+            }
         }
     }
 
-    val queueAndLocalDeck: @Composable () -> Unit = {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .vistaWindowFrame(RoundedCornerShape(5.dp))
-                .padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
+    fun LazyListScope.retroQueueAndLocalItems() {
+        item(key = "ql_header") {
+            RetroListSectionStrip(
+                title = "ПЛЕЙЛИСТ И ЛОКАЛЬНЫЕ",
+                countBadge = "${localTracks.size}"
+            )
+        }
+        item(key = "ql_search") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "ПЛЕЙЛИСТ И ЛОКАЛЬНЫЕ (${localTracks.size})",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = theme.focusBorder
-                )
-            }
-            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .vistaInsetBox(isFocused = quickListQuery.isNotEmpty())
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .vistaInsetBox(isFocused = quickListTfv.text.isNotEmpty())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = null,
+                    tint = theme.accent,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(5.dp))
                 BasicTextField(
                     value = quickListTfv,
                     onValueChange = { quickListTfv = it },
@@ -993,103 +1240,148 @@ private fun PowerampPlayerMainTab(
                             innerTextField()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.weight(1f)
                 )
-            }
-
-            val queueItems = active?.queue.orEmpty().filter {
-                quickListQuery.isBlank() || KeyboardSearchMatcher.matches(it.title, quickListQuery) || KeyboardSearchMatcher.matches(it.subtitle, quickListQuery)
-            }
-            queueItems.take(15).forEach { qi ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (qi.isActive) theme.accent.copy(alpha = 0.22f) else theme.insetBg, RoundedCornerShape(3.dp))
-                        .clickable { onSkipToQueueItem(qi.queueId) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.PlayArrow, contentDescription = null, tint = if (qi.isActive) theme.focusBorder else TextMuted, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(qi.title, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (qi.subtitle.isNotBlank()) {
-                            Text(qi.subtitle, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = TextSecondary, maxLines = 1)
-                        }
-                    }
-                    Text("Очередь", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MusicSourceAmber)
+                if (quickListTfv.text.isNotEmpty()) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Очистить",
+                        tint = TextSecondary,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clickable {
+                                quickListTfv = TextFieldValue("")
+                                quickListQuery = ""
+                            }
+                    )
                 }
             }
+        }
 
-            filteredLocal.forEach { track ->
+        if (queueItems.isNotEmpty()) {
+            itemsIndexed(queueItems, key = { idx, qi -> "q_${qi.queueId}_${qi.title}_$idx" }) { idx, qi ->
+                RetroGlossyTrackRow(
+                    index = idx,
+                    title = qi.title,
+                    subtitle = qi.subtitle.ifBlank { active?.appLabel.orEmpty() },
+                    badgeText = if (qi.isActive) "LIVE" else "ОЧЕРЕДЬ",
+                    isActive = qi.isActive,
+                    isPlaying = qi.isActive && active?.isPlaying == true,
+                    onClick = { onSkipToQueueItem(qi.queueId) }
+                )
+            }
+        }
+
+        if (filteredLocal.isNotEmpty()) {
+            itemsIndexed(filteredLocal, key = { _, track -> "loc_${track.id}" }) { idx, track ->
                 val isPlayingThis = track.id == mediaState.currentLocalTrackId
-                Row(
+                RetroGlossyTrackRow(
+                    index = idx,
+                    title = track.title,
+                    subtitle = listOfNotNull(
+                        track.artist.ifBlank { "Локально" },
+                        track.album.takeIf { it.isNotBlank() }
+                    ).joinToString(" • "),
+                    badgeText = track.formatLabel.ifBlank { "AUDIO" },
+                    badgeLossless = track.isLossless,
+                    durationText = if (track.durationMs > 0L) MediaControlRepository.formatTimeMs(track.durationMs) else null,
+                    isActive = isPlayingThis,
+                    isPlaying = isPlayingThis && active?.isPlaying == true,
+                    onClick = { onPlayLocalTrack(track) },
+                    trailingSlot = {
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton()
+                                .clickable { pendingDeleteLocal = track }
+                                .padding(horizontal = 7.dp, vertical = 5.dp)
+                                .testTag("poweramp_list_delete_${track.id}")
+                        ) {
+                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", tint = CallMissedRed, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                )
+            }
+        } else if (queueItems.isEmpty()) {
+            item(key = "ql_empty") {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(if (isPlayingThis) theme.accent.copy(alpha = 0.24f) else theme.insetBg, RoundedCornerShape(3.dp))
-                        .border(1.dp, if (isPlayingThis) theme.accent else Color.Transparent, RoundedCornerShape(3.dp))
-                        .clickable { onPlayLocalTrack(track) }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .vistaInsetBox()
+                        .padding(vertical = 14.dp, horizontal = 10.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Играть", tint = if (isPlayingThis) CallIncomingGreen else theme.accent, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(track.title, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            "${track.artist.ifBlank { "Локально" }} • ${track.formatLabel}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = TextSecondary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable { pendingDeleteLocal = track }
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                            .testTag("poweramp_list_delete_${track.id}")
-                    ) {
-                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить", tint = CallMissedRed, modifier = Modifier.size(14.dp))
-                    }
+                    Text(
+                        text = if (quickListQuery.isBlank()) "Локальные треки и очередь пусты" else "Ничего не найдено",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
                 }
             }
         }
     }
 
     if (isLandscape) {
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(8.dp)
+                .testTag("poweramp_landscape_three_pane")
         ) {
-            Column(
-                modifier = Modifier
-                    .weight(1.1f)
-                    .fillMaxHeight()
-                    .verticalScroll(rememberScrollState())
+            val narrowLandscape = maxWidth < 860.dp
+            val compactDeck = maxHeight < 340.dp
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                playerDeck()
-            }
-            Column(
-                modifier = Modifier
-                    .weight(0.9f)
-                    .fillMaxHeight()
-                    .verticalScroll(rememberScrollState())
-            ) {
-                queueAndLocalDeck()
+                Column(
+                    modifier = Modifier
+                        .weight(if (narrowLandscape) 0.38f else 0.35f)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    playerDeck(false, compactDeck)
+                }
+                InlineLandscapeLyricsPane(
+                    trackTitle = active?.title.orEmpty(),
+                    trackArtist = active?.artist.orEmpty(),
+                    livePositionMs = livePositionMs,
+                    livePositionFlow = livePositionFlow,
+                    lyrics = currentLyrics,
+                    isFetching = isFetchingLyrics,
+                    onSeekTo = onSeekTo,
+                    onAutoFetch = onAutoFetchLyrics,
+                    onOpenEditor = onOpenFullLyricsEditor,
+                    onDeleteLyrics = onDeleteLyrics,
+                    modifier = Modifier
+                        .weight(if (narrowLandscape) 0.31f else 0.33f)
+                        .fillMaxHeight()
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(if (narrowLandscape) 0.31f else 0.32f)
+                        .fillMaxHeight()
+                        .vistaWindowFrame(RoundedCornerShape(5.dp)),
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    retroQueueAndLocalItems()
+                }
             }
         }
     } else {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("poweramp_player_lazy_list"),
             contentPadding = PaddingValues(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            item(key = "player_deck") { playerDeck() }
-            item(key = "queue_local_deck") { queueAndLocalDeck() }
+            item(key = "player_deck") {
+                Column(modifier = Modifier.padding(bottom = 3.dp)) {
+                    playerDeck(true, false)
+                }
+            }
+            retroQueueAndLocalItems()
         }
     }
 
@@ -1120,12 +1412,13 @@ private fun PowerampPlayerMainTab(
 private fun DeckIconBtn(
     onClick: () -> Unit,
     active: Boolean = false,
+    btnSize: Dp = 36.dp,
     tag: String? = null,
     content: @Composable () -> Unit
 ) {
     Box(
         modifier = Modifier
-            .size(width = 36.dp, height = 36.dp)
+            .size(width = btnSize, height = btnSize)
             .vistaAeroButton(isPrimary = active, isActive = active)
             .clickable(onClick = onClick)
             .let { if (tag != null) it.testTag(tag) else it },
@@ -1136,7 +1429,10 @@ private fun DeckIconBtn(
 }
 
 @Composable
-private fun PowerampSpectrumVisualizer(isPlaying: Boolean) {
+private fun PowerampSpectrumVisualizer(
+    isPlaying: Boolean,
+    barHeight: Dp = 22.dp
+) {
     val theme = LocalVistaTheme.current
     val transition = rememberInfiniteTransition(label = "spectrum")
     val phase by transition.animateFloat(
@@ -1151,7 +1447,7 @@ private fun PowerampSpectrumVisualizer(isPlaying: Boolean) {
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
-            .height(22.dp)
+            .height(barHeight)
             .clip(RoundedCornerShape(3.dp))
             .background(Color.Black.copy(alpha = 0.35f))
     ) {
@@ -1181,7 +1477,8 @@ private fun PowerampPlayerSeekStrip(
     sessionId: String,
     durationMs: Long,
     fallbackPositionMs: Long,
-    livePositionFlow: StateFlow<Long>?,
+    livePositionFlow: StateFlow<Long>? = null,
+    compact: Boolean = false,
     onSeekTo: (Long) -> Unit
 ) {
     val effectivePos = collectLivePos(livePositionFlow, fallbackPositionMs)
@@ -1189,26 +1486,60 @@ private fun PowerampPlayerSeekStrip(
     var scrubPos by remember(sessionId) { mutableFloatStateOf(0f) }
     val displayPos = if (scrubbing) scrubPos.toLong() else effectivePos
 
-    Spacer(Modifier.height(6.dp))
-    VistaSlider(
-        value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat()),
-        onValueChange = {
-            scrubbing = true
-            scrubPos = it
-        },
-        onValueChangeFinished = {
-            scrubbing = false
-            onSeekTo(scrubPos.toLong())
-        },
-        valueRange = 0f..durationMs.toFloat(),
-        modifier = Modifier.fillMaxWidth()
-    )
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(MediaControlRepository.formatTimeMs(displayPos), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
-        Text(MediaControlRepository.formatTimeMs(durationMs), style = MaterialTheme.typography.labelSmall, color = TextMuted)
+    Spacer(Modifier.height(if (compact) 2.dp else 6.dp))
+    if (compact) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = MediaControlRepository.formatTimeMs(displayPos),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                color = TextSecondary
+            )
+            VistaSlider(
+                value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+                onValueChange = {
+                    scrubbing = true
+                    scrubPos = it
+                },
+                onValueChangeFinished = {
+                    scrubbing = false
+                    onSeekTo(scrubPos.toLong())
+                },
+                valueRange = 0f..durationMs.toFloat(),
+                compact = true,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = MediaControlRepository.formatTimeMs(durationMs),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                color = TextMuted
+            )
+        }
+    } else {
+        VistaSlider(
+            value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat()),
+            onValueChange = {
+                scrubbing = true
+                scrubPos = it
+            },
+            onValueChangeFinished = {
+                scrubbing = false
+                onSeekTo(scrubPos.toLong())
+            },
+            valueRange = 0f..durationMs.toFloat(),
+            compact = false,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(MediaControlRepository.formatTimeMs(displayPos), style = MaterialTheme.typography.labelSmall, color = TextSecondary)
+            Text(MediaControlRepository.formatTimeMs(durationMs), style = MaterialTheme.typography.labelSmall, color = TextMuted)
+        }
     }
 }
 
@@ -1355,8 +1686,208 @@ private fun InlineSyncedLyricsPreviewCard(
 }
 
 @Composable
+private fun InlineLandscapeLyricsPane(
+    trackTitle: String,
+    trackArtist: String,
+    livePositionMs: Long,
+    livePositionFlow: StateFlow<Long>? = null,
+    lyrics: TrackLyricsData?,
+    isFetching: Boolean,
+    onSeekTo: (Long) -> Unit,
+    onAutoFetch: () -> Unit,
+    onOpenEditor: () -> Unit,
+    onDeleteLyrics: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val theme = LocalVistaTheme.current
+    val effectivePos = collectLivePos(livePositionFlow, livePositionMs)
+    var lyricsOffsetMs by remember(trackTitle, trackArtist) { mutableLongStateOf(0L) }
+    val listState = rememberLazyListState()
+    val adjustedPos = (effectivePos + lyricsOffsetMs).coerceAtLeast(0L)
+    val activeIdx by remember(lyrics, adjustedPos) {
+        derivedStateOf {
+            val lines = lyrics?.syncedLines.orEmpty()
+            if (lines.isEmpty()) -1 else lines.indexOfLast { it.timeMs <= adjustedPos }
+        }
+    }
+
+    LaunchedEffect(activeIdx) {
+        if (activeIdx >= 0) {
+            runCatching { listState.animateScrollToItem(activeIdx, scrollOffset = -90) }
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .vistaWindowFrame(RoundedCornerShape(5.dp))
+            .padding(8.dp)
+            .testTag("poweramp_landscape_lyrics_pane"),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.weight(1f)) {
+                Icon(Icons.Rounded.Lyrics, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
+                Text(
+                    text = if (lyrics?.hasSynced == true) "КАРАОКЕ-ТЕКСТ" else "ТЕКСТ ПЕСНИ",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = theme.focusBorder,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable(onClick = onAutoFetch)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text("Авто", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = MusicSourceAmber)
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable(onClick = onOpenEditor)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text("Ред.", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp), color = Color.White)
+                }
+                if (lyrics?.hasAnyLyrics == true) {
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton()
+                            .clickable(onClick = onDeleteLyrics)
+                            .padding(horizontal = 5.dp, vertical = 3.dp)
+                    ) {
+                        Text("✕", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = CallMissedRed)
+                    }
+                }
+            }
+        }
+
+        if (lyrics?.syncedLines?.isNotEmpty() == true) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .vistaInsetBox()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "${if (lyricsOffsetMs >= 0) "+" else ""}${"%.1f".format(lyricsOffsetMs / 1000f)}с",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                    color = MusicSourceAmber
+                )
+                listOf(-500L to "-0.5", -100L to "-0.1", 0L to "0", 100L to "+0.1", 500L to "+0.5").forEach { (delta, lbl) ->
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton(isActive = delta == 0L && lyricsOffsetMs == 0L)
+                            .clickable { lyricsOffsetMs = if (delta == 0L) 0L else (lyricsOffsetMs + delta) }
+                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                    ) {
+                        Text(lbl, style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp), color = Color.White)
+                    }
+                }
+            }
+        }
+
+        when {
+            isFetching -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = theme.accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+            }
+            lyrics == null || !lyrics.hasAnyLyrics -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .vistaInsetBox()
+                    .padding(10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Текст не найден. Нажмите «Авто» для поиска в другом источнике.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted,
+                    textAlign = TextAlign.Center
+                )
+            }
+            lyrics.syncedLines.isNotEmpty() -> {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .vistaInsetBox(),
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    itemsIndexed(lyrics.syncedLines) { idx, line ->
+                        val isActive = idx == activeIdx
+                        val isPassed = activeIdx >= 0 && idx < activeIdx
+                        val nextTime = lyrics.syncedLines.getOrNull(idx + 1)?.timeMs ?: (line.timeMs + 3500L)
+                        val span = (nextTime - line.timeMs).coerceAtLeast(650L)
+                        val lineProgress = if (isActive) {
+                            ((adjustedPos - line.timeMs).toFloat() / span.toFloat()).coerceIn(0.05f, 1f)
+                        } else 0f
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(if (isActive) Color(0xFF0A1E2E) else Color.Transparent)
+                                .clickable { onSeekTo((line.timeMs - lyricsOffsetMs).coerceAtLeast(0L)) }
+                        ) {
+                            if (isActive) {
+                                Box(modifier = Modifier.matchParentSize()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(lineProgress)
+                                            .background(theme.accent.copy(alpha = 0.34f))
+                                    )
+                                }
+                            }
+                            Text(
+                                text = line.text,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = if (isActive) 13.5.sp else 11.5.sp
+                                ),
+                                color = when {
+                                    isActive -> Color.White
+                                    isPassed -> TextMuted.copy(alpha = 0.7f)
+                                    else -> TextSecondary
+                                },
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            else -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .vistaInsetBox()
+                    .verticalScroll(rememberScrollState())
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = lyrics.plainText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PowerampEqualizerTab(
     equalizerState: EqualizerState,
+    isLandscape: Boolean = false,
     onSetEnabled: (Boolean) -> Unit,
     onApplyPreset: (EqualizerPreset) -> Unit,
     onSetBand: (Int, Int) -> Unit,
@@ -1374,15 +1905,11 @@ private fun PowerampEqualizerTab(
     val vfdGreen = Color(0xFF4BFFAE)
     val vfdAmber = Color(0xFFFFBD4A)
     val activeLed = if (equalizerState.enabled) vfdGreen else Color(0xFF7B3338)
+    val isShortLandscape = isLandscape && LocalConfiguration.current.screenHeightDp < 440
+    val faderHeight = if (isShortLandscape) 94.dp else 124.dp
+    val knobSize = if (isShortLandscape) 68.dp else 84.dp
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(8.dp)
-            .testTag("poweramp_equalizer_tab"),
-        verticalArrangement = Arrangement.spacedBy(7.dp)
-    ) {
+    val chassisHeaderAndVfd: @Composable () -> Unit = {
         // 1980s Hi-Fi Stereo Rack Chassis Header + Screws + Power Switch
         Box(
             modifier = Modifier
@@ -1631,7 +2158,9 @@ private fun PowerampEqualizerTab(
                 }
             }
         }
+    }
 
+    val fadersBankPanel: @Composable () -> Unit = {
         // 5-Band Vertical Analog Rack Faders with dB Scale & LED Ladders
         Column(
             modifier = Modifier
@@ -1639,8 +2168,8 @@ private fun PowerampEqualizerTab(
                 .clip(RoundedCornerShape(4.dp))
                 .background(brushedSteel)
                 .border(1.5.dp, rackBorder, RoundedCornerShape(4.dp))
-                .padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(if (isShortLandscape) 8.dp else 10.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isShortLandscape) 6.dp else 8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1673,7 +2202,7 @@ private fun PowerampEqualizerTab(
             ) {
                 // Left dB Legend Column
                 Column(
-                    modifier = Modifier.height(128.dp),
+                    modifier = Modifier.height(faderHeight + 4.dp),
                     verticalArrangement = Arrangement.SpaceBetween,
                     horizontalAlignment = Alignment.End
                 ) {
@@ -1690,13 +2219,16 @@ private fun PowerampEqualizerTab(
                         freqLabel = band.freqLabel,
                         levelMb = band.levelMb,
                         enabled = equalizerState.enabled,
+                        trackHeight = faderHeight,
                         onSetLevelMb = { next -> onSetBand(band.index, next) },
                         modifier = Modifier.weight(1f)
                     )
                 }
             }
         }
+    }
 
+    val rotaryKnobsPanel: @Composable () -> Unit = {
         // Dual Analog Rotary Potentiometer Knobs (Bass Boost & 3D Stereo Scene)
         Row(
             modifier = Modifier
@@ -1704,7 +2236,7 @@ private fun PowerampEqualizerTab(
                 .clip(RoundedCornerShape(4.dp))
                 .background(brushedSteel)
                 .border(1.5.dp, rackBorder, RoundedCornerShape(4.dp))
-                .padding(10.dp),
+                .padding(if (isShortLandscape) 8.dp else 10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             VintageRotaryKnobControl(
@@ -1714,6 +2246,7 @@ private fun PowerampEqualizerTab(
                 enabled = equalizerState.enabled,
                 accentColor = vfdAmber,
                 testTagName = "eq_bass_slider",
+                knobSize = knobSize,
                 onValueChange = onSetBassBoost,
                 modifier = Modifier.weight(1f)
             )
@@ -1724,9 +2257,53 @@ private fun PowerampEqualizerTab(
                 enabled = equalizerState.enabled,
                 accentColor = vfdGreen,
                 testTagName = "eq_virtualizer_slider",
+                knobSize = knobSize,
                 onValueChange = onSetVirtualizer,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+
+    if (isLandscape) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp)
+                .testTag("poweramp_equalizer_tab"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(0.46f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                chassisHeaderAndVfd()
+            }
+            Column(
+                modifier = Modifier
+                    .weight(0.54f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                fadersBankPanel()
+                rotaryKnobsPanel()
+            }
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(8.dp)
+                .testTag("poweramp_equalizer_tab"),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            chassisHeaderAndVfd()
+            fadersBankPanel()
+            rotaryKnobsPanel()
         }
     }
 }
@@ -1753,10 +2330,10 @@ private fun VintageVerticalFaderColumn(
     levelMb: Int,
     enabled: Boolean,
     onSetLevelMb: (Int) -> Unit,
+    trackHeight: Dp = 124.dp,
     modifier: Modifier = Modifier
 ) {
     val norm = ((levelMb + 1500) / 3000f).coerceIn(0f, 1f)
-    val trackHeight = 124.dp
 
     Column(
         modifier = modifier
@@ -1901,6 +2478,7 @@ private fun VintageRotaryKnobControl(
     accentColor: Color,
     testTagName: String,
     onValueChange: (Int) -> Unit,
+    knobSize: Dp = 84.dp,
     modifier: Modifier = Modifier
 ) {
     val norm = (value / 1000f).coerceIn(0f, 1f)
@@ -1924,7 +2502,7 @@ private fun VintageRotaryKnobControl(
         )
         Box(
             modifier = Modifier
-                .size(84.dp)
+                .size(knobSize)
                 .semantics {
                     progressBarRangeInfo = ProgressBarRangeInfo(value.toFloat(), 0f..1000f)
                 }
@@ -2024,6 +2602,7 @@ private fun PowerampLyricsTab(
     livePositionFlow: StateFlow<Long>? = null,
     lyrics: TrackLyricsData?,
     isFetching: Boolean,
+    isLandscape: Boolean = false,
     onSeekTo: (Long) -> Unit,
     onAutoFetch: () -> Unit,
     onSaveLyrics: (String) -> Unit,
@@ -2053,19 +2632,275 @@ private fun PowerampLyricsTab(
         }
     }
 
+    val headerActionButtons: @Composable () -> Unit = {
+        Box(
+            modifier = Modifier
+                .vistaAeroButton()
+                .clickable(onClick = onAutoFetch)
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("lyrics_auto_fetch_btn")
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = MusicSourceAmber, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(3.dp))
+                Text("Авто", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
+            }
+        }
+        Box(
+            modifier = Modifier
+                .vistaAeroButton(isPrimary = isEditing, isActive = isEditing)
+                .clickable { isEditing = !isEditing }
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .testTag("lyrics_edit_mode_btn")
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(if (isEditing) "Просмотр" else "Редактир.", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+            }
+        }
+        if (lyrics?.hasAnyLyrics == true) {
+            Box(
+                modifier = Modifier
+                    .vistaAeroButton()
+                    .clickable {
+                        editorText = ""
+                        onDeleteLyrics()
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("lyrics_delete_btn")
+            ) {
+                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить текст", tint = CallMissedRed, modifier = Modifier.size(15.dp))
+            }
+        }
+    }
+
+    val lyricsViewerContent: @Composable (Modifier) -> Unit = { viewerMod ->
+        when {
+            isFetching -> Box(modifier = viewerMod, contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(color = theme.accent)
+                    Text("Поиск синхронизированного текста…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
+            }
+            lyrics == null || !lyrics.hasAnyLyrics -> Box(
+                modifier = viewerMod.vistaInsetBox(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Текст для этого трека не найден или был удалён", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        VistaButton(text = "Автопоиск (LRCLIB)", isPrimary = true, onClick = onAutoFetch)
+                        VistaButton(text = "Написать вручную", onClick = { isEditing = true })
+                    }
+                }
+            }
+            lyrics.syncedLines.isNotEmpty() -> {
+                LazyColumn(
+                    state = listState,
+                    modifier = viewerMod.vistaInsetBox(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(lyrics.syncedLines) { idx, line ->
+                        val isActive = idx == activeIdx
+                        val isPassed = activeIdx >= 0 && idx < activeIdx
+                        val nextTime = lyrics.syncedLines.getOrNull(idx + 1)?.timeMs ?: (line.timeMs + 3500L)
+                        val span = (nextTime - line.timeMs).coerceAtLeast(650L)
+                        val lineProgress = if (isActive) {
+                            ((adjustedPos - line.timeMs).toFloat() / span.toFloat()).coerceIn(0.05f, 1f)
+                        } else 0f
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    if (isActive) Color(0xFF0A1D2B)
+                                    else Color.Transparent
+                                )
+                                .border(
+                                    width = if (isActive) 1.dp else 0.dp,
+                                    color = if (isActive) theme.accent.copy(alpha = 0.65f) else Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .clickable { onSeekTo((line.timeMs - lyricsOffsetMs).coerceAtLeast(0L)) }
+                        ) {
+                            if (isActive) {
+                                Box(modifier = Modifier.matchParentSize()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(lineProgress)
+                                            .background(
+                                                Brush.horizontalGradient(
+                                                    listOf(
+                                                        theme.accent.copy(alpha = 0.42f),
+                                                        MusicSourceAmber.copy(alpha = 0.34f)
+                                                    )
+                                                )
+                                            )
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isActive) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(3.dp)
+                                            .height(18.dp)
+                                            .background(MusicSourceAmber, RoundedCornerShape(2.dp))
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = MediaControlRepository.formatTimeMs(line.timeMs),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = if (isActive) MusicSourceAmber else TextMuted,
+                                    modifier = Modifier.width(42.dp)
+                                )
+                                Text(
+                                    text = line.text,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = if (isActive) 16.sp else 13.5.sp
+                                    ),
+                                    color = when {
+                                        isActive -> Color.White
+                                        isPassed -> TextMuted.copy(alpha = 0.72f)
+                                        else -> TextSecondary
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            else -> {
+                Box(
+                    modifier = viewerMod
+                        .vistaInsetBox()
+                        .verticalScroll(rememberScrollState())
+                        .padding(14.dp)
+                ) {
+                    Text(
+                        text = lyrics.plainText,
+                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                        color = TextPrimary
+                    )
+                }
+            }
+        }
+    }
+
+    if (isLandscape && !isEditing) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp)
+                .testTag("poweramp_lyrics_tab"),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(0.35f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaWindowFrame(RoundedCornerShape(4.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = trackTitle.ifBlank { "Нет активного трека" },
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val info = buildString {
+                        if (trackArtist.isNotBlank()) append("$trackArtist • ")
+                        if (lyrics?.hasAnyLyrics == true) append(lyrics.sourceLabel) else append("Текст отсутствует")
+                    }
+                    Text(info, style = MaterialTheme.typography.labelSmall, color = theme.accent, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        headerActionButtons()
+                    }
+                }
+
+                if (lyrics?.syncedLines?.isNotEmpty() == true) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .vistaInsetBox()
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Караоке-синхр (${if (lyricsOffsetMs >= 0) "+" else ""}${"%.1f".format(lyricsOffsetMs / 1000f)}с)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                            color = MusicSourceAmber
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            listOf(-500L to "-0.5с", -100L to "-0.1с", 0L to "Сброс", 100L to "+0.1с", 500L to "+0.5с").forEach { (delta, label) ->
+                                Box(
+                                    modifier = Modifier
+                                        .vistaAeroButton(isActive = delta == 0L && lyricsOffsetMs == 0L)
+                                        .clickable {
+                                            lyricsOffsetMs = if (delta == 0L) 0L else (lyricsOffsetMs + delta)
+                                        }
+                                        .padding(horizontal = 7.dp, vertical = 4.dp)
+                                ) {
+                                    Text(label, style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            lyricsViewerContent(
+                Modifier
+                    .weight(0.65f)
+                    .fillMaxHeight()
+            )
+        }
+        return
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(10.dp)
+            .padding(if (isLandscape) 8.dp else 10.dp)
             .testTag("poweramp_lyrics_tab"),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(if (isLandscape) 6.dp else 8.dp)
     ) {
         // Lyrics Header + Controls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .vistaWindowFrame(RoundedCornerShape(4.dp))
-                .padding(10.dp),
+                .padding(if (isLandscape) 8.dp else 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -2084,46 +2919,7 @@ private fun PowerampLyricsTab(
                 Text(info, style = MaterialTheme.typography.labelSmall, color = theme.accent, maxLines = 1)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton()
-                        .clickable(onClick = onAutoFetch)
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("lyrics_auto_fetch_btn")
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = MusicSourceAmber, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text("Авто", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton(isPrimary = isEditing, isActive = isEditing)
-                        .clickable { isEditing = !isEditing }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("lyrics_edit_mode_btn")
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(3.dp))
-                        Text(if (isEditing) "Просмотр" else "Редактир.", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
-                    }
-                }
-                if (lyrics?.hasAnyLyrics == true) {
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable {
-                                editorText = ""
-                                onDeleteLyrics()
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("lyrics_delete_btn")
-                    ) {
-                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Удалить текст", tint = CallMissedRed, modifier = Modifier.size(15.dp))
-                    }
-                }
+                headerActionButtons()
             }
         }
 
@@ -2161,13 +2957,16 @@ private fun PowerampLyricsTab(
         if (isEditing) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
                     .vistaInsetBox()
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(if (isLandscape) 8.dp else 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -2270,132 +3069,7 @@ private fun PowerampLyricsTab(
                 }
             }
         } else {
-            when {
-                isFetching -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CircularProgressIndicator(color = theme.accent)
-                        Text("Поиск синхронизированного текста…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                    }
-                }
-                lyrics == null || !lyrics.hasAnyLyrics -> Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .vistaInsetBox(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Текст для этого трека не найден или был удалён", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            VistaButton(text = "Автопоиск (LRCLIB)", isPrimary = true, onClick = onAutoFetch)
-                            VistaButton(text = "Написать вручную", onClick = { isEditing = true })
-                        }
-                    }
-                }
-                lyrics.syncedLines.isNotEmpty() -> {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .vistaInsetBox(),
-                        contentPadding = PaddingValues(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        itemsIndexed(lyrics.syncedLines) { idx, line ->
-                            val isActive = idx == activeIdx
-                            val isPassed = activeIdx >= 0 && idx < activeIdx
-                            val nextTime = lyrics.syncedLines.getOrNull(idx + 1)?.timeMs ?: (line.timeMs + 3500L)
-                            val span = (nextTime - line.timeMs).coerceAtLeast(650L)
-                            val lineProgress = if (isActive) {
-                                ((adjustedPos - line.timeMs).toFloat() / span.toFloat()).coerceIn(0.05f, 1f)
-                            } else 0f
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(
-                                        if (isActive) Color(0xFF0A1D2B)
-                                        else Color.Transparent
-                                    )
-                                    .border(
-                                        width = if (isActive) 1.dp else 0.dp,
-                                        color = if (isActive) theme.accent.copy(alpha = 0.65f) else Color.Transparent,
-                                        shape = RoundedCornerShape(4.dp)
-                                    )
-                                    .clickable { onSeekTo((line.timeMs - lyricsOffsetMs).coerceAtLeast(0L)) }
-                            ) {
-                                if (isActive) {
-                                    Box(modifier = Modifier.matchParentSize()) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxHeight()
-                                                .fillMaxWidth(lineProgress)
-                                                .background(
-                                                    Brush.horizontalGradient(
-                                                        listOf(
-                                                            theme.accent.copy(alpha = 0.42f),
-                                                            MusicSourceAmber.copy(alpha = 0.34f)
-                                                        )
-                                                    )
-                                                )
-                                        )
-                                    }
-                                }
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (isActive) {
-                                        Box(
-                                            modifier = Modifier
-                                                .width(3.dp)
-                                                .height(18.dp)
-                                                .background(MusicSourceAmber, RoundedCornerShape(2.dp))
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                    }
-                                    Text(
-                                        text = MediaControlRepository.formatTimeMs(line.timeMs),
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        color = if (isActive) MusicSourceAmber else TextMuted,
-                                        modifier = Modifier.width(42.dp)
-                                    )
-                                    Text(
-                                        text = line.text,
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                            fontSize = if (isActive) 16.sp else 13.5.sp
-                                        ),
-                                        color = when {
-                                            isActive -> Color.White
-                                            isPassed -> TextMuted.copy(alpha = 0.72f)
-                                            else -> TextSecondary
-                                        },
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .vistaInsetBox()
-                            .verticalScroll(rememberScrollState())
-                            .padding(14.dp)
-                    ) {
-                        Text(
-                            text = lyrics.plainText,
-                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                            color = TextPrimary
-                        )
-                    }
-                }
-            }
+            lyricsViewerContent(Modifier.weight(1f).fillMaxWidth())
         }
     }
 }
@@ -2406,6 +3080,7 @@ private fun PowerampMultiSourceSearchTab(
     results: List<UnifiedMusicSearchResult>,
     isSearching: Boolean,
     sourceSelectionMode: SourceSelectionMode,
+    isLandscape: Boolean = false,
     onQueryChange: (String) -> Unit,
     onToggleSourceMode: () -> Unit,
     onPlayOrPick: (UnifiedMusicSearchResult) -> Unit,
@@ -2436,9 +3111,9 @@ private fun PowerampMultiSourceSearchTab(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(10.dp)
+            .padding(if (isLandscape) 8.dp else 10.dp)
             .testTag("poweramp_multi_search_tab"),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(if (isLandscape) 5.dp else 8.dp)
     ) {
         // Search Input + Mode Switch
         Row(
@@ -2458,16 +3133,31 @@ private fun PowerampMultiSourceSearchTab(
                 var unifiedTfv by remember {
                     mutableStateOf(TextFieldValue(query, TextRange(query.length)))
                 }
+                var lastDispatchedUnifiedQuery by remember { mutableStateOf(query) }
+                var isPendingUnifiedEdit by remember { mutableStateOf(false) }
                 LaunchedEffect(query) {
-                    if (query != unifiedTfv.text) {
+                    if (!isPendingUnifiedEdit && query != unifiedTfv.text) {
                         unifiedTfv = TextFieldValue(query, TextRange(query.length))
+                        lastDispatchedUnifiedQuery = query
+                    }
+                }
+                LaunchedEffect(unifiedTfv.text) {
+                    val nextText = unifiedTfv.text
+                    if (nextText != lastDispatchedUnifiedQuery) {
+                        isPendingUnifiedEdit = true
+                        delay(95L)
+                        lastDispatchedUnifiedQuery = nextText
+                        isPendingUnifiedEdit = false
+                        onQueryChange(nextText)
+                    } else {
+                        isPendingUnifiedEdit = false
                     }
                 }
                 BasicTextField(
                     value = unifiedTfv,
                     onValueChange = { next ->
                         unifiedTfv = next
-                        onQueryChange(next.text)
+                        isPendingUnifiedEdit = (next.text != lastDispatchedUnifiedQuery)
                     },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
@@ -2489,14 +3179,19 @@ private fun PowerampMultiSourceSearchTab(
                         .weight(1f)
                         .testTag("poweramp_unified_search_input")
                 )
-                if (query.isNotEmpty()) {
+                if (unifiedTfv.text.isNotEmpty()) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
                         contentDescription = "Очистить",
                         tint = TextSecondary,
                         modifier = Modifier
                             .size(15.dp)
-                            .clickable { onQueryChange("") }
+                            .clickable {
+                                unifiedTfv = TextFieldValue("")
+                                lastDispatchedUnifiedQuery = ""
+                                isPendingUnifiedEdit = false
+                                onQueryChange("")
+                            }
                     )
                 }
             }
@@ -2572,35 +3267,73 @@ private fun PowerampMultiSourceSearchTab(
             else -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = PaddingValues(bottom = 12.dp)
                 ) {
+                    item(key = "unified_hdr") {
+                        RetroListSectionStrip(
+                            title = "РЕЗУЛЬТАТЫ ПО ВСЕМ ИСТОЧНИКАМ",
+                            countBadge = "${filteredResults.size}"
+                        )
+                    }
                     itemsIndexed(filteredResults, key = { _, item -> item.key }) { idx, item ->
+                        val isLosslessBest = item.primaryCandidate?.isLossless == true
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .vistaWindowFrame(RoundedCornerShape(4.dp))
+                                .heightIn(min = 48.dp)
+                                .symbianGlossyTile(bucket = idx, isFocused = false, shape = RoundedCornerShape(3.dp))
                                 .clickable { onPlayOrPick(item) }
-                                .padding(9.dp)
+                                .padding(horizontal = 7.dp, vertical = 6.dp)
                                 .testTag("unified_music_row_$idx"),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            SmartAlbumCoverBox(customPath = null, coverUrl = item.artworkUrl, size = 46.dp)
-                            Spacer(Modifier.width(9.dp))
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .height(34.dp)
+                                    .clip(RoundedCornerShape(1.5.dp))
+                                    .background(if (isLosslessBest) CallIncomingGreen else MusicSourceAmber)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "%02d.".format(idx + 1),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                ),
+                                color = TextMuted,
+                                modifier = Modifier.width(24.dp)
+                            )
+                            Box(
+                                modifier = Modifier.vistaInsetBox(shape = RoundedCornerShape(2.dp))
+                            ) {
+                                SmartAlbumCoverBox(customPath = null, coverUrl = item.artworkUrl, size = 40.dp)
+                            }
+                            Spacer(Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                     Text(
                                         text = item.bestFormatBadge,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
-                                        color = if (item.primaryCandidate?.isLossless == true) CallIncomingGreen else MusicSourceAmber,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 8.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        ),
+                                        color = if (isLosslessBest) CallIncomingGreen else MusicSourceAmber,
                                         modifier = Modifier
-                                            .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
-                                            .border(1.dp, theme.chromeBorderOuter, RoundedCornerShape(3.dp))
+                                            .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(2.dp))
+                                            .border(
+                                                1.dp,
+                                                if (isLosslessBest) CallIncomingGreen.copy(alpha = 0.65f) else theme.chromeBorderOuter,
+                                                RoundedCornerShape(2.dp)
+                                            )
                                             .padding(horizontal = 4.dp, vertical = 1.dp)
                                     )
                                     Text(
                                         text = item.title,
-                                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+                                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
                                         color = TextPrimary,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -2611,14 +3344,14 @@ private fun PowerampMultiSourceSearchTab(
                                     text = listOf(item.artist, item.primaryCandidate?.sourceLabel.orEmpty())
                                         .filter { it.isNotBlank() }
                                         .joinToString(" • "),
-                                    style = MaterialTheme.typography.labelSmall,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                     color = TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 if (item.hasMultipleSources) {
                                     Text(
-                                        text = "Найдено в источниках (${item.candidates.size}) — нажмите для выбора",
+                                        text = "Источников: ${item.candidates.size} — выбор",
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                                         color = theme.accent,
                                         modifier = Modifier
@@ -2628,6 +3361,7 @@ private fun PowerampMultiSourceSearchTab(
                                 }
                             }
 
+                            Spacer(Modifier.width(4.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 if (item.hasMultipleSources) {
                                     Box(
@@ -2636,7 +3370,14 @@ private fun PowerampMultiSourceSearchTab(
                                             .clickable { onOpenSourcesModal(item) }
                                             .padding(horizontal = 7.dp, vertical = 6.dp)
                                     ) {
-                                        Text("${item.candidates.size}", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = theme.accent)
+                                        Text(
+                                            text = "${item.candidates.size}",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            ),
+                                            color = theme.accent
+                                        )
                                     }
                                 }
                                 Box(
@@ -2674,6 +3415,7 @@ fun SourceChooserDialog(
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -2681,7 +3423,8 @@ fun SourceChooserDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .heightIn(max = 520.dp)
+                .widthIn(max = 560.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("source_chooser_dialog")
         ) {
@@ -2712,35 +3455,25 @@ fun SourceChooserDialog(
 
             LazyColumn(
                 modifier = Modifier.padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(result.candidates, key = { it.id }) { candidate ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .vistaInsetBox()
-                            .clickable {
-                                if (forDownload) onPickDownload(candidate) else onPickPlay(candidate)
-                            }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = candidate.formatBadge,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
-                            color = if (candidate.isLossless) CallIncomingGreen else MusicSourceAmber,
-                            modifier = Modifier.width(50.dp)
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(candidate.sourceLabel, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary)
-                            val meta = buildString {
-                                append(candidate.sourceKind.title)
-                                if (candidate.bitrateKbps > 0) append(" • ${candidate.bitrateKbps} kbps")
-                                if (candidate.sampleRateHz > 0) append(" • ${candidate.sampleRateHz / 1000}kHz")
-                            }
-                            Text(meta, style = MaterialTheme.typography.labelSmall, color = TextSecondary, maxLines = 1)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                itemsIndexed(result.candidates, key = { _, it -> it.id }) { idx, candidate ->
+                    val meta = buildString {
+                        append(candidate.sourceKind.title)
+                        if (candidate.bitrateKbps > 0) append(" • ${candidate.bitrateKbps} kbps")
+                        if (candidate.sampleRateHz > 0) append(" • ${candidate.sampleRateHz / 1000}kHz")
+                    }
+                    RetroGlossyTrackRow(
+                        index = idx,
+                        title = candidate.sourceLabel,
+                        subtitle = meta,
+                        badgeText = candidate.formatBadge,
+                        badgeLossless = candidate.isLossless,
+                        statusBarColor = if (candidate.isLossless) CallIncomingGreen else MusicSourceAmber,
+                        onClick = {
+                            if (forDownload) onPickDownload(candidate) else onPickPlay(candidate)
+                        },
+                        trailingSlot = {
                             VistaButton(text = "▶", isPrimary = !forDownload, onClick = { onPickPlay(candidate) })
                             VistaButton(
                                 text = if (candidate.sourceKind == MusicSourceKind.STREAMING_PAID) "Захват" else "⬇",
@@ -2748,7 +3481,7 @@ fun SourceChooserDialog(
                                 onClick = { onPickDownload(candidate) }
                             )
                         }
-                    }
+                    )
                 }
             }
         }
@@ -2762,10 +3495,16 @@ private fun ConfirmDeleteTrackDialog(
     onConfirm: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 460.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -2776,7 +3515,11 @@ private fun ConfirmDeleteTrackDialog(
             ) {
                 Text("УДАЛИТЬ ТРЕК С УСТРОЙСТВА?", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = theme.focusBorder)
             }
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp)
+            ) {
                 Text("Файл «$title» будет безвозвратно удалён с устройства и убран из альбомов.", style = MaterialTheme.typography.bodySmall, color = TextPrimary)
                 Spacer(Modifier.height(12.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

@@ -187,12 +187,14 @@ object MusicCatalogAndLyricsRepository {
             )
         }
 
-        // 3. Online Sources in Parallel: Archive.org (FLAC + MP3) & iTunes Catalog
+        // 3. Online Sources in Parallel: Archive.org (FLAC + MP3), iTunes Catalog, & Wikimedia Commons Audio
         coroutineScope {
             val archiveDeferred = async { searchArchiveOrgAudio(trimmed) }
             val itunesDeferred = async { searchItunesTracks(trimmed) }
+            val wikimediaDeferred = async { searchWikimediaCommonsAudio(trimmed) }
             allCandidates.addAll(archiveDeferred.await())
             allCandidates.addAll(itunesDeferred.await())
+            allCandidates.addAll(wikimediaDeferred.await())
         }
 
         // 4. Installed paid streaming bridges for top matches or direct search
@@ -435,6 +437,54 @@ object MusicCatalogAndLyricsRepository {
         return parseItunesTracksJson(body)
     }
 
+    internal fun searchWikimediaCommonsAudio(query: String): List<TrackSourceCandidate> {
+        val clean = query.trim()
+        if (clean.length < 2) return emptyList()
+        return runCatching {
+            val encoded = URLEncoder.encode("$clean filetype:audio", "UTF-8")
+            val url = "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=$encoded&gsrlimit=6&prop=imageinfo&iiprop=url|mime|size&format=json"
+            val raw = httpGetText(url) ?: return emptyList()
+            parseWikimediaCommonsJson(raw)
+        }.getOrDefault(emptyList())
+    }
+
+    internal fun parseWikimediaCommonsJson(rawJson: String): List<TrackSourceCandidate> {
+        return runCatching {
+            val pages = JSONObject(rawJson).optJSONObject("query")?.optJSONObject("pages") ?: return emptyList()
+            val out = mutableListOf<TrackSourceCandidate>()
+            val keys = pages.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val page = pages.optJSONObject(key) ?: continue
+                val titleRaw = page.optString("title").removePrefix("File:").trim()
+                val ext = titleRaw.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                if (ext !in setOf("flac", "ogg", "oga", "opus", "mp3", "wav", "m4a")) continue
+                val info = page.optJSONArray("imageinfo")?.optJSONObject(0) ?: continue
+                val fileUrl = info.optString("url").trim().takeIf { it.startsWith("http") } ?: continue
+                val sizeBytes = info.optLong("size", 0L)
+                val cleanName = titleRaw.substringBeforeLast('.').replace('_', ' ').trim()
+                val isFlac = ext == "flac" || ext == "wav"
+                out.add(
+                    TrackSourceCandidate(
+                        id = "wiki:$key:$titleRaw",
+                        sourceKind = if (isFlac) MusicSourceKind.ARCHIVE_FLAC else MusicSourceKind.ARCHIVE_LOSSY,
+                        sourceLabel = "Wikimedia ${ext.uppercase(Locale.ROOT)}",
+                        title = cleanName,
+                        artist = "",
+                        album = "Wikimedia Commons",
+                        downloadUrl = fileUrl,
+                        previewUrl = fileUrl,
+                        fileExtension = ext,
+                        bitrateKbps = if (isFlac) 1000 else 192,
+                        sampleRateHz = 44100,
+                        sizeBytes = sizeBytes
+                    )
+                )
+            }
+            out
+        }.getOrDefault(emptyList())
+    }
+
     // ------------------------------------------------------------------------
     // Priority Download Logic: FLAC -> Paid Streaming Capture Bridge -> MP3/M4A
     // ------------------------------------------------------------------------
@@ -657,13 +707,16 @@ object MusicCatalogAndLyricsRepository {
         title: String,
         artist: String,
         durationMs: Long = 0L,
-        localFilePath: String? = null
+        localFilePath: String? = null,
+        attemptIndex: Int = 0,
+        excludeRawLrc: String? = null
     ): TrackLyricsData? = withContext(Dispatchers.IO) {
         val cleanTitle = title.replace(Regex("""\([^)]*remaster[^)]*\)""", RegexOption.IGNORE_CASE), "").trim()
         val trackKey = buildTrackKey(title, artist)
+        val forceAlternate = attemptIndex > 0 || !excludeRawLrc.isNullOrBlank()
 
-        // 1. Check local sidecar .lrc next to audio file
-        if (!localFilePath.isNullOrBlank()) {
+        // 1. Check local sidecar .lrc next to audio file on initial lookup only
+        if (!forceAlternate && !localFilePath.isNullOrBlank()) {
             val lrcFile = sidecarLrcFile(localFilePath)
             if (lrcFile != null && lrcFile.exists() && lrcFile.canRead()) {
                 val raw = runCatching { lrcFile.readText() }.getOrNull().orEmpty()
@@ -682,19 +735,42 @@ object MusicCatalogAndLyricsRepository {
             }
         }
 
+        val candidates = mutableListOf<TrackLyricsData>()
+        val seenRaw = HashSet<String>()
+        val normExcluded = excludeRawLrc?.trim().orEmpty()
+
+        fun addCandidateIfNovel(item: TrackLyricsData?) {
+            if (item == null || item.rawLrc.isBlank()) return
+            val sig = item.rawLrc.trim()
+            if (sig == normExcluded) return
+            if (seenRaw.add(sig)) candidates.add(item)
+        }
+
         // 2. Query LRCLIB /api/get
         val encodedTitle = URLEncoder.encode(cleanTitle.ifBlank { title }, "UTF-8")
         val encodedArtist = URLEncoder.encode(artist.trim(), "UTF-8")
-        if (artist.isNotBlank()) {
+        if (artist.isNotBlank() && attemptIndex == 0) {
             val durParam = if (durationMs > 1000L) "&duration=${durationMs / 1000L}" else ""
             val directJson = httpGetText("https://lrclib.net/api/get?artist_name=$encodedArtist&track_name=$encodedTitle$durParam")
-            parseLrclibSingleJson(directJson, trackKey, title, artist)?.let { return@withContext it }
+            addCandidateIfNovel(parseLrclibSingleJson(directJson, trackKey, title, artist))
         }
 
-        // 3. Fallback: LRCLIB /api/search?q=
+        // 3. LRCLIB /api/search?q= (collect all distinct matches so retry cycles sources)
         val searchQ = URLEncoder.encode("$artist $cleanTitle".trim(), "UTF-8")
         val searchJson = httpGetText("https://lrclib.net/api/search?q=$searchQ")
-        parseLrclibSearchJson(searchJson, trackKey, title, artist)
+        parseLrclibSearchCandidates(searchJson, trackKey, title, artist).forEach(::addCandidateIfNovel)
+
+        // 4. Fallback secondary source: lyrics.ovh (when retrying or when LRCLIB had no match)
+        if (artist.isNotBlank() && (candidates.isEmpty() || attemptIndex >= candidates.size)) {
+            val pathArtist = Uri.encode(artist.trim())
+            val pathTitle = Uri.encode(cleanTitle.ifBlank { title })
+            val ovhJson = httpGetText("https://api.lyrics.ovh/v1/$pathArtist/$pathTitle")
+            addCandidateIfNovel(parseLyricsOvhJson(ovhJson, trackKey, title, artist))
+        }
+
+        if (candidates.isEmpty()) return@withContext null
+        val pickIdx = if (attemptIndex <= 0) 0 else (attemptIndex % candidates.size)
+        candidates[pickIdx]
     }
 
     internal fun parseLrclibSingleJson(
@@ -729,41 +805,77 @@ object MusicCatalogAndLyricsRepository {
         title: String,
         artist: String
     ): TrackLyricsData? {
-        if (rawJson.isNullOrBlank()) return null
+        return parseLrclibSearchCandidates(rawJson, trackKey, title, artist).firstOrNull()
+    }
+
+    internal fun parseLrclibSearchCandidates(
+        rawJson: String?,
+        trackKey: String,
+        title: String,
+        artist: String
+    ): List<TrackLyricsData> {
+        if (rawJson.isNullOrBlank()) return emptyList()
         return runCatching {
             val arr = JSONArray(rawJson)
-            var bestPlain: TrackLyricsData? = null
+            val syncedList = mutableListOf<TrackLyricsData>()
+            val plainList = mutableListOf<TrackLyricsData>()
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 val syncedRaw = o.optString("syncedLyrics", "").trim()
                 val plainRaw = o.optString("plainLyrics", "").trim()
-                if (syncedRaw.isNotBlank()) {
-                    val synced = parseLrc(syncedRaw)
-                    if (synced.isNotEmpty()) {
-                        return TrackLyricsData(
+                val tName = o.optString("trackName", title).ifBlank { title }
+                val aName = o.optString("artistName", artist).ifBlank { artist }
+                val synced = if (syncedRaw.isNotBlank()) parseLrc(syncedRaw) else emptyList()
+                if (synced.isNotEmpty()) {
+                    syncedList.add(
+                        TrackLyricsData(
                             trackKey = trackKey,
-                            title = o.optString("trackName", title).ifBlank { title },
-                            artist = o.optString("artistName", artist).ifBlank { artist },
+                            title = tName,
+                            artist = aName,
                             syncedLines = synced,
                             plainText = plainRaw.ifBlank { synced.joinToString("\n") { it.text } },
                             rawLrc = syncedRaw,
-                            sourceLabel = "LRCLIB"
+                            sourceLabel = "LRCLIB #${syncedList.size + 1}"
                         )
-                    }
-                }
-                if (bestPlain == null && plainRaw.isNotBlank()) {
-                    bestPlain = TrackLyricsData(
-                        trackKey = trackKey,
-                        title = o.optString("trackName", title).ifBlank { title },
-                        artist = o.optString("artistName", artist).ifBlank { artist },
-                        syncedLines = emptyList(),
-                        plainText = plainRaw,
-                        rawLrc = plainRaw,
-                        sourceLabel = "LRCLIB (Текст)"
+                    )
+                } else if (plainRaw.isNotBlank()) {
+                    plainList.add(
+                        TrackLyricsData(
+                            trackKey = trackKey,
+                            title = tName,
+                            artist = aName,
+                            syncedLines = emptyList(),
+                            plainText = plainRaw,
+                            rawLrc = plainRaw,
+                            sourceLabel = "LRCLIB (Текст)"
+                        )
                     )
                 }
             }
-            bestPlain
+            syncedList + plainList
+        }.getOrDefault(emptyList())
+    }
+
+    internal fun parseLyricsOvhJson(
+        rawJson: String?,
+        trackKey: String,
+        title: String,
+        artist: String
+    ): TrackLyricsData? {
+        if (rawJson.isNullOrBlank()) return null
+        return runCatching {
+            val lyrics = JSONObject(rawJson).optString("lyrics", "").trim()
+            if (lyrics.isBlank()) return null
+            val synced = parseLrc(lyrics)
+            TrackLyricsData(
+                trackKey = trackKey,
+                title = title,
+                artist = artist,
+                syncedLines = synced,
+                plainText = if (synced.isNotEmpty()) synced.joinToString("\n") { it.text } else lyrics,
+                rawLrc = lyrics,
+                sourceLabel = "Lyrics.ovh"
+            )
         }.getOrNull()
     }
 

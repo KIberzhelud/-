@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
@@ -40,11 +41,14 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -64,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -73,6 +78,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -108,6 +114,7 @@ import com.example.ui.components.WeatherCityPickerDialog
 import com.example.ui.components.WeatherForecastDialog
 import com.example.ui.components.WorkspaceCanvasHost
 import com.example.ui.components.WriterStudioScreen
+import com.example.ui.components.ZipUpdateDialog
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextPrimary
@@ -229,6 +236,23 @@ fun LauncherScreen(
         }
     }
 
+    val zipPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.setShowZipUpdateDialog(true)
+            viewModel.inspectZipUpdateUri(uri)
+        }
+    }
+
+    val zipBackupSaverLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportConfigBackupZip(uri)
+        }
+    }
+
     var didPromptPermissionsOnLaunch by rememberSaveable { mutableStateOf(false) }
     var showAllFilesPromptDialog by rememberSaveable { mutableStateOf(false) }
 
@@ -284,6 +308,7 @@ fun LauncherScreen(
         state.pendingStreamCaptureRequest != null ||
         state.showWeatherForecastDialog ||
         state.showWeatherCityPickerDialog ||
+        state.showZipUpdateDialog ||
         state.showMusicSheet ||
         showAllFilesPromptDialog ||
         state.showAppearanceDialog ||
@@ -316,6 +341,7 @@ fun LauncherScreen(
             state.pendingStreamCaptureRequest != null -> viewModel.clearPendingStreamCaptureRequest()
             state.showWeatherCityPickerDialog -> viewModel.setShowWeatherCityPickerDialog(false)
             state.showWeatherForecastDialog -> viewModel.setShowWeatherForecastDialog(false)
+            state.showZipUpdateDialog -> viewModel.setShowZipUpdateDialog(false)
             state.showFullPowerampPlayer -> viewModel.closeFullPowerampPlayer()
             state.showRecentsOverlay -> viewModel.closeRecentsOverlay()
             state.showBackgroundWebAudioDialog -> viewModel.setShowBackgroundWebAudioDialog(false)
@@ -550,197 +576,225 @@ fun LauncherScreen(
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .imePadding()
             ) {
-                PortraitMusicHeaderBar(
-                    mediaState = state.mediaState,
-                    livePositionMs = state.livePositionMs,
-                    livePositionFlow = viewModel.livePositionMs,
-                    isDrawerOpen = state.showMusicSheet,
-                    isCollapsed = state.isPlayerCollapsed,
-                    showDeleteWorkspace = state.activeTab == MainTab.HOME && !state.workspaceGrid.isOnHome,
-                    coverStyle = state.playerCoverStyle,
-                    onTogglePlayPause = viewModel::togglePlayPause,
-                    onSkipPrevious = viewModel::skipPrevious,
-                    onSkipNext = viewModel::skipNext,
-                    onSeekTo = viewModel::seekTo,
-                    onCyclePlayer = viewModel::cycleMediaSession,
-                    onSwipeMusicSource = viewModel::swipeMusicSource,
-                    onTogglePlayerDrawer = viewModel::toggleMusicDrawer,
-                    onOpenPlayerDrawer = { viewModel.setShowMusicSheet(true) },
-                    onClosePlayerDrawer = { viewModel.setShowMusicSheet(false) },
-                    onSetCollapsed = viewModel::setPlayerCollapsed,
-                    onOpenFullPlayer = { viewModel.openFullPowerampPlayer() },
-                    onDeleteWorkspace = { viewModel.deleteWorkspace() }
-                )
-
-                AnimatedVisibility(
-                    visible = state.showMusicSheet,
-                    enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                    exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
-                ) {
-                    InlineMusicControlDrawer(
-                        mediaState = state.mediaState,
-                        livePositionMs = state.livePositionMs,
-                        livePositionFlow = viewModel.livePositionMs,
-                        selectedTab = state.musicDrawerTab,
-                        localTracks = state.localAudioTracks,
-                        telegramNotifications = state.hubNotifications,
-                        trackSearchQuery = state.localTrackSearchQuery,
-                        streamSearchHistory = state.streamSearchHistory,
-                        hasAudioReadAccess = state.hasAudioReadAccess,
-                        hasAllFilesAccess = state.hasAllFilesAccess,
-                        musicApps = state.musicApps,
-                        isLandscape = false,
-                        backgroundSpoofEnabled = state.backgroundSpoofEnabled,
-                        isCurrentSessionSpoofed = state.mediaState.activeSession?.packageName?.let {
-                            state.backgroundSpoofPackages.contains(it)
-                        } ?: false,
-                        onToggleCurrentSessionSpoof = viewModel::toggleCurrentSessionBackgroundSpoof,
-                        onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
-                        onSelectTab = viewModel::selectMusicDrawerTab,
-                        onTrackSearchChange = viewModel::updateLocalTrackSearchQuery,
-                        onSkipToQueueItem = viewModel::skipToQueueItem,
-                        onInvokeCustomAction = viewModel::invokeMediaCustomAction,
-                        onLikeStreamTrack = viewModel::likeStreamTrack,
-                        onDislikeStreamTrack = viewModel::dislikeStreamTrack,
-                        onStartMyWave = viewModel::startMyWave,
-                        onPlayBrowserTrack = viewModel::playBrowserTrack,
-                        onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
-                        onConnectBrowser = viewModel::connectBrowserForPackage,
-                        onPlayLocalTrack = viewModel::playLocalAudioTrack,
-                        onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
-                        onOpenHubNotification = viewModel::openHubNotification,
-                        onRefreshTracks = viewModel::refreshLocalAudioTracks,
-                        onRequestAudioPermission = { requestMediaAndAudioPermissions() },
-                        onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
-                        onClose = { viewModel.setShowMusicSheet(false) },
-                        onSelectSession = viewModel::selectMediaSession,
-                        onTogglePlayPause = viewModel::togglePlayPause,
-                        onSkipPrevious = viewModel::skipPrevious,
-                        onSkipNext = viewModel::skipNext,
-                        onSeekTo = viewModel::seekTo,
-                        onSeekBy = viewModel::seekBy,
-                        onOpenActivePlayer = viewModel::openActivePlayer,
-                        onSetVolume = viewModel::setVolume,
-                        onToggleMute = viewModel::toggleMute,
-                        onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
-                        onLaunchMusicApp = viewModel::launchApp,
-                        onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
-                    )
-                }
-
                 val isInCleanWorkspaceMode = state.activeTab == MainTab.HOME &&
                     state.showWorkspaceSpace &&
                     state.appSearchQuery.isBlank() &&
                     state.highlightedLetter == null
 
-                if (isInCleanWorkspaceMode) {
-                    // Compact docked Search Strip matching screenshot layout directly under Player Bar
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .symbianMetallicBar()
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = {}
-                            )
-                            .padding(horizontal = 6.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .vistaInsetBox()
-                                .clickable {
-                                    viewModel.closeWorkspaceSpace()
-                                    runCatching { appSearchFocusRequester.requestFocus() }
-                                }
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
-                                .testTag("workspace_top_search_pill")
-                        ) {
-                            Text(
-                                text = "🔍 Поиск: приложения, чаты, *apk, музыка…",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .vistaAeroButton(isPrimary = true, isActive = false)
-                                .clickable { viewModel.openHomeWorkspace() }
-                                .padding(horizontal = 10.dp, vertical = 7.dp)
-                                .testTag("workspace_top_home_pill")
-                        ) {
-                            Text(
-                                text = "🏠 Плитки",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = Color.White,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                    HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
-                }
-
-                Row(
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    ) {
-                        MainTabContent(
-                            activeTab = state.activeTab,
-                            isLandscape = false,
-                            gridColumns = gridColumns,
-                            state = state,
-                            appGridState = appGridState,
-                            callLogListState = callLogListState,
-                            contactsGridState = contactsGridState,
-                            hubListState = hubListState,
-                            appSearchFocusRequester = appSearchFocusRequester,
-                            callsSearchFocusRequester = callsSearchFocusRequester,
-                            viewModel = viewModel,
-                            onConnectSearchFolder = { folderTreeLauncher.launch(null) },
-                            onRequestCallsPermissions = {
-                                permissionsLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.READ_CALL_LOG,
-                                        Manifest.permission.READ_CONTACTS,
-                                        Manifest.permission.CALL_PHONE
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        PortraitMusicHeaderBar(
+                            mediaState = state.mediaState,
+                            livePositionMs = state.livePositionMs,
+                            livePositionFlow = viewModel.livePositionMs,
+                            isDrawerOpen = state.showMusicSheet,
+                            isCollapsed = state.isPlayerCollapsed,
+                            coverStyle = state.playerCoverStyle,
+                            onTogglePlayPause = viewModel::togglePlayPause,
+                            onSkipPrevious = viewModel::skipPrevious,
+                            onSkipNext = viewModel::skipNext,
+                            onSeekTo = viewModel::seekTo,
+                            onCyclePlayer = viewModel::cycleMediaSession,
+                            onSwipeMusicSource = viewModel::swipeMusicSource,
+                            onTogglePlayerDrawer = viewModel::toggleMusicDrawer,
+                            onOpenPlayerDrawer = { viewModel.setShowMusicSheet(true) },
+                            onClosePlayerDrawer = { viewModel.setShowMusicSheet(false) },
+                            onSetCollapsed = viewModel::setPlayerCollapsed,
+                            onOpenFullPlayer = { viewModel.openFullPowerampPlayer() }
+                        )
+
+                        AnimatedVisibility(
+                            visible = state.showMusicSheet,
+                            enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                            exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+                        ) {
+                            InlineMusicControlDrawer(
+                                mediaState = state.mediaState,
+                                livePositionMs = state.livePositionMs,
+                                livePositionFlow = viewModel.livePositionMs,
+                                selectedTab = state.musicDrawerTab,
+                                localTracks = state.localAudioTracks,
+                                telegramNotifications = state.hubNotifications,
+                                trackSearchQuery = state.localTrackSearchQuery,
+                                streamSearchHistory = state.streamSearchHistory,
+                                hasAudioReadAccess = state.hasAudioReadAccess,
+                                hasAllFilesAccess = state.hasAllFilesAccess,
+                                musicApps = state.musicApps,
+                                isLandscape = false,
+                                backgroundSpoofEnabled = state.backgroundSpoofEnabled,
+                                isCurrentSessionSpoofed = state.mediaState.activeSession?.packageName?.let {
+                                    state.backgroundSpoofPackages.contains(it)
+                                } ?: false,
+                                onToggleCurrentSessionSpoof = viewModel::toggleCurrentSessionBackgroundSpoof,
+                                onOpenBackgroundWebAudio = { viewModel.setShowBackgroundWebAudioDialog(true) },
+                                onSelectTab = viewModel::selectMusicDrawerTab,
+                                onTrackSearchChange = viewModel::updateLocalTrackSearchQuery,
+                                onSkipToQueueItem = viewModel::skipToQueueItem,
+                                onInvokeCustomAction = viewModel::invokeMediaCustomAction,
+                                onLikeStreamTrack = viewModel::likeStreamTrack,
+                                onDislikeStreamTrack = viewModel::dislikeStreamTrack,
+                                onStartMyWave = viewModel::startMyWave,
+                                onPlayBrowserTrack = viewModel::playBrowserTrack,
+                                onSearchAndPlayInStream = viewModel::searchAndPlayInActiveStream,
+                                onConnectBrowser = viewModel::connectBrowserForPackage,
+                                onPlayLocalTrack = viewModel::playLocalAudioTrack,
+                                onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
+                                onOpenHubNotification = viewModel::openHubNotification,
+                                onRefreshTracks = viewModel::refreshLocalAudioTracks,
+                                onRequestAudioPermission = { requestMediaAndAudioPermissions() },
+                                onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
+                                onClose = { viewModel.setShowMusicSheet(false) },
+                                onSelectSession = viewModel::selectMediaSession,
+                                onTogglePlayPause = viewModel::togglePlayPause,
+                                onSkipPrevious = viewModel::skipPrevious,
+                                onSkipNext = viewModel::skipNext,
+                                onSeekTo = viewModel::seekTo,
+                                onSeekBy = viewModel::seekBy,
+                                onOpenActivePlayer = viewModel::openActivePlayer,
+                                onSetVolume = viewModel::setVolume,
+                                onToggleMute = viewModel::toggleMute,
+                                onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
+                                onLaunchMusicApp = viewModel::launchApp,
+                                onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
+                            )
+                        }
+
+                        if (isInCleanWorkspaceMode) {
+                            // Compact docked Search Strip matching screenshot layout directly under Player Bar
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .symbianMetallicBar()
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                        onClick = {}
                                     )
+                                    .padding(horizontal = 6.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .vistaInsetBox()
+                                        .clickable {
+                                            viewModel.closeWorkspaceSpace()
+                                            runCatching { appSearchFocusRequester.requestFocus() }
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                                        .testTag("workspace_top_search_pill")
+                                ) {
+                                    Text(
+                                        text = "🔍 Поиск: приложения, чаты, *apk, музыка…",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .vistaAeroButton(isPrimary = true, isActive = false)
+                                        .clickable { viewModel.openHomeWorkspace() }
+                                        .padding(horizontal = 10.dp, vertical = 7.dp)
+                                        .testTag("workspace_top_home_pill")
+                                ) {
+                                    Text(
+                                        text = "🏠 Плитки",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                            HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            ) {
+                                MainTabContent(
+                                    activeTab = state.activeTab,
+                                    isLandscape = false,
+                                    gridColumns = gridColumns,
+                                    state = state,
+                                    appGridState = appGridState,
+                                    callLogListState = callLogListState,
+                                    contactsGridState = contactsGridState,
+                                    hubListState = hubListState,
+                                    appSearchFocusRequester = appSearchFocusRequester,
+                                    callsSearchFocusRequester = callsSearchFocusRequester,
+                                    viewModel = viewModel,
+                                    onConnectSearchFolder = { folderTreeLauncher.launch(null) },
+                                    onRequestCallsPermissions = {
+                                        permissionsLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.READ_CALL_LOG,
+                                                Manifest.permission.READ_CONTACTS,
+                                                Manifest.permission.CALL_PHONE
+                                            )
+                                        )
+                                    }
                                 )
                             }
-                        )
+
+                            if (state.activeTab != MainTab.HUB && !isInCleanWorkspaceMode) {
+                                FavoritesAndAlphabetRail(
+                                    activeTab = state.activeTab,
+                                    alphabetMode = state.alphabetMode,
+                                    favoriteApps = state.favoriteApps,
+                                    starredContacts = state.starredContacts,
+                                    presentLetters = presentLetters,
+                                    activeScrubLetter = state.activeScrubLetter,
+                                    highlightedLetter = state.highlightedLetter,
+                                    onToggleAlphabetMode = viewModel::toggleAlphabetMode,
+                                    onScrubLetter = viewModel::onAlphabetScrub,
+                                    onTapLetter = viewModel::jumpToLetter,
+                                    onLaunchApp = viewModel::launchApp,
+                                    onLongPressApp = viewModel::openContextMenu,
+                                    onCallContact = { viewModel.placeCall(it.number) }
+                                )
+                            }
+                        }
                     }
 
-                    if (state.activeTab != MainTab.HUB && !isInCleanWorkspaceMode) {
-                        FavoritesAndAlphabetRail(
-                            activeTab = state.activeTab,
-                            alphabetMode = state.alphabetMode,
-                            favoriteApps = state.favoriteApps,
-                            starredContacts = state.starredContacts,
-                            presentLetters = presentLetters,
-                            activeScrubLetter = state.activeScrubLetter,
-                            highlightedLetter = state.highlightedLetter,
-                            onToggleAlphabetMode = viewModel::toggleAlphabetMode,
-                            onScrubLetter = viewModel::onAlphabetScrub,
-                            onTapLetter = viewModel::jumpToLetter,
-                            onLaunchApp = viewModel::launchApp,
-                            onLongPressApp = viewModel::openContextMenu,
-                            onCallContact = { viewModel.placeCall(it.number) }
+                    // Stage-3 Docked Poweramp Player (fills upper workspace above Bottom Softkey Taskbar!)
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = state.showFullPowerampPlayer,
+                        enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
+                        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        BoundPowerampPlayerScreen(
+                            state = state,
+                            viewModel = viewModel,
+                            isLandscape = false,
+                            applySafeInsets = false,
+                            onPickAlbumCover = { albumId ->
+                                pendingCoverAlbumId = albumId
+                                albumCoverPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
                 }
 
-                // Bottom Windows Vista / Symbian S60 Softkey Taskbar (hidden in Workspace Space so workspace fills full area below Player+Search)
-                if (!isInCleanWorkspaceMode) {
+                // Bottom Windows Vista / Symbian S60 Softkey Taskbar (always visible during Stage-3 Player too!)
+                if (!isInCleanWorkspaceMode || state.showFullPowerampPlayer) {
                     HorizontalDivider(color = theme.chromeBorderOuter, thickness = 1.dp)
                     Row(
                         modifier = Modifier
@@ -845,77 +899,24 @@ fun LauncherScreen(
             )
         }
 
-        // Full-Screen Poweramp Player Overlay (Long-Press or 2nd Expand)
+        // Landscape Full-Screen Poweramp Player Overlay (Portrait docks above bottom taskbar inside main Column)
         AnimatedVisibility(
-            visible = state.showFullPowerampPlayer,
+            visible = isLandscape && state.showFullPowerampPlayer,
             enter = fadeIn() + expandVertically(expandFrom = Alignment.Top),
             exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Top)
         ) {
-            PowerampPlayerScreen(
-                mediaState = state.mediaState,
-                livePositionMs = state.livePositionMs,
-                livePositionFlow = viewModel.livePositionMs,
-                coverStyle = state.playerCoverStyle,
-                activeTab = state.powerampTab,
-                isLandscape = isLandscape,
-                sourceSelectionMode = state.sourceSelectionMode,
-                localTracks = state.localAudioTracks,
-                unifiedSearchQuery = state.unifiedMusicQuery,
-                unifiedSearchResults = state.unifiedMusicResults,
-                isSearchingOnline = state.isSearchingMusicOnline,
-                currentLyrics = state.currentLyrics,
-                isFetchingLyrics = state.isFetchingLyrics,
-                equalizerState = state.equalizerState,
-                audioCaptureState = state.audioCaptureState,
-                smartAlbums = state.smartAlbums,
-                selectedAlbumId = state.selectedAlbumId,
-                onClose = viewModel::closeFullPowerampPlayer,
-                onSelectTab = viewModel::selectPowerampTab,
-                onToggleSourceMode = viewModel::toggleMusicSourceMode,
-                onSelectSession = viewModel::selectMediaSession,
-                onTogglePlayPause = viewModel::togglePlayPause,
-                onSkipPrevious = viewModel::skipPrevious,
-                onSkipNext = viewModel::skipNext,
-                onSeekTo = viewModel::seekTo,
-                onSeekBy = viewModel::seekBy,
-                onSkipToQueueItem = viewModel::skipToQueueItem,
-                onOpenActivePlayer = viewModel::openActivePlayer,
-                onPlayLocalTrack = viewModel::playLocalAudioTrack,
-                onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
-                onDeleteActiveTrack = viewModel::deleteActiveTrackIfLocal,
-                onSetPlaybackSpeed = viewModel::setLocalPlaybackSpeed,
-                onCycleRepeatMode = viewModel::cycleLocalRepeatMode,
-                onToggleShuffle = viewModel::toggleLocalShuffle,
-                onSearchMusicEverywhere = viewModel::searchMusicEverywhere,
-                onUnifiedTrackAction = viewModel::handleUnifiedTrackAction,
-                onOpenSourcePicker = viewModel::openSourcePicker,
-                onStopAudioCapture = viewModel::stopStreamCapture,
-                onAutoFetchLyrics = viewModel::autoPickLyricsAgain,
-                onSaveLyrics = viewModel::saveEditedLyrics,
-                onDeleteLyrics = viewModel::deleteCurrentLyrics,
-                onSetEqualizerEnabled = viewModel::setEqualizerEnabled,
-                onApplyEqualizerPreset = viewModel::applyEqualizerPreset,
-                onSetEqualizerBand = viewModel::setEqualizerBandLevel,
-                onSetBassBoost = viewModel::setBassBoostStrength,
-                onSetVirtualizer = viewModel::setVirtualizerStrength,
-                onSelectAlbum = viewModel::selectSmartAlbum,
-                onCreateAlbum = viewModel::createSmartAlbum,
-                onRefreshAlbumOnline = viewModel::refreshAlbumOnlineMetadata,
-                onAttachLocalTracksToAlbum = viewModel::attachLocalTracksToAlbum,
-                onDetachLocalTrackFromAlbum = viewModel::detachTrackFromAlbum,
-                onPickCustomAlbumCover = { albumId ->
+            BoundPowerampPlayerScreen(
+                state = state,
+                viewModel = viewModel,
+                isLandscape = true,
+                applySafeInsets = true,
+                onPickAlbumCover = { albumId ->
                     pendingCoverAlbumId = albumId
                     albumCoverPickerLauncher.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
-                onSelectAlternateCoverUrl = viewModel::setAlbumCoverUrl,
-                onDeleteAlbum = viewModel::deleteSmartAlbum,
-                onDownloadMissingAlbumTrack = viewModel::downloadExpectedTrackForAlbum,
-                onDownloadAllMissingAlbumTracks = viewModel::downloadMissingAlbumTracks,
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .imePadding()
+                modifier = Modifier.imePadding()
             )
         }
 
@@ -1186,6 +1187,35 @@ fun LauncherScreen(
             onDismiss = { viewModel.setShowWeatherCityPickerDialog(false) }
         )
     }
+
+    if (state.showZipUpdateDialog) {
+        ZipUpdateDialog(
+            currentVersionName = state.appVersionName,
+            currentVersionCode = state.appVersionCode,
+            inspection = state.zipUpdateInspection,
+            isBusy = state.zipUpdateBusy,
+            statusMessage = state.zipUpdateStatus,
+            shizukuState = state.shizukuState,
+            githubBuildConfig = state.githubBuildConfig,
+            onPickZipFile = {
+                zipPickerLauncher.launch(
+                    arrayOf(
+                        "application/zip",
+                        "application/x-zip-compressed",
+                        "application/octet-stream",
+                        "*/*"
+                    )
+                )
+            },
+            onExportBackupZip = {
+                zipBackupSaverLauncher.launch("keydeck-backup-${state.appVersionName}.zip")
+            },
+            onApplyUpdate = viewModel::applyZipUpdate,
+            onCloudBuildSourceZip = viewModel::cloudBuildApkFromSourceZip,
+            onFetchLatestCloudApk = viewModel::fetchLatestCloudBuiltApk,
+            onDismiss = { viewModel.setShowZipUpdateDialog(false) }
+        )
+    }
 }
 
 @Composable
@@ -1195,10 +1225,16 @@ private fun StreamCaptureConsentDialog(
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("stream_capture_consent_dialog")
         ) {
@@ -1215,7 +1251,11 @@ private fun StreamCaptureConsentDialog(
                     color = theme.focusBorder
                 )
             }
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp)
+            ) {
                 Text(
                     text = "Трек «${request.title}» будет захвачен напрямую из потока ${request.appLabel} во время воспроизведения и сохранён в WAV.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1252,10 +1292,16 @@ private fun AllFilesAccessPromptDialog(
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("all_files_prompt_dialog")
         ) {
@@ -1278,7 +1324,11 @@ private fun AllFilesAccessPromptDialog(
                     color = theme.focusBorder
                 )
             }
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp)
+            ) {
                 Text(
                     text = "Разрешите KeyDeck доступ ко всем файлам на устройстве, чтобы универсальный поиск находил документы, APK, архивы и музыку в любых папках памяти.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1463,7 +1513,6 @@ private fun MainTabContent(
                 onRequestShizukuPermission = viewModel::requestShizukuPermission,
                 onOpenShizukuApp = viewModel::openShizukuApp,
                 onGrantNotificationViaShizuku = viewModel::grantNotificationAccessViaShizuku,
-                onToggleShadeInterception = viewModel::toggleShadeInterception,
                 onToggleLockScreenInterception = viewModel::toggleLockScreenInterception,
                 onToggleOemGestureBypass = viewModel::toggleOemGestureBypass,
                 onPreviewLockScreen = viewModel::openLockScreenPreview,
@@ -1471,6 +1520,7 @@ private fun MainTabContent(
                 onOpenAutoKillSettings = { viewModel.setShowAutoKillDialog(true) },
                 onOpenOptimizationSettings = { viewModel.setShowOptimizationDialog(true) },
                 onOpenLinuxCatalog = { viewModel.setShowLinuxCatalogDialog(true) },
+                onOpenZipUpdater = { viewModel.setShowZipUpdateDialog(true) },
                 onGrantOverlayAndAccessibilityViaShizuku = viewModel::grantOverlayAndAccessibilityViaShizuku,
                 onOpenDefaultLauncherSettings = viewModel::openDefaultLauncherSettings,
                 onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
@@ -1525,4 +1575,78 @@ private fun PortraitNavButton(
             overflow = TextOverflow.Ellipsis
         )
     }
+}
+
+@Composable
+private fun BoundPowerampPlayerScreen(
+    state: com.example.viewmodel.LauncherUiState,
+    viewModel: LauncherViewModel,
+    isLandscape: Boolean,
+    applySafeInsets: Boolean,
+    onPickAlbumCover: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    PowerampPlayerScreen(
+        mediaState = state.mediaState,
+        livePositionMs = state.livePositionMs,
+        livePositionFlow = viewModel.livePositionMs,
+        coverStyle = state.playerCoverStyle,
+        activeTab = state.powerampTab,
+        isLandscape = isLandscape,
+        sourceSelectionMode = state.sourceSelectionMode,
+        localTracks = state.localAudioTracks,
+        unifiedSearchQuery = state.unifiedMusicQuery,
+        unifiedSearchResults = state.unifiedMusicResults,
+        isSearchingOnline = state.isSearchingMusicOnline,
+        currentLyrics = state.currentLyrics,
+        isFetchingLyrics = state.isFetchingLyrics,
+        equalizerState = state.equalizerState,
+        audioCaptureState = state.audioCaptureState,
+        smartAlbums = state.smartAlbums,
+        selectedAlbumId = state.selectedAlbumId,
+        onClose = viewModel::closeFullPowerampPlayer,
+        onSelectTab = viewModel::selectPowerampTab,
+        onToggleSourceMode = viewModel::toggleMusicSourceMode,
+        onSelectSession = viewModel::selectMediaSession,
+        onTogglePlayPause = viewModel::togglePlayPause,
+        onSkipPrevious = viewModel::skipPrevious,
+        onSkipNext = viewModel::skipNext,
+        onSeekTo = viewModel::seekTo,
+        onSeekBy = viewModel::seekBy,
+        onSkipToQueueItem = viewModel::skipToQueueItem,
+        onOpenActivePlayer = viewModel::openActivePlayer,
+        onPlayLocalTrack = viewModel::playLocalAudioTrack,
+        onDeleteLocalTrack = viewModel::deleteLocalAudioTrack,
+        onDeleteActiveTrack = viewModel::deleteActiveTrackIfLocal,
+        onSetPlaybackSpeed = viewModel::setLocalPlaybackSpeed,
+        onCycleRepeatMode = viewModel::cycleLocalRepeatMode,
+        onToggleShuffle = viewModel::toggleLocalShuffle,
+        onSearchMusicEverywhere = viewModel::searchMusicEverywhere,
+        onUnifiedTrackAction = viewModel::handleUnifiedTrackAction,
+        onOpenSourcePicker = viewModel::openSourcePicker,
+        onStopAudioCapture = viewModel::stopStreamCapture,
+        onAutoFetchLyrics = viewModel::autoPickLyricsAgain,
+        onSaveLyrics = viewModel::saveEditedLyrics,
+        onDeleteLyrics = viewModel::deleteCurrentLyrics,
+        onSetEqualizerEnabled = viewModel::setEqualizerEnabled,
+        onApplyEqualizerPreset = viewModel::applyEqualizerPreset,
+        onSetEqualizerBand = viewModel::setEqualizerBandLevel,
+        onSetBassBoost = viewModel::setBassBoostStrength,
+        onSetVirtualizer = viewModel::setVirtualizerStrength,
+        onSelectAlbum = viewModel::selectSmartAlbum,
+        onCreateAlbum = viewModel::createSmartAlbum,
+        onRefreshAlbumOnline = viewModel::refreshAlbumOnlineMetadata,
+        onAttachLocalTracksToAlbum = viewModel::attachLocalTracksToAlbum,
+        onDetachLocalTrackFromAlbum = viewModel::detachTrackFromAlbum,
+        onPickCustomAlbumCover = onPickAlbumCover,
+        onSelectAlternateCoverUrl = viewModel::setAlbumCoverUrl,
+        onDeleteAlbum = viewModel::deleteSmartAlbum,
+        onDownloadMissingAlbumTrack = viewModel::downloadExpectedTrackForAlbum,
+        onDownloadAllMissingAlbumTracks = viewModel::downloadMissingAlbumTracks,
+        onRenameLocalTrack = viewModel::renameLocalAudioTrack,
+        onToggleCaptureAutoSplit = viewModel::toggleCaptureAutoSplit,
+        onToggleCaptureSilentMute = viewModel::toggleCaptureSilentMute,
+        applySafeInsets = applySafeInsets,
+        modifier = modifier
+    )
 }

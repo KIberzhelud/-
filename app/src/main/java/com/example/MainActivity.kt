@@ -49,30 +49,34 @@ class MainActivity : ComponentActivity() {
         setContent {
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
             clearComposeFocusAction = { focusManager.clearFocus() }
-            val state by viewModel.uiState.collectAsStateWithLifecycle()
-            val effectivePalette = state.activeCustomPalette?.let {
+            val rootConfig by viewModel.rootThemeConfig.collectAsStateWithLifecycle()
+            val effectivePalette = rootConfig.activeCustomPalette?.let {
                 WallpaperPaletteData(
                     dominantDarkArgb = it.dominantDarkArgb,
                     accentArgb = it.accentArgb,
                     highlightArgb = it.highlightArgb
                 )
-            } ?: state.wallpaperPalette
-            val vistaTokens = remember(state.uiThemeColor, effectivePalette, state.hasWallpaper) {
+            } ?: rootConfig.wallpaperPalette
+            val vistaTokens = remember(
+                rootConfig.uiThemeColor,
+                effectivePalette,
+                rootConfig.hasWallpaper
+            ) {
                 buildVistaThemeTokens(
-                    themeColor = state.uiThemeColor,
+                    themeColor = rootConfig.uiThemeColor,
                     wallpaperPalette = effectivePalette,
-                    hasWallpaper = state.hasWallpaper
+                    hasWallpaper = rootConfig.hasWallpaper
                 )
             }
             val baseDensity = LocalDensity.current
-            val scaledDensity = remember(baseDensity.density, baseDensity.fontScale, state.uiScale) {
+            val scaledDensity = remember(baseDensity.density, baseDensity.fontScale, rootConfig.uiScale) {
                 Density(
-                    density = (baseDensity.density * state.uiScale).coerceIn(0.6f, 6.0f),
-                    fontScale = (baseDensity.fontScale * state.uiScale).coerceIn(0.6f, 4.0f)
+                    density = (baseDensity.density * rootConfig.uiScale).coerceIn(0.6f, 6.0f),
+                    fontScale = (baseDensity.fontScale * rootConfig.uiScale).coerceIn(0.6f, 4.0f)
                 )
             }
             CompositionLocalProvider(
-                LocalAppLang provides state.appLanguage,
+                LocalAppLang provides rootConfig.appLanguage,
                 LocalDensity provides scaledDensity
             ) {
                 KeyDeckTheme(vistaTokens = vistaTokens) {

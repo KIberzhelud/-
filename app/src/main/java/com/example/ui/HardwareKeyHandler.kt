@@ -52,6 +52,7 @@ object HardwareKeyHandler {
             state.showOptimizationDialog ||
             state.showLinuxCatalogDialog ||
             state.showBackgroundWebAudioDialog ||
+            state.showZipUpdateDialog ||
             state.contextMenuApp != null ||
             state.contextMenuFile != null ||
             state.renameTargetApp != null ||
@@ -75,6 +76,7 @@ object HardwareKeyHandler {
                         viewModel.setShowOptimizationDialog(false)
                         viewModel.setShowLinuxCatalogDialog(false)
                         viewModel.setShowBackgroundWebAudioDialog(false)
+                        viewModel.setShowZipUpdateDialog(false)
                         viewModel.openContextMenu(null)
                         viewModel.openFileContextMenu(null)
                         viewModel.openRenameAppDialog(null)
@@ -260,7 +262,10 @@ object HardwareKeyHandler {
                         return true
                     }
                 }
-                AndroidKeyEvent.KEYCODE_N -> { viewModel.expandNotificationShade(); return true }
+                AndroidKeyEvent.KEYCODE_N -> {
+                    viewModel.selectTab(if (state.activeTab == MainTab.HUB) MainTab.HOME else MainTab.HUB)
+                    return true
+                }
                 AndroidKeyEvent.KEYCODE_R -> { viewModel.toggleRecentsOverlay(); return true }
                 AndroidKeyEvent.KEYCODE_V -> {
                     if (!state.isWriterModeOpen &&

@@ -64,6 +64,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -184,23 +185,6 @@ fun PortraitMusicHeaderBar(
                         .weight(1f)
                         .basicMarquee(iterations = Int.MAX_VALUE)
                 )
-                if (showDeleteWorkspace) {
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable(onClick = onDeleteWorkspace)
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                            .testTag("header_delete_workspace_btn"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = L10n.deleteWorkspace(lang),
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
-                            color = Color(0xFFFF9A9A),
-                            maxLines = 1
-                        )
-                    }
-                }
                 Box(
                     modifier = Modifier
                         .size(width = 32.dp, height = 28.dp)
@@ -457,31 +441,6 @@ fun PortraitMusicHeaderBar(
             }
         }
 
-        if (showDeleteWorkspace) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(theme.surface.copy(alpha = if (theme.isGlassMode) 0.52f else 0.90f))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .vistaAeroButton()
-                        .clickable(onClick = onDeleteWorkspace)
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                        .testTag("header_delete_workspace_btn")
-                ) {
-                    Text(
-                        text = L10n.deleteWorkspace(lang),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-                        color = Color(0xFFFF9A9A)
-                    )
-                }
-            }
-        }
-
         // Interactive Windows Vista seekbar strip (isolated in leaf composable)
         if (active != null && active.durationMs > 0L) {
             PortraitHeaderSeekStrip(
@@ -650,6 +609,8 @@ fun LandscapeSymbianSidebar(
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
     val active = mediaState.activeSession
+    val isShortLandscape = LocalConfiguration.current.screenHeightDp < 410
+    val coverSize = if (isShortLandscape) 50.dp else 64.dp
 
     Column(
         modifier = modifier
@@ -693,13 +654,13 @@ fun LandscapeSymbianSidebar(
                         }
                     )
                 }
-                .padding(horizontal = 8.dp, vertical = 8.dp)
+                .padding(horizontal = 8.dp, vertical = if (isShortLandscape) 5.dp else 8.dp)
                 .testTag("landscape_music_panel"),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(coverSize)
                     .pointerInput(Unit) {
                         var dragX = 0f
                         var triggered = false
@@ -728,13 +689,13 @@ fun LandscapeSymbianSidebar(
             ) {
                 AlbumArtThumb(
                     artwork = active?.artwork,
-                    size = 64.dp,
+                    size = coverSize,
                     coverStyle = coverStyle,
                     isPlaying = active?.isPlaying == true
                 )
             }
 
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(if (isShortLandscape) 3.dp else 5.dp))
 
             Column(
                 modifier = Modifier

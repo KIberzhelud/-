@@ -8,9 +8,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,12 +21,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
@@ -56,7 +61,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -82,11 +89,13 @@ import com.example.ui.theme.vistaAeroButton
 import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun PowerampAlbumsTab(
     albums: List<SmartAlbum>,
     selectedAlbumId: String?,
     localTracks: List<LocalAudioTrack>,
+    isLandscape: Boolean = false,
     onSelectAlbum: (String?) -> Unit,
     onCreateAlbum: (title: String, artist: String) -> Unit,
     onRefreshAlbumOnline: (String) -> Unit,
@@ -201,7 +210,7 @@ fun PowerampAlbumsTab(
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(if (isLandscape) 5.dp else 8.dp))
 
             if (albums.isEmpty()) {
                 Box(
@@ -212,13 +221,15 @@ fun PowerampAlbumsTab(
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.padding(24.dp)
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Album,
                             contentDescription = null,
                             tint = theme.accent,
-                            modifier = Modifier.size(42.dp)
+                            modifier = Modifier.size(if (isLandscape) 34.dp else 42.dp)
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -232,6 +243,77 @@ fun PowerampAlbumsTab(
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )
+                    }
+                }
+            } else if (isLandscape) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 10.dp)
+                ) {
+                    items(albums.chunked(2), key = { row -> "alb_row_${row.first().id}" }) { rowAlbums ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowAlbums.forEach { album ->
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .vistaWindowFrame(RoundedCornerShape(4.dp))
+                                        .clickable { onSelectAlbum(album.id) }
+                                        .padding(8.dp)
+                                        .testTag("smart_album_card_${album.id}"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    SmartAlbumCoverBox(
+                                        customPath = album.customCoverPath,
+                                        coverUrl = album.coverUrl,
+                                        size = 48.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = album.title,
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (album.artist.isNotBlank()) {
+                                            Text(
+                                                text = album.artist,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = TextSecondary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Text(
+                                            text = if (album.totalExpected > 0) {
+                                                "${album.matchedCount}/${album.totalExpected}" + if (album.missingCount > 0) " • -${album.missingCount}" else ""
+                                            } else {
+                                                "Треков: ${album.attachedLocalTrackIds.size}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (album.missingCount == 0 && album.matchedCount > 0) CallIncomingGreen else MusicSourceAmber,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (album.isFetchingOnline) {
+                                        CircularProgressIndicator(
+                                            color = theme.accent,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            if (rowAlbums.size == 1) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
                     }
                 }
             } else {
@@ -323,8 +405,7 @@ fun PowerampAlbumsTab(
                     .mapNotNull { localTracksById[it] }
             }
 
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Header bar
+            val albumHeaderCard: @Composable () -> Unit = {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -335,7 +416,7 @@ fun PowerampAlbumsTab(
                     SmartAlbumCoverBox(
                         customPath = selectedAlbum.customCoverPath,
                         coverUrl = selectedAlbum.coverUrl,
-                        size = 72.dp
+                        size = if (isLandscape) 60.dp else 72.dp
                     )
                     Spacer(Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -372,274 +453,405 @@ fun PowerampAlbumsTab(
                                 text = selectedAlbum.statusMessage,
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                 color = TextMuted,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                 }
+            }
 
-                Spacer(Modifier.height(6.dp))
-
-                // Actions Strip
-                Row(
+            val albumActionItems: @Composable () -> Unit = {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .vistaAeroButton()
+                        .clickable { onSelectAlbum(null) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("album_back_to_list_btn")
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Список", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton(isPrimary = true)
+                        .clickable { showAttachTracksDialogForAlbum = selectedAlbum }
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                        .testTag("album_add_local_tracks_btn")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Добавить треки", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable { onPickCustomAlbumCover(selectedAlbum.id) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("album_change_cover_btn")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Image, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Обложка", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+                if (selectedAlbum.alternateCoverUrls.size > 1) {
                     Box(
                         modifier = Modifier
                             .vistaAeroButton()
-                            .clickable { onSelectAlbum(null) }
+                            .clickable { showAltCoversForAlbum = selectedAlbum }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("album_back_to_list_btn")
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Список", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
-                        }
+                        Text("Варианты (${selectedAlbum.alternateCoverUrls.size})", style = MaterialTheme.typography.labelSmall, color = MusicSourceAmber)
                     }
+                }
+                if (selectedAlbum.missingCount > 0) {
                     Box(
                         modifier = Modifier
                             .vistaAeroButton(isPrimary = true)
-                            .clickable { showAttachTracksDialogForAlbum = selectedAlbum }
+                            .clickable { onDownloadAllMissingTracks(selectedAlbum.id) }
                             .padding(horizontal = 9.dp, vertical = 6.dp)
-                            .testTag("album_add_local_tracks_btn")
+                            .testTag("album_download_missing_btn")
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text("Добавить треки с устройства", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable { onPickCustomAlbumCover(selectedAlbum.id) }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("album_change_cover_btn")
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Image, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Сменить обложку", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
-                        }
-                    }
-                    if (selectedAlbum.alternateCoverUrls.size > 1) {
-                        Box(
-                            modifier = Modifier
-                                .vistaAeroButton()
-                                .clickable { showAltCoversForAlbum = selectedAlbum }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                        ) {
-                            Text("Варианты (${selectedAlbum.alternateCoverUrls.size})", style = MaterialTheme.typography.labelSmall, color = MusicSourceAmber)
-                        }
-                    }
-                    if (selectedAlbum.missingCount > 0) {
-                        Box(
-                            modifier = Modifier
-                                .vistaAeroButton(isPrimary = true)
-                                .clickable { onDownloadAllMissingTracks(selectedAlbum.id) }
-                                .padding(horizontal = 9.dp, vertical = 6.dp)
-                                .testTag("album_download_missing_btn")
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Rounded.Download, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Докачать (${selectedAlbum.missingCount})", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
-                            }
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable { onRefreshAlbumOnline(selectedAlbum.id) }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Сверить", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
-                        }
-                    }
-                    Box(
-                        modifier = Modifier
-                            .vistaAeroButton()
-                            .clickable { onDeleteAlbum(selectedAlbum.id) }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CallMissedRed, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Удалить альбом", style = MaterialTheme.typography.labelSmall, color = CallMissedRed)
+                            Text("Докачать (${selectedAlbum.missingCount})", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
                         }
                     }
                 }
-
-                Spacer(Modifier.height(6.dp))
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                    contentPadding = PaddingValues(bottom = 14.dp)
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable { onRefreshAlbumOnline(selectedAlbum.id) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                 ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = null, tint = theme.accent, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Сверить", style = MaterialTheme.typography.labelSmall, color = TextPrimary)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton()
+                        .clickable { onDeleteAlbum(selectedAlbum.id) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = null, tint = CallMissedRed, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Удалить", style = MaterialTheme.typography.labelSmall, color = CallMissedRed)
+                    }
+                }
+            }
+
+            if (isLandscape) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(0.36f)
+                            .fillMaxHeight()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        albumHeaderCard()
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            albumActionItems()
+                        }
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(0.64f)
+                            .fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        contentPadding = PaddingValues(bottom = 14.dp)
+                    ) {
+                        if (selectedAlbum.expectedTracks.isNotEmpty()) {
+                            item(key = "exp_header") {
+                                RetroListSectionStrip(
+                                    title = "ТРЕКЛИСТ И СВЕРКА",
+                                    countBadge = "${selectedAlbum.matchedCount}/${selectedAlbum.totalExpected}"
+                                )
+                            }
+                            itemsIndexed(selectedAlbum.expectedTracks, key = { idx, tr -> "exp_${tr.trackNumber}_$idx" }) { idx, exp ->
+                                val matchedLocal = exp.matchedLocalTrackId?.let { localTracksById[it] }
+                                RetroGlossyTrackRow(
+                                    index = idx,
+                                    title = "${exp.trackNumber}. ${exp.title}",
+                                    subtitle = if (matchedLocal != null) {
+                                        "Есть: ${matchedLocal.displayPath}"
+                                    } else {
+                                        exp.artist.ifBlank { selectedAlbum.artist }
+                                    },
+                                    badgeText = matchedLocal?.formatLabel?.ifBlank { "OK" } ?: "НЕТ",
+                                    badgeLossless = matchedLocal?.isLossless == true,
+                                    durationText = MediaControlRepository.formatTimeMs(exp.durationMs).takeIf { exp.durationMs > 0L },
+                                    isActive = matchedLocal != null,
+                                    statusBarColor = if (matchedLocal != null) CallIncomingGreen else CallMissedRed,
+                                    onClick = {
+                                        if (matchedLocal != null) {
+                                            onPlayLocalTrack(matchedLocal)
+                                        } else {
+                                            onDownloadMissingTrack(selectedAlbum, exp)
+                                        }
+                                    },
+                                    trailingSlot = {
+                                        if (matchedLocal != null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .vistaAeroButton()
+                                                    .clickable { onOpenLyricsForTrack(matchedLocal) }
+                                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Lyrics, contentDescription = "Текст", tint = theme.accent, modifier = Modifier.size(14.dp))
+                                            }
+                                        } else {
+                                            Box(
+                                                modifier = Modifier
+                                                    .vistaAeroButton(isPrimary = true)
+                                                    .clickable { onDownloadMissingTrack(selectedAlbum, exp) }
+                                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                                    .testTag("album_download_track_${exp.trackNumber}")
+                                            ) {
+                                                Text("Скачать", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = Color.White)
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        if (extraLocalTracks.isNotEmpty()) {
+                            item(key = "extra_header") {
+                                Spacer(Modifier.height(6.dp))
+                                RetroListSectionStrip(
+                                    title = "ДОБАВЛЕННЫЕ С УСТРОЙСТВА",
+                                    countBadge = "${extraLocalTracks.size}"
+                                )
+                            }
+                            itemsIndexed(extraLocalTracks, key = { _, tr -> "extra_${tr.id}" }) { idx, tr ->
+                                RetroGlossyTrackRow(
+                                    index = idx,
+                                    title = tr.title,
+                                    subtitle = tr.artist.ifBlank { tr.displayPath },
+                                    badgeText = tr.formatLabel.ifBlank { "AUDIO" },
+                                    badgeLossless = tr.isLossless,
+                                    durationText = if (tr.durationMs > 0L) MediaControlRepository.formatTimeMs(tr.durationMs) else null,
+                                    isActive = true,
+                                    statusBarColor = theme.accent,
+                                    onClick = { onPlayLocalTrack(tr) },
+                                    trailingSlot = {
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton()
+                                                .clickable { onDetachLocalTrack(selectedAlbum.id, tr.id) }
+                                                .padding(horizontal = 6.dp, vertical = 5.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Close, contentDescription = "Убрать из альбома", tint = CallMissedRed, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        if (selectedAlbum.expectedTracks.isEmpty() && extraLocalTracks.isEmpty()) {
+                            item(key = "empty_album_detail") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .vistaInsetBox()
+                                        .padding(18.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = if (selectedAlbum.isFetchingOnline) {
+                                            "Поиск официального треклиста и обложки…"
+                                        } else {
+                                            "Нажмите «Добавить треки» для сверки или «Сверить» для загрузки списка треков."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    albumHeaderCard()
+
+                    Spacer(Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        albumActionItems()
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        contentPadding = PaddingValues(bottom = 14.dp)
+                    ) {
                     if (selectedAlbum.expectedTracks.isNotEmpty()) {
+                        item(key = "expected_tracks_header") {
+                            RetroListSectionStrip(
+                                title = "ТРЕКЛИСТ АЛЬБОМА",
+                                countBadge = "${selectedAlbum.matchedCount}/${selectedAlbum.expectedTracks.size}"
+                            )
+                        }
                         itemsIndexed(
                             selectedAlbum.expectedTracks,
                             key = { idx, slot -> "exp_${slot.trackNumber}_${slot.title}_$idx" }
-                        ) { _, slot ->
+                        ) { idx, slot ->
                             val matchedTrack = slot.matchedLocalTrackId?.let { localTracksById[it] }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        if (matchedTrack != null) theme.surface.copy(alpha = 0.88f)
-                                        else theme.insetBg.copy(alpha = 0.92f),
-                                        RoundedCornerShape(3.dp)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (matchedTrack != null) CallIncomingGreen.copy(alpha = 0.55f)
-                                        else MusicSourceAmber.copy(alpha = 0.55f),
-                                        RoundedCornerShape(3.dp)
-                                    )
-                                    .clickable {
-                                        if (matchedTrack != null) onPlayLocalTrack(matchedTrack)
-                                        else onDownloadMissingTrack(selectedAlbum, slot)
-                                    }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "%02d".format(slot.trackNumber),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = if (matchedTrack != null) CallIncomingGreen else TextMuted,
-                                    modifier = Modifier.width(24.dp)
+                            val isMatchedLossless = matchedTrack != null && (
+                                slot.matchedFormat?.contains("FLAC", ignoreCase = true) == true ||
+                                    slot.matchedFormat?.contains("WAV", ignoreCase = true) == true ||
+                                    matchedTrack.isLossless
                                 )
-                                Icon(
-                                    imageVector = if (matchedTrack != null) Icons.Rounded.CheckCircle else Icons.Rounded.WarningAmber,
-                                    contentDescription = null,
-                                    tint = if (matchedTrack != null) CallIncomingGreen else MusicSourceAmber,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(7.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = slot.title,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    val sub = if (matchedTrack != null) {
-                                        "Есть (${slot.matchedFormat ?: "AUDIO"}) • ${matchedTrack.title}"
-                                    } else {
-                                        val dur = if (slot.durationMs > 0) MediaControlRepository.formatTimeMs(slot.durationMs) else ""
-                                        "Недостаёт на устройстве ${if (dur.isNotBlank()) "• $dur" else ""}"
-                                    }
-                                    Text(
-                                        text = sub,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        color = if (matchedTrack != null) CallIncomingGreen else MusicSourceAmber,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                if (matchedTrack != null) {
-                                    Box(
-                                        modifier = Modifier
-                                            .vistaAeroButton()
-                                            .clickable { onOpenLyricsForTrack(matchedTrack) }
-                                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Lyrics, contentDescription = "Текст", tint = theme.accent, modifier = Modifier.size(14.dp))
-                                    }
-                                    Spacer(Modifier.width(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .vistaAeroButton(isPrimary = true)
-                                            .clickable { onPlayLocalTrack(matchedTrack) }
-                                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.PlayArrow, contentDescription = "Играть", tint = Color.White, modifier = Modifier.size(14.dp))
-                                    }
-                                    Spacer(Modifier.width(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .vistaAeroButton()
-                                            .clickable { onDetachLocalTrack(selectedAlbum.id, matchedTrack.id) }
-                                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "Убрать из альбома", tint = TextSecondary, modifier = Modifier.size(13.dp))
-                                    }
+                            RetroGlossyTrackRow(
+                                index = idx,
+                                title = slot.title,
+                                subtitle = if (matchedTrack != null) {
+                                    "Есть • ${matchedTrack.title}"
                                 } else {
+                                    "Недостаёт на устройстве"
+                                },
+                                trackNumberOverride = slot.trackNumber,
+                                badgeText = if (matchedTrack != null) (slot.matchedFormat ?: "AUDIO") else "НЕТ",
+                                badgeLossless = isMatchedLossless,
+                                durationText = if (slot.durationMs > 0) MediaControlRepository.formatTimeMs(slot.durationMs) else null,
+                                isActive = matchedTrack != null,
+                                statusBarColor = if (matchedTrack != null) CallIncomingGreen else MusicSourceAmber,
+                                onClick = {
+                                    if (matchedTrack != null) onPlayLocalTrack(matchedTrack)
+                                    else onDownloadMissingTrack(selectedAlbum, slot)
+                                },
+                                leadingSlot = {
                                     Box(
                                         modifier = Modifier
-                                            .vistaAeroButton(isPrimary = true)
-                                            .clickable { onDownloadMissingTrack(selectedAlbum, slot) }
-                                            .padding(horizontal = 7.dp, vertical = 5.dp)
+                                            .size(26.dp)
+                                            .vistaInsetBox(isFocused = matchedTrack != null, shape = RoundedCornerShape(2.dp)),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Rounded.Download, contentDescription = "Скачать", tint = Color.White, modifier = Modifier.size(13.dp))
-                                            Spacer(Modifier.width(3.dp))
-                                            Text("FLAC/Поток", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold), color = Color.White)
+                                        Icon(
+                                            imageVector = if (matchedTrack != null) Icons.Rounded.CheckCircle else Icons.Rounded.WarningAmber,
+                                            contentDescription = null,
+                                            tint = if (matchedTrack != null) CallIncomingGreen else MusicSourceAmber,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                },
+                                trailingSlot = {
+                                    if (matchedTrack != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton()
+                                                .clickable { onOpenLyricsForTrack(matchedTrack) }
+                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Lyrics, contentDescription = "Текст", tint = theme.accent, modifier = Modifier.size(14.dp))
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton(isPrimary = true)
+                                                .clickable { onPlayLocalTrack(matchedTrack) }
+                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.PlayArrow, contentDescription = "Играть", tint = Color.White, modifier = Modifier.size(14.dp))
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton()
+                                                .clickable { onDetachLocalTrack(selectedAlbum.id, matchedTrack.id) }
+                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Close, contentDescription = "Убрать из альбома", tint = TextSecondary, modifier = Modifier.size(13.dp))
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton(isPrimary = true)
+                                                .clickable { onDownloadMissingTrack(selectedAlbum, slot) }
+                                                .padding(horizontal = 7.dp, vertical = 5.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Rounded.Download, contentDescription = "Скачать", tint = Color.White, modifier = Modifier.size(13.dp))
+                                                Spacer(Modifier.width(3.dp))
+                                                Text("FLAC/Поток", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold), color = Color.White)
+                                            }
                                         }
                                     }
                                 }
-                            }
+                            )
                         }
                     }
 
                     if (extraLocalTracks.isNotEmpty()) {
                         item(key = "extra_attached_header") {
-                            Text(
-                                text = "ДОПОЛНИТЕЛЬНО ДОБАВЛЕННЫЕ ТРЕКИ (${extraLocalTracks.size})",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = theme.accent,
-                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
+                            RetroListSectionStrip(
+                                title = "ДОПОЛНИТЕЛЬНО ДОБАВЛЕННЫЕ ТРЕКИ",
+                                countBadge = "${extraLocalTracks.size}",
+                                modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        items(extraLocalTracks, key = { "extra_${it.id}" }) { track ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .vistaInsetBox()
-                                    .clickable { onPlayLocalTrack(track) }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Rounded.PlayArrow, contentDescription = "Играть", tint = theme.accent, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(7.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(track.title, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text("${track.artist.ifBlank { "Неизвестный" }} • ${track.formatLabel}", style = MaterialTheme.typography.labelSmall, color = TextSecondary, maxLines = 1)
+                        itemsIndexed(extraLocalTracks, key = { _, it -> "extra_${it.id}" }) { idx, track ->
+                            RetroGlossyTrackRow(
+                                index = idx,
+                                title = track.title,
+                                subtitle = track.artist.ifBlank { "Неизвестный" },
+                                badgeText = track.formatLabel.ifBlank { "AUDIO" },
+                                badgeLossless = track.isLossless,
+                                durationText = if (track.durationMs > 0L) MediaControlRepository.formatTimeMs(track.durationMs) else null,
+                                onClick = { onPlayLocalTrack(track) },
+                                trailingSlot = {
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable { onOpenLyricsForTrack(track) }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Lyrics, contentDescription = "Текст", tint = theme.accent, modifier = Modifier.size(14.dp))
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable { onDetachLocalTrack(selectedAlbum.id, track.id) }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "Убрать", tint = CallMissedRed, modifier = Modifier.size(13.dp))
+                                    }
                                 }
-                                Box(
-                                    modifier = Modifier
-                                        .vistaAeroButton()
-                                        .clickable { onOpenLyricsForTrack(track) }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Lyrics, contentDescription = "Текст", tint = theme.accent, modifier = Modifier.size(14.dp))
-                                }
-                                Spacer(Modifier.width(4.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .vistaAeroButton()
-                                        .clickable { onDetachLocalTrack(selectedAlbum.id, track.id) }
-                                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "Убрать", tint = CallMissedRed, modifier = Modifier.size(13.dp))
-                                }
-                            }
+                            )
                         }
                     }
                 }
             }
         }
+    }
     }
 
     showAttachTracksDialogForAlbum?.let { albumTarget ->
@@ -732,6 +944,7 @@ private fun AttachLocalTracksDialog(
         }
     }
 
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -739,7 +952,8 @@ private fun AttachLocalTracksDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
-                .heightIn(max = 560.dp)
+                .widthIn(max = 560.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
                 .testTag("attach_album_tracks_dialog")
         ) {
@@ -785,49 +999,38 @@ private fun AttachLocalTracksDialog(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                        .weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(filtered, key = { it.id }) { track ->
+                    itemsIndexed(filtered, key = { _, it -> it.id }) { idx, track ->
                         val checked = selectedIds.contains(track.id)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (checked) theme.accent.copy(alpha = 0.2f) else theme.insetBg,
-                                    RoundedCornerShape(3.dp)
-                                )
-                                .border(1.dp, if (checked) theme.accent else theme.divider, RoundedCornerShape(3.dp))
-                                .clickable {
-                                    if (checked) selectedIds.remove(track.id) else selectedIds.add(track.id)
+                        RetroGlossyTrackRow(
+                            index = idx,
+                            title = track.title,
+                            subtitle = "${track.artist.ifBlank { "Артист" }} • ${track.album.ifBlank { track.displayPath }}",
+                            badgeText = track.formatLabel.ifBlank { "AUDIO" },
+                            badgeLossless = track.isLossless,
+                            isActive = checked,
+                            statusBarColor = if (checked) CallIncomingGreen else null,
+                            onClick = {
+                                if (checked) selectedIds.remove(track.id) else selectedIds.add(track.id)
+                            },
+                            leadingSlot = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .vistaInsetBox(isFocused = checked, shape = RoundedCornerShape(2.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (checked) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                                        contentDescription = null,
+                                        tint = if (checked) CallIncomingGreen else TextMuted,
+                                        modifier = Modifier.size(15.dp)
+                                    )
                                 }
-                                .padding(horizontal = 8.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (checked) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
-                                contentDescription = null,
-                                tint = if (checked) CallIncomingGreen else TextMuted,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(track.title, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(
-                                    "${track.artist.ifBlank { "Артист" }} • ${track.album.ifBlank { track.displayPath }}",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
                             }
-                            Text(
-                                text = track.formatLabel.ifBlank { "AUDIO" },
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
-                                color = MusicSourceAmber
-                            )
-                        }
+                        )
                     }
                 }
 
@@ -856,10 +1059,16 @@ private fun AlternateAlbumCoversDialog(
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 520.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -873,7 +1082,12 @@ private fun AlternateAlbumCoversDialog(
                 Text("ВЫБОР ОБЛОЖКИ", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), color = theme.focusBorder)
                 VistaButton(text = "✕", onClick = onDismiss)
             }
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 VistaButton(
                     text = "Выбрать своё фото из галереи",
                     isPrimary = true,

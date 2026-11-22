@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -51,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -59,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material.icons.rounded.AddToQueue
 import androidx.compose.material.icons.rounded.Headset
 import com.example.R
@@ -102,10 +105,16 @@ fun AppContextDialog(
     onUninstall: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 480.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -266,10 +275,16 @@ fun RenameAppDialog(
 ) {
     var inputText by remember(app.id) { mutableStateOf(app.label) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(220.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 460.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -285,7 +300,11 @@ fun RenameAppDialog(
                     color = FocusBorderCyan
                 )
             }
-            Column(modifier = Modifier.padding(14.dp)) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp)
+            ) {
                 Text(
                     text = "Системное имя: ${app.originalLabel}",
                     style = MaterialTheme.typography.bodySmall,
@@ -356,11 +375,16 @@ fun AppIconPickerDialog(
     onSelectSymbianKey: (String) -> Unit,
     onPickCustomImage: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 560.dp)
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 540.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -577,10 +601,16 @@ fun FileContextDialog(
         append(file.mimeType)
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 480.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -638,7 +668,9 @@ fun FileContextDialog(
             }
 
             Column(
-                modifier = Modifier.padding(10.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 ContextActionRow(
@@ -746,10 +778,16 @@ fun KeyboardShortcutsDialog(
         "Shift + F1 / F12 / Ctrl + /" to "Показать эту справку"
     )
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 560.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(

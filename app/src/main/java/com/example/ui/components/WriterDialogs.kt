@@ -7,10 +7,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,10 +25,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.data.writer.BookEntity
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.TextMuted
@@ -44,10 +50,16 @@ fun CreateBookDialog(
     var author by remember { mutableStateOf("") }
     var genre by remember { mutableStateOf("") }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -64,7 +76,9 @@ fun CreateBookDialog(
                 )
             }
             Column(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 VistaLabeledInput(
@@ -118,10 +132,16 @@ fun EditBookMetaDialog(
     var author by remember(book.id) { mutableStateOf(book.author) }
     var genre by remember(book.id) { mutableStateOf(book.genre) }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -138,7 +158,9 @@ fun EditBookMetaDialog(
                 )
             }
             Column(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 VistaLabeledInput(
@@ -190,10 +212,16 @@ fun AddChapterDialog(
     val theme = LocalVistaTheme.current
     var title by remember { mutableStateOf("Глава $suggestedNumber") }
 
-    Dialog(onDismissRequest = onDismiss) {
+    val maxDialogH = (LocalConfiguration.current.screenHeightDp.dp * 0.90f).coerceAtLeast(240.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 500.dp)
+                .heightIn(max = maxDialogH)
                 .vistaWindowFrame(RoundedCornerShape(5.dp))
         ) {
             Row(
@@ -210,7 +238,9 @@ fun AddChapterDialog(
                 )
             }
             Column(
-                modifier = Modifier.padding(14.dp),
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 VistaLabeledInput(

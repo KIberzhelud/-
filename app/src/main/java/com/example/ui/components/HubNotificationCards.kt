@@ -420,7 +420,6 @@ fun ShizukuControlPanelCard(
     onGrantOverlayAndAccessibilityViaShizuku: () -> Unit = {},
     onOpenOptimizationSettings: () -> Unit = {},
     onOpenLinuxCatalog: () -> Unit = {},
-    onToggleShadeInterception: () -> Unit,
     onToggleLockScreenInterception: () -> Unit,
     onToggleOemGestureBypass: () -> Unit = {},
     onPreviewLockScreen: () -> Unit,
@@ -588,36 +587,6 @@ fun ShizukuControlPanelCard(
                     checked = shizukuState.oemGestureBypassEnabled,
                     onCheckedChange = { onToggleOemGestureBypass() },
                     modifier = Modifier.testTag("vista_switch_oem_gesture_bypass")
-                )
-            }
-
-            // Vista Switch 1: Intercept notification shade
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .vistaInsetBox()
-                    .clickable(onClick = onToggleShadeInterception)
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Перехват шторки уведомлений",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Свайп вниз и Ctrl+N сворачивают шторку и открывают Хаб",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                VistaSwitch(
-                    checked = shizukuState.interceptShadeEnabled,
-                    onCheckedChange = { onToggleShadeInterception() },
-                    modifier = Modifier.testTag("vista_switch_shade_intercept")
                 )
             }
 
