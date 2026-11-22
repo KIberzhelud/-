@@ -456,8 +456,8 @@ class ZipUpdateRepository(
             setDataAndType(apkUri, apkMime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        val resolved = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        runCatching {
+            val res = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.packageManager.queryIntentActivities(
                     baseIntent,
                     PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong())
@@ -466,25 +466,20 @@ class ZipUpdateRepository(
                 @Suppress("DEPRECATION")
                 context.packageManager.queryIntentActivities(baseIntent, PackageManager.MATCH_DEFAULT_ONLY)
             }
-        }.getOrDefault(emptyList())
-        val candidates = resolved.mapNotNull { it.activityInfo?.packageName }.distinct()
-        val chosen = selectPreferredApkInstaller(candidates)
-        if (chosen != null) {
-            runCatching {
-                context.grantUriPermission(chosen, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            val explicitOk = runCatching {
-                val explicit = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(apkUri, apkMime)
-                    setPackage(chosen)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            res.forEach {
+                val pkg = it.activityInfo?.packageName
+                if (!pkg.isNullOrBlank()) {
+                    context.grantUriPermission(pkg, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                context.startActivity(explicit)
-                true
-            }.getOrDefault(false)
-            if (explicitOk) return true
+            }
         }
         return runCatching {
+            val chooser = Intent.createChooser(baseIntent, "Установка обновления KeyDeck").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(chooser)
+            true
+        }.recoverCatching {
             context.startActivity(baseIntent)
             true
         }.getOrDefault(false)

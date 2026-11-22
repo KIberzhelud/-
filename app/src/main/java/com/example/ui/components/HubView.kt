@@ -606,80 +606,34 @@ fun HubView(
                             )
                         }
 
-                        if (isLandscape) {
-                            itemsIndexed(filteredActions.chunked(2), key = { rowIdx, _ -> "settings_tools_row_$rowIdx" }) { rowIdx, rowItems ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    rowItems.forEachIndexed { colIdx, item ->
-                                        val globalIdx = rowIdx * 2 + colIdx
-                                        Row(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .symbianGlossyTile(bucket = globalIdx, isFocused = globalIdx == focusedIndex)
-                                                .clickable(onClick = item.onClick)
-                                                .padding(horizontal = 10.dp, vertical = 10.dp)
-                                                .testTag("hub_setting_item_$globalIdx"),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(26.dp)
-                                                    .vistaInsetBox(),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Image(
-                                                    painter = painterResource(item.iconRes),
-                                                    contentDescription = item.title,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                text = item.title,
-                                                style = MaterialTheme.typography.labelLarge,
-                                                color = TextPrimary,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                    if (rowItems.size == 1) {
-                                        Spacer(Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                        } else {
-                            itemsIndexed(filteredActions, key = { _, item -> "settings_tool_${item.title}" }) { idx, item ->
-                                Row(
+                        itemsIndexed(filteredActions, key = { _, item -> "settings_tool_${item.title}" }) { idx, item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
+                                    .clickable(onClick = item.onClick)
+                                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                                    .testTag("hub_setting_item_$idx"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .symbianGlossyTile(bucket = idx, isFocused = idx == focusedIndex)
-                                        .clickable(onClick = item.onClick)
-                                        .padding(horizontal = 12.dp, vertical = 12.dp)
-                                        .testTag("hub_setting_item_$idx"),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .size(28.dp)
+                                        .vistaInsetBox(),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(28.dp)
-                                            .vistaInsetBox(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Image(
-                                            painter = painterResource(item.iconRes),
-                                            contentDescription = item.title,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(
-                                        text = item.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = TextPrimary
+                                    Image(
+                                        painter = painterResource(item.iconRes),
+                                        contentDescription = item.title,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = item.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = TextPrimary
+                                )
                             }
                         }
                     } else if (!showShizukuCard) {

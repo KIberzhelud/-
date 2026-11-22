@@ -1010,6 +1010,8 @@ fun LauncherScreen(
             onCreateAndSaveCustomPalette = viewModel::createAndSaveCustomPalette,
             onSelectCustomPalette = viewModel::selectCustomPalette,
             onDeleteCustomPalette = viewModel::deleteCustomPalette,
+            onShareCustomPalette = viewModel::shareCustomPalette,
+            onDeduplicatePalettes = viewModel::deduplicateCustomPalettes,
             onSelectLanguage = viewModel::setAppLanguage,
             onChangeUiScale = viewModel::setUiScale,
             onSelectCoverStyle = viewModel::setPlayerCoverStyle,

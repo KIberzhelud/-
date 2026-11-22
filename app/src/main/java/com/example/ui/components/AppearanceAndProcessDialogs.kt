@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material3.HorizontalDivider
@@ -105,6 +106,8 @@ fun AppearanceSettingsDialog(
     onCreateAndSaveCustomPalette: (name: String, darkArgb: Long, accentArgb: Long, highlightArgb: Long) -> Unit = { _, _, _, _ -> },
     onSelectCustomPalette: (String?) -> Unit = {},
     onDeleteCustomPalette: (String) -> Unit = {},
+    onShareCustomPalette: (CustomColorPalette) -> Unit = {},
+    onDeduplicatePalettes: () -> Unit = {},
     onSelectLanguage: (AppLanguage) -> Unit = {},
     onChangeUiScale: (Float) -> Unit = {},
     onSelectCoverStyle: (PlayerCoverStyle) -> Unit = {},
@@ -283,6 +286,8 @@ fun AppearanceSettingsDialog(
                     activeCustomPaletteId = activeCustomPaletteId,
                     onSelectCustomPalette = onSelectCustomPalette,
                     onDeleteCustomPalette = onDeleteCustomPalette,
+                    onShareCustomPalette = onShareCustomPalette,
+                    onDeduplicatePalettes = onDeduplicatePalettes,
                     onCreateAndSaveCustomPalette = onCreateAndSaveCustomPalette
                 )
 
@@ -673,6 +678,8 @@ private fun CustomPalettesSection(
     activeCustomPaletteId: String?,
     onSelectCustomPalette: (String?) -> Unit,
     onDeleteCustomPalette: (String) -> Unit,
+    onShareCustomPalette: (CustomColorPalette) -> Unit,
+    onDeduplicatePalettes: () -> Unit,
     onCreateAndSaveCustomPalette: (name: String, darkArgb: Long, accentArgb: Long, highlightArgb: Long) -> Unit
 ) {
     val theme = LocalVistaTheme.current
@@ -703,21 +710,41 @@ private fun CustomPalettesSection(
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                 color = theme.focusBorder
             )
-            Box(
-                modifier = Modifier
-                    .vistaAeroButton(isPrimary = showCreator)
-                    .clickable { showCreator = !showCreator }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("toggle_palette_creator_btn")
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = if (showCreator) "Скрыть" else "Создать",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = Color.White
-                    )
+                if (savedPalettes.size > 1) {
+                    Box(
+                        modifier = Modifier
+                            .vistaAeroButton()
+                            .clickable(onClick = onDeduplicatePalettes)
+                            .padding(horizontal = 7.dp, vertical = 4.dp)
+                            .testTag("deduplicate_palettes_btn")
+                    ) {
+                        Text(
+                            text = "Без дублей",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = theme.accent
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .vistaAeroButton(isPrimary = showCreator)
+                        .clickable { showCreator = !showCreator }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("toggle_palette_creator_btn")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text(
+                            text = if (showCreator) "Скрыть" else "Создать",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -776,20 +803,40 @@ private fun CustomPalettesSection(
                                 color = if (isSelected) theme.focusBorder else TextMuted
                             )
                         }
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .vistaAeroButton()
-                                .clickable { onDeleteCustomPalette(pal.id) }
-                                .testTag("delete_palette_${pal.id}"),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.DeleteOutline,
-                                contentDescription = "Удалить палитру",
-                                tint = CallMissedRed,
-                                modifier = Modifier.size(14.dp)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .vistaAeroButton()
+                                    .clickable { onShareCustomPalette(pal) }
+                                    .testTag("share_palette_${pal.id}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = "Поделиться палитрой",
+                                    tint = theme.accent,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .vistaAeroButton()
+                                    .clickable { onDeleteCustomPalette(pal.id) }
+                                    .testTag("delete_palette_${pal.id}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteOutline,
+                                    contentDescription = "Удалить палитру",
+                                    tint = CallMissedRed,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
                         }
                     }
                 }

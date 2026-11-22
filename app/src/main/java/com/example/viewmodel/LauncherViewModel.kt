@@ -10,6 +10,7 @@ import android.provider.Settings
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import org.json.JSONObject
 import com.example.data.AndroidOptimizerManager
 import com.example.data.AppPreviewCache
 import com.example.data.AppsRepository
@@ -3400,6 +3401,55 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             prefsRepo.deleteCustomPalette(paletteId)
             showToast("Палитра удалена")
+        }
+    }
+
+    fun deduplicateCustomPalettes() {
+        viewModelScope.launch {
+            val removed = prefsRepo.deduplicateCustomPalettes()
+            if (removed > 0) {
+                showToast("Удалено $removed дубликат(ов) палитр")
+            } else {
+                showToast("Дубликатов среди палитр не обнаружено")
+            }
+        }
+    }
+
+    fun shareCustomPalette(palette: CustomColorPalette) {
+        val darkHex = String.format("#%08X", palette.dominantDarkArgb)
+        val accentHex = String.format("#%08X", palette.accentArgb)
+        val hlHex = String.format("#%08X", palette.highlightArgb)
+        val json = JSONObject().apply {
+            put("id", palette.id)
+            put("name", palette.name)
+            put("dark", palette.dominantDarkArgb)
+            put("accent", palette.accentArgb)
+            put("hl", palette.highlightArgb)
+            put("wall", palette.isFromWallpaper)
+        }.toString(2)
+
+        val shareText = buildString {
+            append("🎨 Цветовая палитра KeyDeck: «").append(palette.name).append("»\n")
+            append("• Фон: ").append(darkHex).append("\n")
+            append("• Акцент: ").append(accentHex).append("\n")
+            append("• Подсветка: ").append(hlHex).append("\n\n")
+            append("Конфигурация JSON:\n")
+            append(json)
+        }
+
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Палитра KeyDeck: ${palette.name}")
+            putExtra(Intent.EXTRA_TEXT, shareText)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val chooser = Intent.createChooser(sendIntent, "Поделиться палитрой «${palette.name}»").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching {
+            getApplication<Application>().startActivity(chooser)
+        }.onFailure {
+            showToast("Не удалось открыть меню отправки")
         }
     }
 

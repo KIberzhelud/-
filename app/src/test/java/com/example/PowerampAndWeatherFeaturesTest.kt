@@ -26,7 +26,9 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.LauncherPreferencesRepository
 import com.example.data.LinuxPackagesRepository
+import kotlinx.coroutines.flow.first
 import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.data.NotificationHubRepository
 import com.example.data.RecentForegroundTracker
@@ -1323,5 +1325,50 @@ class PowerampAndWeatherFeaturesTest {
         composeTestRule.onNodeWithTag("poweramp_repeat_btn").assertIsDisplayed()
 
         assertTrue("Expected repeat button width >= 30dp in 800x380 landscape, got $repeatWidthDp dp", repeatWidthDp >= 30f)
+    }
+
+    @Test
+    fun testPaletteDeduplicationAndSharing() = runBlocking {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val prefsRepo = LauncherPreferencesRepository(app)
+
+        val palA = CustomColorPalette(
+            id = "pal_1",
+            name = "Aero Blue",
+            dominantDarkArgb = 0xFF08111DL,
+            accentArgb = 0xFF3584E4L,
+            highlightArgb = 0xFF78AEEDL,
+            isFromWallpaper = false
+        )
+        val palADuplicate = CustomColorPalette(
+            id = "pal_2",
+            name = "Aero Blue Copy",
+            dominantDarkArgb = 0xFF08111DL,
+            accentArgb = 0xFF3584E4L,
+            highlightArgb = 0xFF78AEEDL,
+            isFromWallpaper = false
+        )
+        val palB = CustomColorPalette(
+            id = "pal_3",
+            name = "Amber Sunset",
+            dominantDarkArgb = 0xFF1E140AL,
+            accentArgb = 0xFFFF9800L,
+            highlightArgb = 0xFFFFD54FL,
+            isFromWallpaper = false
+        )
+
+        prefsRepo.saveCustomPalette(palA, activate = false)
+        prefsRepo.saveCustomPalette(palADuplicate, activate = false)
+        prefsRepo.saveCustomPalette(palB, activate = true)
+
+        val before = prefsRepo.savedPalettes.first { it.size >= 3 }
+        assertTrue(before.size >= 3)
+
+        val removed = prefsRepo.deduplicateCustomPalettes()
+        assertEquals(1, removed)
+
+        val after = prefsRepo.savedPalettes.first { it.size == before.size - 1 }
+        val aeroCount = after.count { it.dominantDarkArgb == palA.dominantDarkArgb && it.accentArgb == palA.accentArgb }
+        assertEquals(1, aeroCount)
     }
 }

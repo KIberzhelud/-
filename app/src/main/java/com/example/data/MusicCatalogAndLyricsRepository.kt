@@ -418,7 +418,7 @@ object MusicCatalogAndLyricsRepository {
                             artist = artist,
                             album = album,
                             durationMs = durationMs,
-                            downloadUrl = previewUrl,
+                            downloadUrl = null,
                             previewUrl = previewUrl,
                             fileExtension = "m4a",
                             bitrateKbps = 256,
@@ -1020,28 +1020,34 @@ object MusicCatalogAndLyricsRepository {
 
     private fun fetchAlbumFromMusicBrainz(albumTitle: String, artistHint: String): AlbumBlueprintResult? {
         return runCatching {
-            val qPart = buildString {
-                append("release:\"")
-                append(albumTitle.replace("\"", ""))
-                append("\"")
-                if (artistHint.isNotBlank()) {
-                    append(" AND artist:\"")
-                    append(artistHint.replace("\"", ""))
-                    append("\"")
+            val cleanTitle = albumTitle.replace("\"", "").trim()
+            val cleanArtist = artistHint.replace("\"", "").trim()
+
+            val queries = buildList {
+                add("release:\"$cleanTitle\"" + if (cleanArtist.isNotBlank()) " AND artist:\"$cleanArtist\"" else "")
+                add("release:$cleanTitle" + if (cleanArtist.isNotBlank()) " AND artist:$cleanArtist" else "")
+                add("$cleanTitle $cleanArtist".trim())
+            }
+
+            var releases: JSONArray? = null
+            for (q in queries) {
+                val encoded = URLEncoder.encode(q, "UTF-8")
+                val searchJson = httpGetText("https://musicbrainz.org/ws/2/release/?query=$encoded&limit=5&fmt=json")
+                val arr = searchJson?.let { JSONObject(it).optJSONArray("releases") }
+                if (arr != null && arr.length() > 0) {
+                    releases = arr
+                    break
                 }
             }
-            val encoded = URLEncoder.encode(qPart, "UTF-8")
-            val searchJson = httpGetText("https://musicbrainz.org/ws/2/release/?query=$encoded&limit=5&fmt=json")
-                ?: return null
-            val releases = JSONObject(searchJson).optJSONArray("releases") ?: return null
-            if (releases.length() == 0) return null
+            val finalReleases = releases ?: return@runCatching null
+            if (finalReleases.length() == 0) return@runCatching null
 
-            val chosen = releases.optJSONObject(0) ?: return null
+            val chosen = finalReleases.optJSONObject(0) ?: return@runCatching null
             val mbid = chosen.optString("id").trim()
-            if (mbid.isEmpty()) return null
+            if (mbid.isEmpty()) return@runCatching null
 
             val detailJson = httpGetText("https://musicbrainz.org/ws/2/release/$mbid?inc=recordings+artists&fmt=json")
-                ?: return null
+                ?: return@runCatching null
             val detail = JSONObject(detailJson)
             val title = detail.optString("title", albumTitle).trim()
             val artistCredit = detail.optJSONArray("artist-credit")
@@ -1073,8 +1079,8 @@ object MusicCatalogAndLyricsRepository {
             }
             val coverUrl = "https://coverartarchive.org/release/$mbid/front-500"
             val altCovers = mutableListOf<String>()
-            for (i in 0 until releases.length()) {
-                val rid = releases.optJSONObject(i)?.optString("id")?.trim().orEmpty()
+            for (i in 0 until finalReleases.length()) {
+                val rid = finalReleases.optJSONObject(i)?.optString("id")?.trim().orEmpty()
                 if (rid.isNotEmpty()) {
                     altCovers.add("https://coverartarchive.org/release/$rid/front-500")
                 }

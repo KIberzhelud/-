@@ -130,12 +130,6 @@ private fun TouchWizFlipClockTempBadge(
             maxLines = 1,
             softWrap = false
         )
-        // Classic HTC Sense / TouchWiz split-flap hinge line across the flip plate
-        HorizontalDivider(
-            color = Color.Black.copy(alpha = 0.65f),
-            thickness = 1.dp,
-            modifier = Modifier.align(Alignment.Center)
-        )
     }
 }
 
@@ -293,6 +287,7 @@ fun WeatherWidgetCard(
             .clickable(onClick = { if (report != null) onOpenForecast() else onRefresh() })
     ) {
         // Real atmospheric backdrop photo (old TouchWiz / HTC Sense style)
+        // Real atmospheric backdrop photo (old TouchWiz / HTC Sense style adapting to weather)
         Image(
             painter = painterResource(weatherBackdropRes(iconKey)),
             contentDescription = report?.condition ?: "Погода",
@@ -331,7 +326,7 @@ fun WeatherWidgetCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = if (compact) 7.dp else 9.dp)
+                .padding(horizontal = if (compact) 8.dp else 10.dp, vertical = if (compact) 6.dp else 8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -352,7 +347,7 @@ fun WeatherWidgetCard(
                             text = report?.cityName ?: selectedCity.name,
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontWeight = FontWeight.Bold,
-                                fontSize = if (compact) 12.5.sp else 14.sp,
+                                fontSize = if (compact) 12.sp else 13.5.sp,
                                 shadow = Shadow(Color.Black, Offset(0f, 1.2f), 3f)
                             ),
                             color = Color.White,
@@ -362,7 +357,7 @@ fun WeatherWidgetCard(
                         Text(
                             text = "${weatherSymbol(iconKey)} ${report?.condition ?: if (isLoading) "Обновление…" else "Нажмите для прогноза"}",
                             style = MaterialTheme.typography.bodySmall.copy(
-                                fontSize = 10.5.sp,
+                                fontSize = 10.sp,
                                 shadow = Shadow(Color.Black, Offset(0f, 1f), 2f)
                             ),
                             color = Color(0xFFE3F2FD),
@@ -374,23 +369,23 @@ fun WeatherWidgetCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
+                            .size(24.dp)
                             .testTag("weather_city_picker_btn")
                             .vistaAeroButton(isPrimary = false, isActive = false)
                             .clickable(onClick = onOpenCityPicker),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("⌖", color = Color.White, fontSize = 12.sp)
+                        Text("⌖", color = Color.White, fontSize = 11.sp)
                     }
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
+                            .size(24.dp)
                             .testTag("weather_refresh_btn")
                             .vistaAeroButton(isPrimary = false, isActive = isLoading)
                             .clickable(onClick = onRefresh),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("↻", color = Color.White, fontSize = 12.sp)
+                        Text("↻", color = Color.White, fontSize = 11.sp)
                     }
                 }
             }

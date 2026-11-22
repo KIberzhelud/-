@@ -617,6 +617,31 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun deduplicateCustomPalettes(): Int {
+        var removedCount = 0
+        context.launcherDataStore.edit { prefs ->
+            val list = parsePalettes(prefs[Keys.SAVED_PALETTES_JSON])
+            val seenColors = HashSet<Triple<Long, Long, Long>>()
+            val deduplicated = mutableListOf<CustomColorPalette>()
+            for (pal in list) {
+                val key = Triple(pal.dominantDarkArgb, pal.accentArgb, pal.highlightArgb)
+                if (seenColors.add(key)) {
+                    deduplicated.add(pal)
+                } else {
+                    removedCount++
+                }
+            }
+            if (removedCount > 0) {
+                prefs[Keys.SAVED_PALETTES_JSON] = serializePalettes(deduplicated)
+                val activeId = prefs[Keys.ACTIVE_PALETTE_ID]
+                if (activeId != null && deduplicated.none { it.id == activeId }) {
+                    prefs.remove(Keys.ACTIVE_PALETTE_ID)
+                }
+            }
+        }
+        return removedCount
+    }
+
     suspend fun setSelectedWeatherCity(city: WeatherCityResult) {
         val obj = JSONObject().apply {
             put("name", city.name)
