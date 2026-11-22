@@ -76,6 +76,7 @@ class LauncherPreferencesRepository(private val context: Context) {
         val GITHUB_BUILD_REPO = stringPreferencesKey("github_build_repo")
         val GITHUB_BUILD_BRANCH = stringPreferencesKey("github_build_branch")
         val GITHUB_BUILD_TOKEN = stringPreferencesKey("github_build_token")
+        val TUTORIAL_SEEN = booleanPreferencesKey("tutorial_seen_v25")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -283,11 +284,21 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
         .onStart { emit(GitHubBuildConfig()) }
 
+    val tutorialSeen: Flow<Boolean> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.TUTORIAL_SEEN] ?: false }
+        .onStart { emit(false) }
+
+    suspend fun setTutorialSeen(seen: Boolean) {
+        context.launcherDataStore.edit { prefs ->
+            prefs[Keys.TUTORIAL_SEEN] = seen
+        }
+    }
+
     suspend fun saveGitHubBuildConfig(config: GitHubBuildConfig) {
         context.launcherDataStore.edit { prefs ->
-            prefs[Keys.GITHUB_BUILD_REPO] = config.repoSlug.trim()
-            prefs[Keys.GITHUB_BUILD_BRANCH] = config.branch.trim().ifBlank { "main" }
-            prefs[Keys.GITHUB_BUILD_TOKEN] = config.token.trim()
+            prefs[Keys.GITHUB_BUILD_REPO] = config.repoSlug
+            prefs[Keys.GITHUB_BUILD_BRANCH] = config.branch
+            prefs[Keys.GITHUB_BUILD_TOKEN] = config.token
         }
     }
 
