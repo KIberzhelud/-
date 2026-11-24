@@ -14,6 +14,9 @@ import org.json.JSONObject
 import com.example.data.AndroidOptimizerManager
 import com.example.data.AppPreviewCache
 import com.example.data.AppsRepository
+import com.example.data.AudioFileMetadataReadResult
+import com.example.data.AudioFileMetadataRepository
+import com.example.data.AudioFileMetadataUpdate
 import com.example.data.AutoCloseManager
 import com.example.data.BackgroundMediaGuardService
 import com.example.data.CallsContactsRepository
@@ -69,6 +72,7 @@ import com.example.model.MusicSourceKind
 import com.example.model.MusicStreamMatch
 import com.example.model.PlayerCoverStyle
 import com.example.model.PowerampTab
+import com.example.model.PreviewPlaybackState
 import com.example.model.RecentAppFrame
 import com.example.model.SearchResultKind
 import com.example.model.ShizukuState
@@ -95,7 +99,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
@@ -228,13 +231,21 @@ data class LauncherUiState(
     val audioCaptureState: AudioCaptureState = AudioCaptureState(),
     val pendingStreamCaptureRequest: PendingStreamCaptureRequest? = null,
     val smartAlbums: List<SmartAlbum> = emptyList(),
+    val albumSearchResults: List<SmartAlbum> = emptyList(),
     val selectedAlbumId: String? = null,
+    val trackCoverOverrides: Map<String, String> = emptyMap(),
+    val defaultTrackFallbackCoverPath: String? = null,
+    val previewPlaybackState: PreviewPlaybackState = PreviewPlaybackState(),
     val showWeatherInHubOther: Boolean = true,
     val showWeatherInHomeTile: Boolean = false,
     val showWeatherForecastDialog: Boolean = false,
     val showWeatherCityPickerDialog: Boolean = false,
     val contextMenuApp: AppEntry? = null,
     val contextMenuFile: DeviceSearchFile? = null,
+    val contextMenuTrack: LocalAudioTrack? = null,
+    val contextMenuTrackAlbum: SmartAlbum? = null,
+    val editingMetadataTrack: LocalAudioTrack? = null,
+    val editingMetadataPreview: AudioFileMetadataReadResult? = null,
     val renameTargetApp: AppEntry? = null,
     val iconPickerTargetApp: AppEntry? = null,
     val statusToast: String? = null
@@ -324,6 +335,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _isFetchingLyrics = MutableStateFlow(false)
     private val _pendingStreamCaptureRequest = MutableStateFlow<PendingStreamCaptureRequest?>(null)
     private val _selectedAlbumId = MutableStateFlow<String?>(null)
+    private val _contextMenuTrack = MutableStateFlow<Pair<LocalAudioTrack?, SmartAlbum?>>(null to null)
+    private val _editingMetadataTrack = MutableStateFlow<Pair<LocalAudioTrack?, AudioFileMetadataReadResult?>>(null to null)
     private val _captureAutoSplitEnabled = MutableStateFlow(true)
     private val _captureSilentMuteMode = MutableStateFlow(false)
     private val _activeLinuxRunnerTile = MutableStateFlow<LauncherPreferencesRepository.PersistedLinuxTile?>(null)
@@ -344,6 +357,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var weatherSearchJob: Job? = null
     private var onlineMusicSearchJob: Job? = null
     private var lyricsFetchJob: Job? = null
+    private var metadataLoadJob: Job? = null
+    private val albumRefreshJobs = mutableMapOf<String, Job>()
     private var lastLoadedLyricsKey: String = ""
     private var lyricsRetryAttempt: Int = 0
     private var lastRejectedLyricsRaw: String? = null
@@ -814,7 +829,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val weatherInHubOther: Boolean,
         val weatherInHomeTile: Boolean,
         val showWeatherForecast: Boolean,
-        val showWeatherCityPicker: Boolean
+        val showWeatherCityPicker: Boolean,
+        val trackCoverOverrides: Map<String, String>,
+        val defaultTrackFallbackCoverPath: String?,
+        val previewState: PreviewPlaybackState
     )
 
     private val powerampMusicFlow = combine(
@@ -837,12 +855,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             prefsRepo.showWeatherInHubOther,
             prefsRepo.showWeatherInHomeTile,
             _showWeatherForecastDialog,
-            _showWeatherCityPickerDialog
-        ) { wHub, wHome, wFc, wCity ->
-            arrayOf<Any?>(wHub, wHome, wFc, wCity)
+            _showWeatherCityPickerDialog,
+            combine(
+                prefsRepo.trackCoverOverrides,
+                prefsRepo.defaultTrackFallbackCoverPath,
+                mediaRepo.previewState
+            ) { cov, fb, prev -> Triple(cov, fb, prev) }
+        ) { wHub, wHome, wFc, wCity, mediaCov ->
+            arrayOf<Any?>(wHub, wHome, wFc, wCity, mediaCov)
         }
     ) { a, b, c, d ->
         @Suppress("UNCHECKED_CAST")
+        val mediaCov = d[4] as Triple<Map<String, String>, String?, PreviewPlaybackState>
         PowerampBundle(
             showFull = a[0] as Boolean,
             tab = a[1] as PowerampTab,
@@ -861,7 +885,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             weatherInHubOther = d[0] as Boolean,
             weatherInHomeTile = d[1] as Boolean,
             showWeatherForecast = d[2] as Boolean,
-            showWeatherCityPicker = d[3] as Boolean
+            showWeatherCityPicker = d[3] as Boolean,
+            trackCoverOverrides = mediaCov.first,
+            defaultTrackFallbackCoverPath = mediaCov.second,
+            previewState = mediaCov.third
         )
     }
 
@@ -870,17 +897,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val inspection: ZipUpdateInspection?,
         val busy: Boolean,
         val status: String?,
-        val githubConfig: GitHubBuildConfig
+        val githubConfig: GitHubBuildConfig,
+        val contextTrack: Pair<LocalAudioTrack?, SmartAlbum?>,
+        val editingTrack: Pair<LocalAudioTrack?, AudioFileMetadataReadResult?>
     )
 
     private val zipUpdateFlow = combine(
-        _showZipUpdateDialog,
-        _zipUpdateInspection,
-        _zipUpdateBusy,
-        _zipUpdateStatus,
-        prefsRepo.githubBuildConfig
-    ) { show, insp, busy, status, ghCfg ->
-        ZipUpdateBundle(show, insp, busy, status, ghCfg)
+        combine(_showZipUpdateDialog, _zipUpdateInspection, _zipUpdateBusy, _zipUpdateStatus, prefsRepo.githubBuildConfig) { show, insp, busy, status, ghCfg ->
+            arrayOf<Any?>(show, insp, busy, status, ghCfg)
+        },
+        _contextMenuTrack,
+        _editingMetadataTrack
+    ) { arr, ctxTrack, editTrack ->
+        ZipUpdateBundle(
+            showDialog = arr[0] as Boolean,
+            inspection = arr[1] as ZipUpdateInspection?,
+            busy = arr[2] as Boolean,
+            status = arr[3] as String?,
+            githubConfig = arr[4] as GitHubBuildConfig,
+            contextTrack = ctxTrack,
+            editingTrack = editTrack
+        )
     }
 
     val uiState: StateFlow<LauncherUiState> = combine(
@@ -919,6 +956,16 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         val images = hw.searchBundle.results.filter { it.kind == SearchResultKind.IMAGE }
         val files = hw.searchBundle.results.filter { it.kind == SearchResultKind.FILE }
+        val trimmedQuery = nav.appSearchQuery.trim()
+        val matchedAlbums = if (trimmedQuery.length >= 2) {
+            pw.smartAlbums.filter { alb ->
+                KeyboardSearchMatcher.matches(alb.title, trimmedQuery) ||
+                    KeyboardSearchMatcher.matches(alb.artist, trimmedQuery) ||
+                    alb.expectedTracks.any { KeyboardSearchMatcher.matches(it.title, trimmedQuery) }
+            }
+        } else {
+            emptyList()
+        }
 
         LauncherUiState(
             activeTab = nav.activeTab,
@@ -1024,13 +1071,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             audioCaptureState = pw.captureState,
             pendingStreamCaptureRequest = pw.pendingCapture,
             smartAlbums = pw.smartAlbums,
+            albumSearchResults = matchedAlbums,
             selectedAlbumId = pw.selectedAlbumId,
+            trackCoverOverrides = pw.trackCoverOverrides,
+            defaultTrackFallbackCoverPath = pw.defaultTrackFallbackCoverPath,
+            previewPlaybackState = pw.previewState,
             showWeatherInHubOther = pw.weatherInHubOther,
             showWeatherInHomeTile = pw.weatherInHomeTile,
             showWeatherForecastDialog = pw.showWeatherForecast,
             showWeatherCityPickerDialog = pw.showWeatherCityPicker,
             contextMenuApp = mediaBundle.ctxApp,
             contextMenuFile = hw.searchBundle.contextMenuFile,
+            contextMenuTrack = zip.contextTrack.first,
+            contextMenuTrackAlbum = zip.contextTrack.second,
+            editingMetadataTrack = zip.editingTrack.first,
+            editingMetadataPreview = zip.editingTrack.second,
             renameTargetApp = hw.searchBundle.renameTargetApp,
             iconPickerTargetApp = hw.searchBundle.iconPickerTargetApp,
             statusToast = mediaBundle.toast
@@ -1069,13 +1124,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         )
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                prefsRepo.appIconOverrides.first().values
+                prefsRepo.getAppIconOverridesNow().values
                     .mapNotNull { it.customFilePath }
                     .forEach { appsRepo.resolveCustomBitmap(it) }
             }
-            val savedHistory = runCatching { prefsRepo.streamingHistory.first() }.getOrDefault(emptyList())
+            val savedHistory = runCatching { prefsRepo.getStreamingHistoryNow() }.getOrDefault(emptyList())
             mediaRepo.loadPersistedHistory(savedHistory)
-            runCatching { prefsRepo.equalizerConfig.first() }.getOrNull()?.let { eqCfg ->
+            runCatching { prefsRepo.getEqualizerConfigNow() }.getOrNull()?.let { eqCfg ->
                 mediaRepo.dspController.applySaved(
                     enabled = eqCfg.enabled,
                     preset = eqCfg.preset,
@@ -1092,20 +1147,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
 
         viewModelScope.launch {
+            zipUpdateRepo.installEvents.collect { msg ->
+                _zipUpdateStatus.value = msg
+                showToast(msg)
+            }
+        }
+
+        viewModelScope.launch {
             StreamAudioCaptureRuntime.completedCaptures.collect { captured ->
                 val refreshed = mediaRepo.refreshLocalTracks()
                 val newTrack = refreshed.firstOrNull { it.filePath == captured.filePath }
                 if (newTrack != null && captured.targetAlbumId != null) {
-                    val albums = prefsRepo.smartAlbums.first()
-                    val updated = albums.map { alb ->
-                        if (alb.id == captured.targetAlbumId) {
-                            MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
-                                alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + newTrack.id).distinct()),
-                                refreshed
-                            )
-                        } else alb
+                    prefsRepo.updateSmartAlbums { albums ->
+                        albums.map { alb ->
+                            if (alb.id == captured.targetAlbumId) {
+                                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                                    alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + newTrack.id).distinct()),
+                                    refreshed
+                                )
+                            } else alb
+                        }
                     }
-                    prefsRepo.saveSmartAlbums(updated)
                 }
                 showToast("Захват сохранён: ${captured.title} (WAV)")
             }
@@ -1415,7 +1477,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         deviceSearchJob = viewModelScope.launch {
             _isSearchingDevice.value = true
             delay(260L)
-            val trees = prefsRepo.searchTreeUris.first()
+            val trees = prefsRepo.getSearchTreeUrisNow()
             val found = universalSearchRepo.searchDevice(trimmed, trees)
             _deviceSearchResults.value = found
             _isSearchingDevice.value = false
@@ -2528,7 +2590,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val deleted = mediaRepo.deleteLocalTrack(track)
             if (deleted) {
                 val refreshed = mediaRepo.localTracks.value
-                reconcileAllSmartAlbumsWithTracks(refreshed)
+                prefsRepo.updateSmartAlbums { albums ->
+                    albums.map { alb ->
+                        val cleanedAttached = alb.attachedLocalTrackIds.filterNot { it == track.id }
+                        MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                            alb.copy(attachedLocalTrackIds = cleanedAttached),
+                            refreshed
+                        )
+                    }
+                }
             }
             showToast(
                 if (deleted) "Файл удалён: ${track.title}"
@@ -2552,22 +2622,135 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             val renamed = mediaRepo.renameLocalTrack(track, newTitle)
             if (renamed != null) {
                 if (renamed.id != track.id) {
-                    val albums = prefsRepo.smartAlbums.first()
-                    val migrated = albums.map { alb ->
-                        if (alb.attachedLocalTrackIds.contains(track.id)) {
-                            alb.copy(
-                                attachedLocalTrackIds = alb.attachedLocalTrackIds.map {
-                                    if (it == track.id) renamed.id else it
-                                }.distinct()
-                            )
-                        } else alb
+                    prefsRepo.updateSmartAlbums { albums ->
+                        albums.map { alb ->
+                            if (alb.attachedLocalTrackIds.contains(track.id)) {
+                                alb.copy(
+                                    attachedLocalTrackIds = alb.attachedLocalTrackIds.map {
+                                        if (it == track.id) renamed.id else it
+                                    }.distinct()
+                                )
+                            } else alb
+                        }
                     }
-                    prefsRepo.saveSmartAlbums(migrated)
                 }
                 reconcileAllSmartAlbumsWithTracks(mediaRepo.localTracks.value)
                 showToast("Переименовано в «${renamed.title}»")
             } else {
                 showToast("Не удалось переименовать файл")
+            }
+        }
+    }
+
+    fun openTrackContextMenu(track: LocalAudioTrack?, albumContext: SmartAlbum? = null) {
+        _contextMenuTrack.value = track to albumContext
+    }
+
+    fun openTrackMetadataEditor(track: LocalAudioTrack?) {
+        metadataLoadJob?.cancel()
+        if (track == null) {
+            _editingMetadataTrack.value = null to null
+            return
+        }
+        _editingMetadataTrack.value = track to null
+        metadataLoadJob = viewModelScope.launch {
+            val loaded = AudioFileMetadataRepository.readTrackMetadata(getApplication(), track)
+            if (_editingMetadataTrack.value.first?.id == track.id) {
+                _editingMetadataTrack.value = track to loaded
+            }
+        }
+    }
+
+    fun openTrackMetadataForDeviceFile(file: DeviceSearchFile) {
+        val existing = uiState.value.localAudioTracks.firstOrNull { tr ->
+            (!tr.filePath.isNullOrBlank() && tr.filePath == file.localFilePath) ||
+                tr.uriString == file.uriString
+        }
+        if (existing != null) {
+            openTrackMetadataEditor(existing)
+            return
+        }
+        val ext = file.name.substringAfterLast('.', "").uppercase().ifBlank { "AUDIO" }
+        val synthetic = LocalAudioTrack(
+            id = if (!file.localFilePath.isNullOrBlank()) "fs:${file.localFilePath}" else "file:${file.uriString}",
+            title = file.name.substringBeforeLast('.').ifBlank { file.name },
+            artist = "",
+            album = "",
+            durationMs = 0L,
+            uriString = file.uriString,
+            filePath = file.localFilePath,
+            displayPath = file.displayPath,
+            formatLabel = ext
+        )
+        openTrackMetadataEditor(synthetic)
+    }
+
+    fun saveTrackFileMetadata(
+        track: LocalAudioTrack,
+        title: String,
+        artist: String,
+        album: String,
+        newCoverUri: Uri?,
+        clearEmbeddedCover: Boolean
+    ) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val coverBytes = if (newCoverUri != null) {
+                AudioFileMetadataRepository.decodeAndScaleCoverBytes(app, newCoverUri)
+            } else {
+                null
+            }
+            val result = AudioFileMetadataRepository.writeTrackMetadata(
+                context = app,
+                track = track,
+                update = AudioFileMetadataUpdate(
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    newCoverBytes = coverBytes,
+                    clearEmbeddedCover = clearEmbeddedCover
+                )
+            )
+            result.onSuccess { updatedTrack ->
+                mediaRepo.updateTrackMetadataInMemory(track, updatedTrack)
+                val oldKeys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(
+                    trackId = track.id,
+                    title = track.title,
+                    artist = track.artist
+                )
+                val newKeys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(
+                    trackId = updatedTrack.id,
+                    title = updatedTrack.title,
+                    artist = updatedTrack.artist
+                )
+                val mergedKeys = (oldKeys + newKeys).distinct()
+                if (coverBytes != null) {
+                    val cachedPath = AudioFileMetadataRepository.cacheCoverBytesToFile(
+                        context = app,
+                        keyHint = MusicCatalogAndLyricsRepository.buildTrackKey(updatedTrack.title, updatedTrack.artist),
+                        coverBytes = coverBytes
+                    )
+                    if (!cachedPath.isNullOrBlank()) {
+                        prefsRepo.saveTrackCoverOverride(mergedKeys, cachedPath)
+                    }
+                } else if (clearEmbeddedCover) {
+                    prefsRepo.clearTrackCoverOverride(mergedKeys)
+                } else if (track.title != updatedTrack.title || track.artist != updatedTrack.artist) {
+                    val existingPath = MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                        overrides = uiState.value.trackCoverOverrides,
+                        trackId = track.id,
+                        title = track.title,
+                        artist = track.artist
+                    )
+                    if (!existingPath.isNullOrBlank()) {
+                        prefsRepo.saveTrackCoverOverride(newKeys, existingPath)
+                    }
+                }
+                _editingMetadataTrack.value = null to null
+                reconcileAllSmartAlbumsWithTracks(mediaRepo.localTracks.value)
+                showToast("Теги и обложка файла сохранены: ${updatedTrack.title}")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось записать теги в аудиофайл")
             }
         }
     }
@@ -2611,6 +2794,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun closeFullPowerampPlayer() {
+        mediaRepo.stopCandidatePreview()
         _showFullPowerampPlayer.value = false
         _sourcePickerTarget.value = null to false
     }
@@ -2639,7 +2823,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun openSourcePicker(result: UnifiedMusicSearchResult?, forDownload: Boolean = false) {
+        if (result == null) {
+            mediaRepo.stopCandidatePreview()
+        }
         _sourcePickerTarget.value = result to forDownload
+    }
+
+    fun toggleCandidatePreview(candidate: TrackSourceCandidate) {
+        mediaRepo.toggleCandidatePreview(candidate)
+    }
+
+    fun stopCandidatePreview() {
+        mediaRepo.stopCandidatePreview()
     }
 
     fun searchMusicEverywhere(query: String) {
@@ -2724,6 +2919,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         autoPlay: Boolean = false,
         attachToAlbumId: String? = null
     ) {
+        mediaRepo.stopCandidatePreview()
         _sourcePickerTarget.value = null to false
         viewModelScope.launch {
             if (candidate.sourceKind == MusicSourceKind.STREAMING_PAID && !candidate.packageName.isNullOrBlank()) {
@@ -2742,26 +2938,39 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
             showToast("Скачивание ${candidate.formatBadge}: ${candidate.title}…")
-            val saved = MusicCatalogAndLyricsRepository.downloadDirectCandidate(getApplication(), candidate)
-            if (saved != null) {
+            val outcome = MusicCatalogAndLyricsRepository.downloadDirectCandidate(getApplication(), candidate)
+            if (outcome != null) {
+                val saved = outcome.track
                 mediaRepo.registerDownloadedTrack(saved)
                 val tracks = mediaRepo.refreshLocalTracks()
                 val syncedSaved = tracks.firstOrNull { it.filePath == saved.filePath } ?: saved
+                if (!outcome.coverPath.isNullOrBlank()) {
+                    val keys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(
+                        trackId = syncedSaved.id,
+                        title = syncedSaved.title,
+                        artist = syncedSaved.artist
+                    )
+                    prefsRepo.saveTrackCoverOverride(keys, outcome.coverPath)
+                }
                 if (attachToAlbumId != null) {
                     attachLocalTracksToAlbum(attachToAlbumId, listOf(syncedSaved.id))
                 }
                 if (autoPlay) playLocalAudioTrack(syncedSaved)
-                else showToast("Скачано (${candidate.formatBadge}): ${syncedSaved.title}")
+                else showToast(outcome.message)
             } else {
-                showToast("Источник не отдал файл, пробуем резервный поиск…")
-                val outcome = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
+                showToast("Источник не отдал файл, пробуем резервный поиск по сайтам…")
+                val outcomeFallback = MusicCatalogAndLyricsRepository.downloadTrackByPriority(
                     context = getApplication(),
                     title = candidate.title,
                     artist = candidate.artist,
                     candidates = listOf(candidate),
-                    installedMusicApps = uiState.value.musicApps
+                    installedMusicApps = uiState.value.musicApps,
+                    expectedDurationMs = candidate.durationMs,
+                    albumCoverUrl = candidate.artworkUrl,
+                    expectedAlbum = candidate.album,
+                    preferDirectOnlineOverStreaming = true
                 )
-                handleDownloadOutcome(outcome, albumId = attachToAlbumId)
+                handleDownloadOutcome(outcomeFallback, albumId = attachToAlbumId)
             }
         }
     }
@@ -2772,6 +2981,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 mediaRepo.registerDownloadedTrack(outcome.track)
                 val tracks = mediaRepo.refreshLocalTracks()
                 val matched = tracks.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
+                if (!outcome.coverPath.isNullOrBlank()) {
+                    val keys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(
+                        trackId = matched.id,
+                        title = matched.title,
+                        artist = matched.artist
+                    )
+                    prefsRepo.saveTrackCoverOverride(keys, outcome.coverPath)
+                }
                 if (albumId != null) {
                     attachLocalTracksToAlbum(albumId, listOf(matched.id))
                 }
@@ -2891,7 +3108,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         lyricsFetchJob?.cancel()
         lyricsFetchJob = viewModelScope.launch {
             _isFetchingLyrics.value = true
-            val overrides = runCatching { prefsRepo.lyricsOverrides.first() }.getOrDefault(emptyMap())
+            val overrides = runCatching { prefsRepo.getLyricsOverridesNow() }.getOrDefault(emptyMap())
             val saved = overrides[key]
             if (!forceRefresh && saved != null) {
                 _currentLyrics.value = if (saved.isDeleted) null else saved
@@ -2932,7 +3149,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             rawLrc = trimmed,
             sourceLabel = "Редактор KeyDeck",
             isDeleted = false,
-            isCustomEdited = true
+            isCustomEdited = true,
+            isConfirmedPrimary = true
         )
         _currentLyrics.value = entry
         val localTrack = uiState.value.mediaState.currentLocalTrackId?.let { id ->
@@ -2973,6 +3191,40 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         lyricsRetryAttempt++
         loadLyricsForCurrentTrack(forceRefresh = true)
         showToast("Поиск альтернативного источника текста…")
+    }
+
+    fun toggleConfirmPrimaryLyrics() {
+        val cur = _currentLyrics.value ?: return
+        if (!cur.hasAnyLyrics) return
+        val session = uiState.value.mediaState.activeSession
+        val localTrack = uiState.value.mediaState.currentLocalTrackId?.let { id ->
+            uiState.value.localAudioTracks.firstOrNull { it.id == id }
+        }
+        if (!cur.isConfirmedPrimary) {
+            val confirmed = cur.copy(isConfirmedPrimary = true)
+            _currentLyrics.value = confirmed
+            viewModelScope.launch {
+                prefsRepo.saveLyricsOverride(confirmed)
+                if (localTrack?.filePath != null && confirmed.rawLrc.isNotBlank()) {
+                    MusicCatalogAndLyricsRepository.saveSidecarLrc(localTrack.filePath, confirmed.rawLrc)
+                }
+            }
+            showToast("Текст подтверждён как основной ✓")
+        } else {
+            val unconfirmed = cur.copy(isConfirmedPrimary = false, isCustomEdited = false)
+            _currentLyrics.value = unconfirmed
+            viewModelScope.launch {
+                prefsRepo.saveLyricsOverride(unconfirmed)
+            }
+            if (session != null && session.title.isNotBlank()) {
+                lastRejectedLyricsRaw = cur.rawLrc.ifBlank { cur.plainText }
+                lyricsRetryAttempt++
+                loadLyricsForCurrentTrack(forceRefresh = true)
+                showToast("Подтверждение снято — запущен автопоиск другого текста")
+            } else {
+                showToast("Подтверждение текста снято")
+            }
+        }
     }
 
     // Poweramp DSP Equalizer & Playback Controls
@@ -3037,6 +3289,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _selectedAlbumId.value = albumId
     }
 
+    fun openSmartAlbumFromSearch(albumId: String) {
+        _selectedAlbumId.value = albumId
+        openFullPowerampPlayer(PowerampTab.ALBUMS)
+    }
+
     fun createSmartAlbum(title: String, artistHint: String) {
         val cleanTitle = title.trim()
         if (cleanTitle.isEmpty()) return
@@ -3050,78 +3307,99 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         )
         _selectedAlbumId.value = newId
         viewModelScope.launch {
-            val current = prefsRepo.smartAlbums.first()
-            prefsRepo.saveSmartAlbums(listOf(placeholder) + current)
+            prefsRepo.updateSmartAlbums { current -> listOf(placeholder) + current }
             refreshAlbumOnlineMetadata(newId)
         }
     }
 
     fun refreshAlbumOnlineMetadata(albumId: String) {
-        viewModelScope.launch {
-            val albums = prefsRepo.smartAlbums.first()
+        albumRefreshJobs[albumId]?.cancel()
+        albumRefreshJobs[albumId] = viewModelScope.launch {
+            val albums = prefsRepo.getSmartAlbumsNow()
             val target = albums.firstOrNull { it.id == albumId } ?: return@launch
-            val blueprint = MusicCatalogAndLyricsRepository.fetchAlbumBlueprint(target.title, target.artist)
-            val localTracks = uiState.value.localAudioTracks
-            val updatedAlbum = if (blueprint != null) {
-                val updated = target.copy(
-                    title = blueprint.title.ifBlank { target.title },
-                    artist = blueprint.artist.ifBlank { target.artist },
-                    releaseId = blueprint.releaseId,
-                    expectedTrackCount = blueprint.expectedTrackCount,
-                    expectedTracks = blueprint.expectedTracks,
-                    coverUrl = target.coverUrl ?: blueprint.coverUrl,
-                    alternateCoverUrls = blueprint.alternateCoverUrls,
-                    isFetchingOnline = false,
-                    statusMessage = "Треклист получен: ${blueprint.expectedTracks.size} трек(ов)"
-                )
-                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(updated, localTracks)
-            } else {
-                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
-                    target.copy(
-                        isFetchingOnline = false,
-                        statusMessage = "Не найден точный релиз онлайн — добавляйте треки с устройства"
-                    ),
-                    localTracks
-                )
+            prefsRepo.updateSmartAlbums { latest ->
+                latest.map { alb ->
+                    if (alb.id == albumId) alb.copy(isFetchingOnline = true) else alb
+                }
             }
-            val latest = prefsRepo.smartAlbums.first()
-            prefsRepo.saveSmartAlbums(latest.map { if (it.id == albumId) updatedAlbum else it })
+            val blueprint = MusicCatalogAndLyricsRepository.fetchAlbumBlueprint(target.title, target.artist)
+            val cachedCoverPath = blueprint?.coverUrl?.let { url ->
+                MusicCatalogAndLyricsRepository.cacheRemoteCoverFile(getApplication(), url, "alb_$albumId")
+            }
+            val localTracks = mediaRepo.localTracks.value.ifEmpty { uiState.value.localAudioTracks }
+            prefsRepo.updateSmartAlbums { latest ->
+                latest.map { currentAlb ->
+                    if (currentAlb.id != albumId) {
+                        currentAlb
+                    } else if (blueprint != null) {
+                        val sourceName = when {
+                            blueprint.releaseId.startsWith("discogs:") -> "Discogs.com"
+                            blueprint.releaseId.startsWith("deezer:") -> "Deezer"
+                            blueprint.releaseId.startsWith("itunes:") -> "iTunes"
+                            blueprint.releaseId.startsWith("arch:") || blueprint.releaseId.startsWith("archive:") -> "Archive.org"
+                            else -> "MusicBrainz"
+                        }
+                        val dedupExpected = MusicCatalogAndLyricsRepository.deduplicateExpectedTracks(blueprint.expectedTracks)
+                        val updated = currentAlb.copy(
+                            title = blueprint.title.ifBlank { currentAlb.title },
+                            artist = blueprint.artist.ifBlank { currentAlb.artist },
+                            releaseId = blueprint.releaseId,
+                            expectedTrackCount = maxOf(blueprint.expectedTrackCount, dedupExpected.size),
+                            expectedTracks = dedupExpected,
+                            coverUrl = currentAlb.coverUrl ?: blueprint.coverUrl,
+                            customCoverPath = currentAlb.customCoverPath ?: cachedCoverPath,
+                            alternateCoverUrls = blueprint.alternateCoverUrls,
+                            isFetchingOnline = false,
+                            statusMessage = "Треклист получен ($sourceName): ${dedupExpected.size} трек(ов)"
+                        )
+                        MusicCatalogAndLyricsRepository.reconcileAlbumTracks(updated, localTracks)
+                    } else {
+                        MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                            currentAlb.copy(
+                                isFetchingOnline = false,
+                                statusMessage = "Не найден точный релиз онлайн — добавляйте треки с устройства"
+                            ),
+                            localTracks
+                        )
+                    }
+                }
+            }
         }
     }
 
     fun attachLocalTracksToAlbum(albumId: String, trackIds: List<String>) {
         if (trackIds.isEmpty()) return
         viewModelScope.launch {
-            val albums = prefsRepo.smartAlbums.first()
-            val localTracks = uiState.value.localAudioTracks
-            val updated = albums.map { alb ->
-                if (alb.id == albumId) {
-                    val mergedIds = (alb.attachedLocalTrackIds + trackIds).distinct()
-                    MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
-                        alb.copy(attachedLocalTrackIds = mergedIds),
-                        localTracks
-                    )
-                } else alb
+            val localTracks = mediaRepo.localTracks.value.ifEmpty { uiState.value.localAudioTracks }
+            prefsRepo.updateSmartAlbums { albums ->
+                albums.map { alb ->
+                    if (alb.id == albumId) {
+                        val mergedIds = (alb.attachedLocalTrackIds + trackIds).distinct()
+                        MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                            alb.copy(attachedLocalTrackIds = mergedIds),
+                            localTracks
+                        )
+                    } else alb
+                }
             }
-            prefsRepo.saveSmartAlbums(updated)
             showToast("Треки добавлены в альбом и сверены")
         }
     }
 
     fun detachTrackFromAlbum(albumId: String, trackId: String) {
         viewModelScope.launch {
-            val albums = prefsRepo.smartAlbums.first()
-            val localTracks = uiState.value.localAudioTracks
-            val updated = albums.map { alb ->
-                if (alb.id == albumId) {
-                    val remaining = alb.attachedLocalTrackIds.filterNot { it == trackId }
-                    MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
-                        alb.copy(attachedLocalTrackIds = remaining),
-                        localTracks
-                    )
-                } else alb
+            val localTracks = mediaRepo.localTracks.value.ifEmpty { uiState.value.localAudioTracks }
+            prefsRepo.updateSmartAlbums { albums ->
+                albums.map { alb ->
+                    if (alb.id == albumId) {
+                        val remaining = alb.attachedLocalTrackIds.filterNot { it == trackId }
+                        MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                            alb.copy(attachedLocalTrackIds = remaining),
+                            localTracks
+                        )
+                    } else alb
+                }
             }
-            prefsRepo.saveSmartAlbums(updated)
         }
     }
 
@@ -3129,10 +3407,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             MusicCatalogAndLyricsRepository.importCustomCoverFromUri(getApplication(), albumId, uri)
                 .onSuccess { savedPath ->
-                    val albums = prefsRepo.smartAlbums.first()
-                    prefsRepo.saveSmartAlbums(
+                    prefsRepo.updateSmartAlbums { albums ->
                         albums.map { if (it.id == albumId) it.copy(customCoverPath = savedPath) else it }
-                    )
+                    }
                     showToast("Обложка альбома обновлена")
                 }
                 .onFailure { err ->
@@ -3143,27 +3420,82 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAlbumCoverUrl(albumId: String, coverUrl: String) {
         viewModelScope.launch {
-            val albums = prefsRepo.smartAlbums.first()
-            prefsRepo.saveSmartAlbums(
-                albums.map { if (it.id == albumId) it.copy(coverUrl = coverUrl, customCoverPath = null) else it }
+            val cachedLocal = MusicCatalogAndLyricsRepository.cacheRemoteCoverFile(
+                getApplication(),
+                coverUrl,
+                "alb_${albumId}_${coverUrl.hashCode()}"
             )
+            prefsRepo.updateSmartAlbums { albums ->
+                albums.map {
+                    if (it.id == albumId) it.copy(coverUrl = coverUrl, customCoverPath = cachedLocal)
+                    else it
+                }
+            }
             showToast("Выбрана новая обложка из каталога")
         }
     }
 
     fun deleteSmartAlbum(albumId: String) {
         viewModelScope.launch {
-            val albums = prefsRepo.smartAlbums.first().filterNot { it.id == albumId }
-            prefsRepo.saveSmartAlbums(albums)
+            prefsRepo.updateSmartAlbums { albums -> albums.filterNot { it.id == albumId } }
             if (_selectedAlbumId.value == albumId) _selectedAlbumId.value = null
             showToast("Альбом удалён")
+        }
+    }
+
+    fun setTrackCustomCoverFromUri(trackId: String?, title: String, artist: String, uri: Uri) {
+        viewModelScope.launch {
+            val keyHint = "trk_${MusicCatalogAndLyricsRepository.buildTrackKey(title, artist)}"
+            MusicCatalogAndLyricsRepository.importRichMediaCoverFromUri(
+                context = getApplication(),
+                subDir = "track_covers",
+                keyPrefix = keyHint,
+                sourceUri = uri
+            ).onSuccess { savedPath ->
+                val keys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(trackId, title, artist)
+                prefsRepo.saveTrackCoverOverride(keys, savedPath)
+                showToast("Обложка трека обновлена")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось сохранить обложку трека")
+            }
+        }
+    }
+
+    fun clearTrackCustomCover(trackId: String?, title: String, artist: String) {
+        viewModelScope.launch {
+            val keys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(trackId, title, artist)
+            prefsRepo.clearTrackCoverOverride(keys)
+            showToast("Своя обложка трека сброшена")
+        }
+    }
+
+    fun setDefaultTrackFallbackCoverFromUri(uri: Uri) {
+        viewModelScope.launch {
+            MusicCatalogAndLyricsRepository.importRichMediaCoverFromUri(
+                context = getApplication(),
+                subDir = "fallback_covers",
+                keyPrefix = "default_disc",
+                sourceUri = uri
+            ).onSuccess { savedPath ->
+                prefsRepo.setDefaultTrackFallbackCoverPath(savedPath)
+                showToast("Фон заглушки / пластинки сохранён")
+            }.onFailure { err ->
+                showToast(err.message ?: "Не удалось загрузить медиа для заглушки")
+            }
+        }
+    }
+
+    fun clearDefaultTrackFallbackCover() {
+        viewModelScope.launch {
+            prefsRepo.setDefaultTrackFallbackCoverPath(null)
+            showToast("Стандартная заглушка / пластинка восстановлена")
         }
     }
 
     fun downloadExpectedTrackForAlbum(album: SmartAlbum, expectedTrack: AlbumExpectedTrack) {
         viewModelScope.launch {
             val artist = expectedTrack.artist.ifBlank { album.artist }
-            showToast("Поиск «${expectedTrack.title}» (FLAC → Стриминг)…")
+            showToast("Поиск «${expectedTrack.title}» (FLAC / Интернет)…")
             val grouped = MusicCatalogAndLyricsRepository.searchAllSources(
                 query = "$artist ${expectedTrack.title}".trim(),
                 localTracks = uiState.value.localAudioTracks,
@@ -3176,7 +3508,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 title = expectedTrack.title,
                 artist = artist,
                 candidates = candidates,
-                installedMusicApps = uiState.value.musicApps
+                installedMusicApps = uiState.value.musicApps,
+                expectedDurationMs = expectedTrack.durationMs,
+                albumCoverUrl = album.coverUrl ?: album.customCoverPath,
+                expectedAlbum = album.title,
+                preferDirectOnlineOverStreaming = true
             )
             handleDownloadOutcome(outcome, albumId = album.id)
         }
@@ -3184,7 +3520,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun downloadMissingAlbumTracks(albumId: String) {
         viewModelScope.launch {
-            val album = prefsRepo.smartAlbums.first().firstOrNull { it.id == albumId } ?: return@launch
+            val album = prefsRepo.getSmartAlbumsNow().firstOrNull { it.id == albumId } ?: return@launch
             val missing = album.missingTracks
             if (missing.isEmpty()) {
                 showToast("Все треки альбома уже на устройстве!")
@@ -3200,11 +3536,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
             for (slot in missing) {
                 val artist = slot.artist.ifBlank { album.artist }
-                val normSlotTitle = MusicCatalogAndLyricsRepository.normalizeKeyText(slot.title)
                 val albumMatches = albumArchiveFiles.filter { cand ->
-                    val normCand = MusicCatalogAndLyricsRepository.normalizeKeyText(cand.title)
-                    normCand == normSlotTitle ||
-                        (normSlotTitle.length >= 4 && (normCand.contains(normSlotTitle) || normSlotTitle.contains(normCand)))
+                    MusicCatalogAndLyricsRepository.titlesMatchStrict(slot.title, cand.title)
                 }
                 val grouped = MusicCatalogAndLyricsRepository.searchAllSources(
                     query = "$artist ${slot.title}".trim(),
@@ -3220,7 +3553,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     candidates = queryCandidates,
                     installedMusicApps = uiState.value.musicApps,
                     allowStreamingCapture = false,
-                    extraCandidates = albumMatches
+                    extraCandidates = albumMatches,
+                    expectedDurationMs = slot.durationMs,
+                    albumCoverUrl = album.coverUrl ?: album.customCoverPath,
+                    expectedAlbum = album.title,
+                    preferDirectOnlineOverStreaming = true
                 )
                 when (outcome) {
                     is DownloadOutcome.DownloadedFile -> {
@@ -3228,16 +3565,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         mediaRepo.registerDownloadedTrack(outcome.track)
                         val refreshed = mediaRepo.refreshLocalTracks()
                         val matched = refreshed.firstOrNull { it.filePath == outcome.track.filePath } ?: outcome.track
-                        val latestAlbums = prefsRepo.smartAlbums.first()
-                        val updatedAlbums = latestAlbums.map { alb ->
-                            if (alb.id == album.id) {
-                                MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
-                                    alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + matched.id).distinct()),
-                                    refreshed
-                                )
-                            } else alb
+                        if (!outcome.coverPath.isNullOrBlank()) {
+                            val keys = MusicCatalogAndLyricsRepository.buildTrackCoverLookupKeys(
+                                trackId = matched.id,
+                                title = matched.title,
+                                artist = matched.artist
+                            )
+                            prefsRepo.saveTrackCoverOverride(keys, outcome.coverPath)
                         }
-                        prefsRepo.saveSmartAlbums(updatedAlbums)
+                        prefsRepo.updateSmartAlbums { latestAlbums ->
+                            latestAlbums.map { alb ->
+                                if (alb.id == album.id) {
+                                    MusicCatalogAndLyricsRepository.reconcileAlbumTracks(
+                                        alb.copy(attachedLocalTrackIds = (alb.attachedLocalTrackIds + matched.id).distinct()),
+                                        refreshed
+                                    )
+                                } else alb
+                            }
+                        }
                     }
                     is DownloadOutcome.NeedsStreamingCapture -> {
                         captureNeededCount++
@@ -3270,10 +3615,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun reconcileAllSmartAlbumsWithTracks(tracks: List<LocalAudioTrack>) {
-        val current = prefsRepo.smartAlbums.first()
-        if (current.isEmpty()) return
-        val updated = current.map { MusicCatalogAndLyricsRepository.reconcileAlbumTracks(it, tracks) }
-        prefsRepo.saveSmartAlbums(updated)
+        prefsRepo.updateSmartAlbums { current ->
+            if (current.isEmpty()) current
+            else current.map { MusicCatalogAndLyricsRepository.reconcileAlbumTracks(it, tracks) }
+        }
     }
 
     fun launchMusicSearchMatch(match: MusicStreamMatch) {
@@ -3345,7 +3690,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun clearWallpaper() {
         viewModelScope.launch {
-            val oldPath = prefsRepo.wallpaperPath.first()
+            val oldPath = prefsRepo.getWallpaperPathNow()
             prefsRepo.setWallpaperPath(null)
             WallpaperThemeHelper.deleteWallpaperFile(oldPath)
             _wallpaperState.value = null to null
@@ -3590,13 +3935,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun openUnknownAppSourcesSettings() {
+        if (!zipUpdateRepo.openUnknownAppSourcesSettings()) {
+            showToast("Откройте Настройки → Приложения → KeyDeck → Установка неизвестных приложений")
+        }
+    }
+
     fun exportConfigBackupZip(destUri: Uri) {
         viewModelScope.launch {
             _zipUpdateBusy.value = true
             _zipUpdateStatus.value = "Сохранение ZIP-бэкапа настроек и текстов…"
-            val palettes = runCatching { prefsRepo.savedPalettes.first() }.getOrDefault(emptyList())
-            val links = runCatching { prefsRepo.hubQuickLinks.first() }.getOrDefault(emptyList())
-            val lyrics = runCatching { prefsRepo.lyricsOverrides.first() }.getOrDefault(emptyMap())
+            val palettes = runCatching { prefsRepo.getSavedPalettesNow() }.getOrDefault(emptyList())
+            val links = runCatching { prefsRepo.getHubQuickLinksNow() }.getOrDefault(emptyList())
+            val lyrics = runCatching { prefsRepo.getLyricsOverridesNow() }.getOrDefault(emptyMap())
             zipUpdateRepo.exportConfigBackupZip(destUri, palettes, links, lyrics)
                 .onSuccess { msg ->
                     _zipUpdateStatus.value = msg
@@ -3684,7 +4035,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun openLinuxRunner(tileId: String) {
         viewModelScope.launch {
-            val tiles = prefsRepo.installedLinuxTiles.first()
+            val tiles = prefsRepo.getInstalledLinuxTilesNow()
             val tile = tiles.firstOrNull { it.id == tileId }
             if (tile == null) {
                 showToast("Пакет Linux не найден")
@@ -3723,7 +4074,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun uninstallLinuxTile(tileId: String) {
         viewModelScope.launch {
-            val tiles = prefsRepo.installedLinuxTiles.first()
+            val tiles = prefsRepo.getInstalledLinuxTilesNow()
             val target = tiles.firstOrNull { it.id == tileId }
             if (target != null) {
                 linuxRepo.deleteLocalPackageFiles(target.installedDirPath)

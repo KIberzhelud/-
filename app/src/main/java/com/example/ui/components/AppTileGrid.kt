@@ -94,6 +94,7 @@ import com.example.model.DeviceSearchFile
 import com.example.model.LinuxPackageEntry
 import com.example.model.LockedChatThread
 import com.example.model.MusicStreamMatch
+import com.example.model.SmartAlbum
 import com.example.model.WeatherCityResult
 import com.example.ui.L10n
 import com.example.ui.LocalAppLang
@@ -118,6 +119,7 @@ fun AppTileGrid(
     searchFiles: List<DeviceSearchFile>,
     linuxSearchResults: List<LinuxPackageEntry> = emptyList(),
     musicSearchResults: List<MusicStreamMatch> = emptyList(),
+    albumSearchResults: List<SmartAlbum> = emptyList(),
     isSearchingDevice: Boolean,
     indexedFolderCount: Int,
     hasAllFilesAccess: Boolean,
@@ -143,6 +145,8 @@ fun AppTileGrid(
     onResolveFileUri: (DeviceSearchFile) -> Uri = { Uri.parse(it.uriString) },
     onRunLinuxPackage: (LinuxPackageEntry) -> Unit = {},
     onLaunchMusicMatch: (MusicStreamMatch) -> Unit = {},
+    onLongPressMusicMatch: (MusicStreamMatch) -> Unit = {},
+    onOpenSmartAlbum: (SmartAlbum) -> Unit = {},
     onConnectSearchFolder: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
     onSearchWeb: (query: String, engine: String) -> Unit,
@@ -163,12 +167,13 @@ fun AppTileGrid(
     val trimmedQuery = searchQuery.trim()
     val isUniversalMode = trimmedQuery.length >= 2
 
-    // Collapsible Universal Search category folders (collapsed by default, auto-expand when apps empty)
+    // Collapsible Universal Search category folders (collapsed by default, auto-expand when apps empty or albums match)
     var chatsExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var photosExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var filesExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var linuxExpanded by remember(trimmedQuery) { mutableStateOf(false) }
     var musicExpanded by remember(trimmedQuery) { mutableStateOf(false) }
+    var albumsExpanded by remember(trimmedQuery) { mutableStateOf(false) }
 
     LaunchedEffect(
         trimmedQuery,
@@ -178,14 +183,19 @@ fun AppTileGrid(
         searchFiles.size,
         linuxSearchResults.size,
         musicSearchResults.size,
+        albumSearchResults.size,
         isSearchingDevice
     ) {
+        if (isUniversalMode && albumSearchResults.isNotEmpty()) {
+            albumsExpanded = true
+        }
         if (isUniversalMode && apps.isEmpty()) {
             if (chatSearchResults.isNotEmpty()) chatsExpanded = true
             if (searchImages.isNotEmpty()) photosExpanded = true
             if (searchFiles.isNotEmpty()) filesExpanded = true
             if (linuxSearchResults.isNotEmpty()) linuxExpanded = true
             if (musicSearchResults.isNotEmpty()) musicExpanded = true
+            if (albumSearchResults.isNotEmpty()) albumsExpanded = true
         }
     }
 
@@ -284,6 +294,7 @@ fun AppTileGrid(
                             val firstFile = searchFiles.firstOrNull()
                             val firstImg = searchImages.firstOrNull()
                             val firstLinux = linuxSearchResults.firstOrNull()
+                            val firstAlbum = albumSearchResults.firstOrNull()
                             val firstMusic = musicSearchResults.firstOrNull()
                             when {
                                 firstApp != null -> onLaunchApp(firstApp)
@@ -291,6 +302,7 @@ fun AppTileGrid(
                                 firstFile != null -> onOpenSearchFile(firstFile)
                                 firstImg != null -> onOpenSearchFile(firstImg)
                                 firstLinux != null -> onRunLinuxPackage(firstLinux)
+                                firstAlbum != null -> onOpenSmartAlbum(firstAlbum)
                                 firstMusic != null -> onLaunchMusicMatch(firstMusic)
                                 effectiveTrimmed.isNotEmpty() -> onSearchWeb(effectiveTrimmed, "google")
                             }
@@ -452,6 +464,7 @@ fun AppTileGrid(
                 searchFiles = searchFiles,
                 linuxSearchResults = linuxSearchResults,
                 musicSearchResults = musicSearchResults,
+                albumSearchResults = albumSearchResults,
                 isSearchingDevice = isSearchingDevice,
                 indexedFolderCount = indexedFolderCount,
                 hasAllFilesAccess = hasAllFilesAccess,
@@ -464,11 +477,13 @@ fun AppTileGrid(
                 filesExpanded = filesExpanded,
                 linuxExpanded = linuxExpanded,
                 musicExpanded = musicExpanded,
+                albumsExpanded = albumsExpanded,
                 onToggleChats = { chatsExpanded = !chatsExpanded },
                 onTogglePhotos = { photosExpanded = !photosExpanded },
                 onToggleFiles = { filesExpanded = !filesExpanded },
                 onToggleLinux = { linuxExpanded = !linuxExpanded },
                 onToggleMusic = { musicExpanded = !musicExpanded },
+                onToggleAlbums = { albumsExpanded = !albumsExpanded },
                 onLaunchApp = onLaunchApp,
                 onLongPressApp = onLongPressApp,
                 onOpenLockedChat = onOpenLockedChat,
@@ -479,6 +494,8 @@ fun AppTileGrid(
                 onResolveFileUri = onResolveFileUri,
                 onRunLinuxPackage = onRunLinuxPackage,
                 onLaunchMusicMatch = onLaunchMusicMatch,
+                onLongPressMusicMatch = onLongPressMusicMatch,
+                onOpenSmartAlbum = onOpenSmartAlbum,
                 onConnectSearchFolder = onConnectSearchFolder,
                 onRequestAllFilesAccess = onRequestAllFilesAccess,
                 onSearchWeb = onSearchWeb
@@ -552,6 +569,7 @@ private fun UniversalResultsGrid(
     searchFiles: List<DeviceSearchFile>,
     linuxSearchResults: List<LinuxPackageEntry>,
     musicSearchResults: List<MusicStreamMatch>,
+    albumSearchResults: List<SmartAlbum>,
     isSearchingDevice: Boolean,
     indexedFolderCount: Int,
     hasAllFilesAccess: Boolean,
@@ -564,11 +582,13 @@ private fun UniversalResultsGrid(
     filesExpanded: Boolean,
     linuxExpanded: Boolean,
     musicExpanded: Boolean,
+    albumsExpanded: Boolean,
     onToggleChats: () -> Unit,
     onTogglePhotos: () -> Unit,
     onToggleFiles: () -> Unit,
     onToggleLinux: () -> Unit,
     onToggleMusic: () -> Unit,
+    onToggleAlbums: () -> Unit,
     onLaunchApp: (AppEntry) -> Unit,
     onLongPressApp: (AppEntry) -> Unit,
     onOpenLockedChat: (LockedChatThread) -> Unit,
@@ -579,6 +599,8 @@ private fun UniversalResultsGrid(
     onResolveFileUri: (DeviceSearchFile) -> Uri,
     onRunLinuxPackage: (LinuxPackageEntry) -> Unit,
     onLaunchMusicMatch: (MusicStreamMatch) -> Unit,
+    onLongPressMusicMatch: (MusicStreamMatch) -> Unit = {},
+    onOpenSmartAlbum: (SmartAlbum) -> Unit,
     onConnectSearchFolder: () -> Unit,
     onRequestAllFilesAccess: () -> Unit,
     onSearchWeb: (String, String) -> Unit
@@ -684,9 +706,9 @@ private fun UniversalResultsGrid(
             }
         }
 
-        // 2. Collapsible Aero Folder Pills strip for Chats / Photos / Files / Linux / Music
+        // 2. Collapsible Aero Folder Pills strip for Chats / Photos / Files / Linux / Albums / Music
         if (chatSearchResults.isNotEmpty() || searchImages.isNotEmpty() || searchFiles.isNotEmpty() ||
-            linuxSearchResults.isNotEmpty() || musicSearchResults.isNotEmpty()
+            linuxSearchResults.isNotEmpty() || albumSearchResults.isNotEmpty() || musicSearchResults.isNotEmpty()
         ) {
             item(key = "search_category_folders_strip", span = { GridItemSpan(maxLineSpan) }) {
                 Row(
@@ -696,6 +718,14 @@ private fun UniversalResultsGrid(
                         .padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    if (albumSearchResults.isNotEmpty()) {
+                        SearchFolderPill(
+                            label = L10n.albumsFolder(lang, albumSearchResults.size),
+                            expanded = albumsExpanded,
+                            onClick = onToggleAlbums,
+                            tag = "folder_pill_albums"
+                        )
+                    }
                     if (chatSearchResults.isNotEmpty()) {
                         SearchFolderPill(
                             label = L10n.chatsFolder(lang, chatSearchResults.size),
@@ -875,6 +905,53 @@ private fun UniversalResultsGrid(
             }
         }
 
+        // Expanded Smart Albums
+        if (albumsExpanded && albumSearchResults.isNotEmpty()) {
+            item(key = "section_albums", span = { GridItemSpan(maxLineSpan) }) {
+                UniversalSectionHeader(title = L10n.albumsFolder(lang, albumSearchResults.size).uppercase(), iconRes = R.drawable.ic_symbian_music)
+            }
+            items(items = albumSearchResults, key = { "smart_album_${it.id}" }, span = { GridItemSpan(maxLineSpan) }) { alb ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .vistaWindowFrame(RoundedCornerShape(3.dp))
+                        .clickable { onOpenSmartAlbum(alb) }
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("home_search_album_${alb.id}"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SmartAlbumCoverBox(
+                        customPath = alb.customCoverPath,
+                        coverUrl = alb.coverUrl,
+                        size = 44.dp
+                    )
+                    Spacer(Modifier.width(9.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = alb.title,
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val countInfo = "${alb.matchedCount}/${alb.totalExpected} треков"
+                        Text(
+                            text = listOf(alb.artist, countInfo).filter { it.isNotBlank() }.joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = "Альбом ▶",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = theme.accent
+                    )
+                }
+            }
+        }
+
         // Expanded Music & Streaming
         if (musicExpanded && musicSearchResults.isNotEmpty()) {
             item(key = "section_music", span = { GridItemSpan(maxLineSpan) }) {
@@ -885,7 +962,12 @@ private fun UniversalResultsGrid(
                     modifier = Modifier
                         .fillMaxWidth()
                         .vistaWindowFrame(RoundedCornerShape(3.dp))
-                        .clickable { onLaunchMusicMatch(match) }
+                        .combinedClickable(
+                            onClick = { onLaunchMusicMatch(match) },
+                            onLongClick = {
+                                if (match.isLocalTrack) onLongPressMusicMatch(match)
+                            }
+                        )
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                         .testTag("search_music_row_${match.id}"),
                     verticalAlignment = Alignment.CenterVertically
@@ -914,7 +996,8 @@ private fun UniversalResultsGrid(
         item(key = "section_web_search", span = { GridItemSpan(maxLineSpan) }) {
             val nothingLocal = apps.isEmpty() && chatSearchResults.isEmpty() &&
                 searchImages.isEmpty() && searchFiles.isEmpty() &&
-                linuxSearchResults.isEmpty() && musicSearchResults.isEmpty() && !isSearchingDevice
+                linuxSearchResults.isEmpty() && albumSearchResults.isEmpty() &&
+                musicSearchResults.isEmpty() && !isSearchingDevice
             WebSearchFallbackCard(
                 query = trimmedQuery,
                 isProminent = nothingLocal,

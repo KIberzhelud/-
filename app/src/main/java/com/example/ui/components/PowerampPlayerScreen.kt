@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
@@ -60,6 +62,7 @@ import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -131,6 +134,7 @@ import com.example.model.MediaPlayerState
 import com.example.model.MusicSourceKind
 import com.example.model.PlayerCoverStyle
 import com.example.model.PowerampTab
+import com.example.model.PreviewPlaybackState
 import com.example.model.RepeatMode as TrackRepeatMode
 import com.example.model.SmartAlbum
 import com.example.model.SourceSelectionMode
@@ -159,6 +163,7 @@ import kotlin.math.sin
 private enum class SearchSourceFilter(val title: String) {
     ALL("Все"),
     FLAC("FLAC"),
+    DISCOGS("Discogs"),
     STREAM("Стриминг"),
     LOCAL("Локально"),
     MP3("MP3/M4A")
@@ -206,6 +211,7 @@ fun PowerampPlayerScreen(
     onAutoFetchLyrics: () -> Unit,
     onSaveLyrics: (String) -> Unit,
     onDeleteLyrics: () -> Unit,
+    onToggleConfirmPrimaryLyrics: () -> Unit = {},
     onSetEqualizerEnabled: (Boolean) -> Unit,
     onApplyEqualizerPreset: (EqualizerPreset) -> Unit,
     onSetEqualizerBand: (Int, Int) -> Unit,
@@ -226,6 +232,14 @@ fun PowerampPlayerScreen(
     onToggleCaptureSilentMute: () -> Unit = {},
     applySafeInsets: Boolean = true,
     livePositionFlow: StateFlow<Long>? = null,
+    trackCoverOverrides: Map<String, String> = emptyMap(),
+    defaultFallbackCoverPath: String? = null,
+    onPickCurrentTrackCover: () -> Unit = {},
+    onClearCurrentTrackCover: () -> Unit = {},
+    onPickTrackCover: (LocalAudioTrack) -> Unit = {},
+    onClearTrackCover: (LocalAudioTrack) -> Unit = {},
+    onEditTrackMetadata: (LocalAudioTrack) -> Unit = {},
+    onLongClickTrack: ((LocalAudioTrack, SmartAlbum?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -598,7 +612,13 @@ fun PowerampPlayerScreen(
                     onFindTrackInAllSources = { q ->
                         onSearchMusicEverywhere(q)
                         onSelectTab(PowerampTab.SEARCH)
-                    }
+                    },
+                    trackCoverOverrides = trackCoverOverrides,
+                    defaultFallbackCoverPath = defaultFallbackCoverPath,
+                    onPickCurrentTrackCover = onPickCurrentTrackCover,
+                    onClearCurrentTrackCover = onClearCurrentTrackCover,
+                    onEditTrackMetadata = onEditTrackMetadata,
+                    onLongClickLocalTrack = { lt -> onLongClickTrack?.invoke(lt, null) }
                 )
 
                 PowerampTab.EQUALIZER -> PowerampEqualizerTab(
@@ -622,12 +642,14 @@ fun PowerampPlayerScreen(
                     onSeekTo = onSeekTo,
                     onAutoFetch = onAutoFetchLyrics,
                     onSaveLyrics = onSaveLyrics,
-                    onDeleteLyrics = onDeleteLyrics
+                    onDeleteLyrics = onDeleteLyrics,
+                    onToggleConfirmPrimaryLyrics = onToggleConfirmPrimaryLyrics
                 )
 
                 PowerampTab.SEARCH -> PowerampMultiSourceSearchTab(
                     query = unifiedSearchQuery,
                     results = unifiedSearchResults,
+                    smartAlbums = smartAlbums,
                     isSearching = isSearchingOnline,
                     sourceSelectionMode = sourceSelectionMode,
                     isLandscape = isLandscape,
@@ -635,7 +657,12 @@ fun PowerampPlayerScreen(
                     onToggleSourceMode = onToggleSourceMode,
                     onPlayOrPick = { res -> onUnifiedTrackAction(res, false) },
                     onDownloadOrPick = { res -> onUnifiedTrackAction(res, true) },
-                    onOpenSourcesModal = { res -> onOpenSourcePicker(res, false) }
+                    onOpenSourcesModal = { res -> onOpenSourcePicker(res, false) },
+                    onOpenAlbum = { alb ->
+                        onSelectAlbum(alb.id)
+                        onSelectTab(PowerampTab.ALBUMS)
+                    },
+                    onLongClickLocalTrack = { lt -> onLongClickTrack?.invoke(lt, null) }
                 )
 
                 PowerampTab.ALBUMS -> PowerampAlbumsTab(
@@ -657,7 +684,11 @@ fun PowerampPlayerScreen(
                         onSelectTab(PowerampTab.LYRICS)
                     },
                     onDownloadMissingTrack = onDownloadMissingAlbumTrack,
-                    onDownloadAllMissingTracks = onDownloadAllMissingAlbumTracks
+                    onDownloadAllMissingTracks = onDownloadAllMissingAlbumTracks,
+                    defaultFallbackCoverPath = defaultFallbackCoverPath,
+                    onDeleteLocalTrack = onDeleteLocalTrack,
+                    onEditTrackMetadata = onEditTrackMetadata,
+                    onLongClickTrack = onLongClickTrack
                 )
 
                 PowerampTab.LIBRARY -> PowerampFilesLibraryTab(
@@ -675,7 +706,12 @@ fun PowerampPlayerScreen(
                     },
                     onAttachTrackToAlbum = onAttachLocalTracksToAlbum,
                     onToggleCaptureAutoSplit = onToggleCaptureAutoSplit,
-                    onToggleCaptureSilentMute = onToggleCaptureSilentMute
+                    onToggleCaptureSilentMute = onToggleCaptureSilentMute,
+                    trackCoverOverrides = trackCoverOverrides,
+                    onPickTrackCover = onPickTrackCover,
+                    onClearTrackCover = onClearTrackCover,
+                    onEditTrackMetadata = onEditTrackMetadata,
+                    onLongClickTrack = onLongClickTrack?.let { cb -> { lt -> cb(lt, null) } }
                 )
             }
         }
@@ -860,7 +896,13 @@ private fun PowerampPlayerMainTab(
     onAutoFetchLyrics: () -> Unit,
     onDeleteLyrics: () -> Unit,
     onOpenFullLyricsEditor: () -> Unit,
-    onFindTrackInAllSources: (String) -> Unit
+    onFindTrackInAllSources: (String) -> Unit,
+    trackCoverOverrides: Map<String, String> = emptyMap(),
+    defaultFallbackCoverPath: String? = null,
+    onPickCurrentTrackCover: () -> Unit = {},
+    onClearCurrentTrackCover: () -> Unit = {},
+    onEditTrackMetadata: (LocalAudioTrack) -> Unit = {},
+    onLongClickLocalTrack: (LocalAudioTrack) -> Unit = {}
 ) {
     val theme = LocalVistaTheme.current
     val active = mediaState.activeSession
@@ -948,11 +990,28 @@ private fun PowerampPlayerMainTab(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(if (isShortLandscape) 8.dp else 12.dp)
                 ) {
+                    val activeCustomCoverPath = remember(
+                        trackCoverOverrides,
+                        mediaState.currentLocalTrackId,
+                        active?.title,
+                        active?.artist
+                    ) {
+                        active?.let {
+                            MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                                overrides = trackCoverOverrides,
+                                trackId = mediaState.currentLocalTrackId,
+                                title = it.title,
+                                artist = it.artist
+                            )
+                        }
+                    }
                     AlbumArtThumb(
                         artwork = active?.artwork,
                         size = coverSize,
                         coverStyle = coverStyle,
-                        isPlaying = active?.isPlaying == true
+                        isPlaying = active?.isPlaying == true,
+                        customCoverPath = activeCustomCoverPath,
+                        fallbackCoverPath = defaultFallbackCoverPath
                     )
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (compactDeck) 2.dp else 3.dp)) {
                         Text(
@@ -996,10 +1055,24 @@ private fun PowerampPlayerMainTab(
                             }
                         }
                         Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val badge = active?.formatLabel?.ifBlank { "AUDIO" } ?: "IDLE"
+                            val hasCurrentCustomCover = remember(
+                                trackCoverOverrides,
+                                mediaState.currentLocalTrackId,
+                                active?.title,
+                                active?.artist
+                            ) {
+                                active != null && MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                                    overrides = trackCoverOverrides,
+                                    trackId = mediaState.currentLocalTrackId,
+                                    title = active.title,
+                                    artist = active.artist
+                                ) != null
+                            }
                             Text(
                                 text = badge,
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.5.sp),
@@ -1019,6 +1092,57 @@ private fun PowerampPlayerMainTab(
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
                                     Text("Источники / Скачать", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = Color.White)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .vistaAeroButton(isActive = hasCurrentCustomCover)
+                                        .clickable(onClick = onPickCurrentTrackCover)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .testTag("poweramp_pick_track_cover_btn")
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Image,
+                                            contentDescription = "Своя обложка",
+                                            tint = if (hasCurrentCustomCover) CallIncomingGreen else theme.accent,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(
+                                            text = "Обложка",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                                if (hasCurrentCustomCover) {
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable(onClick = onClearCurrentTrackCover)
+                                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            .testTag("poweramp_clear_track_cover_btn")
+                                    ) {
+                                        Text("✕", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = MusicSourceAmber)
+                                    }
+                                }
+                                val currentLocalObj = mediaState.currentLocalTrackId?.let { id ->
+                                    localTracks.firstOrNull { it.id == id }
+                                }
+                                if (currentLocalObj != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable { onEditTrackMetadata(currentLocalObj) }
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            .testTag("poweramp_edit_track_meta_btn")
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Rounded.Edit, contentDescription = "Теги файла", tint = theme.accent, modifier = Modifier.size(11.dp))
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("Теги", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp), color = Color.White)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1273,7 +1397,7 @@ private fun PowerampPlayerMainTab(
         }
 
         if (filteredLocal.isNotEmpty()) {
-            itemsIndexed(filteredLocal, key = { _, track -> "loc_${track.id}" }) { idx, track ->
+            itemsIndexed(filteredLocal, key = { idx, track -> "loc_${idx}_${track.id}" }) { idx, track ->
                 val isPlayingThis = track.id == mediaState.currentLocalTrackId
                 RetroGlossyTrackRow(
                     index = idx,
@@ -1288,7 +1412,17 @@ private fun PowerampPlayerMainTab(
                     isActive = isPlayingThis,
                     isPlaying = isPlayingThis && active?.isPlaying == true,
                     onClick = { onPlayLocalTrack(track) },
+                    onLongClick = { onLongClickLocalTrack(track) },
                     trailingSlot = {
+                        Box(
+                            modifier = Modifier
+                                .vistaAeroButton()
+                                .clickable { onEditTrackMetadata(track) }
+                                .padding(horizontal = 6.dp, vertical = 5.dp)
+                                .testTag("poweramp_list_edit_${track.id}")
+                        ) {
+                            Icon(Icons.Rounded.Edit, contentDescription = "Теги файла", tint = theme.accent, modifier = Modifier.size(14.dp))
+                        }
                         Box(
                             modifier = Modifier
                                 .vistaAeroButton()
@@ -2606,7 +2740,8 @@ private fun PowerampLyricsTab(
     onSeekTo: (Long) -> Unit,
     onAutoFetch: () -> Unit,
     onSaveLyrics: (String) -> Unit,
-    onDeleteLyrics: () -> Unit
+    onDeleteLyrics: () -> Unit,
+    onToggleConfirmPrimaryLyrics: () -> Unit = {}
 ) {
     val theme = LocalVistaTheme.current
     val effectivePos = collectLivePos(livePositionFlow, livePositionMs)
@@ -2660,6 +2795,29 @@ private fun PowerampLyricsTab(
             }
         }
         if (lyrics?.hasAnyLyrics == true) {
+            val isConfirmed = lyrics.isConfirmedPrimary
+            Box(
+                modifier = Modifier
+                    .vistaAeroButton(isPrimary = isConfirmed, isActive = isConfirmed)
+                    .clickable(onClick = onToggleConfirmPrimaryLyrics)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("lyrics_confirm_primary_btn")
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = if (isConfirmed) "Снять подтверждение текста" else "Подтвердить текст как основной",
+                        tint = if (isConfirmed) CallIncomingGreen else TextPrimary,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        text = if (isConfirmed) "Основной" else "Подтверд.",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = if (isConfirmed) Color.White else TextPrimary
+                    )
+                }
+            }
             Box(
                 modifier = Modifier
                     .vistaAeroButton()
@@ -2830,9 +2988,20 @@ private fun PowerampLyricsTab(
                     )
                     val info = buildString {
                         if (trackArtist.isNotBlank()) append("$trackArtist • ")
-                        if (lyrics?.hasAnyLyrics == true) append(lyrics.sourceLabel) else append("Текст отсутствует")
+                        if (lyrics?.hasAnyLyrics == true) {
+                            append(lyrics.sourceLabel)
+                            if (lyrics.isConfirmedPrimary) append(" • ✓ Основной")
+                        } else {
+                            append("Текст отсутствует")
+                        }
                     }
-                    Text(info, style = MaterialTheme.typography.labelSmall, color = theme.accent, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        text = info,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (lyrics?.isConfirmedPrimary == true) CallIncomingGreen else theme.accent,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2914,9 +3083,19 @@ private fun PowerampLyricsTab(
                 )
                 val info = buildString {
                     if (trackArtist.isNotBlank()) append("$trackArtist • ")
-                    if (lyrics?.hasAnyLyrics == true) append(lyrics.sourceLabel) else append("Текст отсутствует")
+                    if (lyrics?.hasAnyLyrics == true) {
+                        append(lyrics.sourceLabel)
+                        if (lyrics.isConfirmedPrimary) append(" • ✓ Основной")
+                    } else {
+                        append("Текст отсутствует")
+                    }
                 }
-                Text(info, style = MaterialTheme.typography.labelSmall, color = theme.accent, maxLines = 1)
+                Text(
+                    text = info,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (lyrics?.isConfirmedPrimary == true) CallIncomingGreen else theme.accent,
+                    maxLines = 1
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 headerActionButtons()
@@ -3074,10 +3253,12 @@ private fun PowerampLyricsTab(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PowerampMultiSourceSearchTab(
     query: String,
     results: List<UnifiedMusicSearchResult>,
+    smartAlbums: List<SmartAlbum> = emptyList(),
     isSearching: Boolean,
     sourceSelectionMode: SourceSelectionMode,
     isLandscape: Boolean = false,
@@ -3085,16 +3266,31 @@ private fun PowerampMultiSourceSearchTab(
     onToggleSourceMode: () -> Unit,
     onPlayOrPick: (UnifiedMusicSearchResult) -> Unit,
     onDownloadOrPick: (UnifiedMusicSearchResult) -> Unit,
-    onOpenSourcesModal: (UnifiedMusicSearchResult) -> Unit
+    onOpenSourcesModal: (UnifiedMusicSearchResult) -> Unit,
+    onOpenAlbum: (SmartAlbum) -> Unit = {},
+    onLongClickLocalTrack: (LocalAudioTrack) -> Unit = {}
 ) {
     val theme = LocalVistaTheme.current
     var selectedFilter by remember { mutableStateOf(SearchSourceFilter.ALL) }
+
+    val matchedAlbums = remember(query, smartAlbums) {
+        val q = query.trim()
+        if (q.length < 2) emptyList()
+        else smartAlbums.filter { alb ->
+            KeyboardSearchMatcher.matches(alb.title, q) ||
+                KeyboardSearchMatcher.matches(alb.artist, q) ||
+                alb.expectedTracks.any { KeyboardSearchMatcher.matches(it.title, q) }
+        }
+    }
 
     val filteredResults = remember(results, selectedFilter) {
         when (selectedFilter) {
             SearchSourceFilter.ALL -> results
             SearchSourceFilter.FLAC -> results.filter { r ->
                 r.candidates.any { it.sourceKind == MusicSourceKind.LOCAL_FLAC || it.sourceKind == MusicSourceKind.ARCHIVE_FLAC }
+            }
+            SearchSourceFilter.DISCOGS -> results.filter { r ->
+                r.candidates.any { it.sourceKind == MusicSourceKind.DISCOGS_CATALOG }
             }
             SearchSourceFilter.STREAM -> results.filter { r ->
                 r.candidates.any { it.sourceKind == MusicSourceKind.STREAMING_PAID }
@@ -3212,7 +3408,7 @@ private fun PowerampMultiSourceSearchTab(
 
         // Priority Legend & Filters
         Text(
-            text = "Приоритет загрузки: а) FLAC → б) Захват оплаченных стримингов (WAV) → в) MP3/M4A",
+            text = "Приоритет загрузки: FLAC → Discogs.com + 17 интернет-источников → Захват стриминга (WAV) → MP3/M4A",
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
             color = MusicSourceAmber
         )
@@ -3236,11 +3432,65 @@ private fun PowerampMultiSourceSearchTab(
             }
         }
 
+        if (matchedAlbums.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .vistaWindowFrame(RoundedCornerShape(4.dp))
+                    .padding(6.dp)
+                    .testTag("player_search_albums_strip"),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "АЛЬБОМЫ (${matchedAlbums.size})",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.5.sp),
+                    color = theme.focusBorder
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    matchedAlbums.forEach { alb ->
+                        Row(
+                            modifier = Modifier
+                                .widthIn(max = 220.dp)
+                                .vistaAeroButton()
+                                .clickable { onOpenAlbum(alb) }
+                                .padding(horizontal = 7.dp, vertical = 5.dp)
+                                .testTag("player_search_album_${alb.id}"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SmartAlbumCoverBox(customPath = alb.customCoverPath, coverUrl = alb.coverUrl, size = 30.dp)
+                            Spacer(Modifier.width(6.dp))
+                            Column(modifier = Modifier.weight(1f, fill = false)) {
+                                Text(
+                                    text = alb.title,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TextPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${alb.matchedCount}/${alb.totalExpected} • ${alb.artist}".trim(' ', '•'),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         when {
             isSearching -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(color = theme.accent)
-                    Text("Одновременный опрос: Файлы, TG, Стриминги, Archive FLAC, iTunes…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                    Text("Одновременный опрос: Файлы, TG, Стриминги, Discogs.com, FLAC и 17 интернет-источников…", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
                 }
             }
             query.trim().length < 2 -> Box(
@@ -3250,7 +3500,7 @@ private fun PowerampMultiSourceSearchTab(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Введите минимум 2 символа — поиск пройдёт одновременно по локальным FLAC/MP3, Telegram Audio, активным стримингам и онлайн-каталогам.",
+                    text = "Введите минимум 2 символа — поиск пройдёт одновременно по локальным FLAC/MP3, Telegram Audio, активным стримингам и 17 интернет-источникам (Discogs, Archive FLAC и др.).",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted,
                     modifier = Modifier.padding(24.dp)
@@ -3278,12 +3528,22 @@ private fun PowerampMultiSourceSearchTab(
                     }
                     itemsIndexed(filteredResults, key = { _, item -> item.key }) { idx, item ->
                         val isLosslessBest = item.primaryCandidate?.isLossless == true
+                        val localCandidateTrack = item.candidates.firstNotNullOfOrNull { it.localTrack }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
                                 .symbianGlossyTile(bucket = idx, isFocused = false, shape = RoundedCornerShape(3.dp))
-                                .clickable { onPlayOrPick(item) }
+                                .combinedClickable(
+                                    onClick = { onPlayOrPick(item) },
+                                    onLongClick = {
+                                        if (localCandidateTrack != null) {
+                                            onLongClickLocalTrack(localCandidateTrack)
+                                        } else {
+                                            onOpenSourcesModal(item)
+                                        }
+                                    }
+                                )
                                 .padding(horizontal = 7.dp, vertical = 6.dp)
                                 .testTag("unified_music_row_$idx"),
                             verticalAlignment = Alignment.CenterVertically
@@ -3410,6 +3670,8 @@ private fun PowerampMultiSourceSearchTab(
 fun SourceChooserDialog(
     result: UnifiedMusicSearchResult,
     forDownload: Boolean,
+    previewState: PreviewPlaybackState = PreviewPlaybackState(),
+    onTogglePreview: (TrackSourceCandidate) -> Unit = {},
     onPickPlay: (TrackSourceCandidate) -> Unit,
     onPickDownload: (TrackSourceCandidate) -> Unit,
     onDismiss: () -> Unit
@@ -3453,13 +3715,60 @@ fun SourceChooserDialog(
                 VistaButton(text = "✕", onClick = onDismiss)
             }
 
+            if (previewState.candidateId != null || !previewState.errorMessage.isNullOrBlank()) {
+                val previewErr = previewState.errorMessage
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (!previewErr.isNullOrBlank()) CallMissedRed.copy(alpha = 0.16f)
+                            else theme.accent.copy(alpha = 0.16f)
+                        )
+                        .border(
+                            1.dp,
+                            if (!previewErr.isNullOrBlank()) CallMissedRed.copy(alpha = 0.65f) else theme.accent.copy(alpha = 0.55f)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .testTag("source_preview_status_banner"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (previewState.isPreparing) {
+                        CircularProgressIndicator(
+                            color = theme.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Text(
+                        text = when {
+                            !previewErr.isNullOrBlank() -> previewErr
+                            previewState.isPreparing -> "Буферизация предпрослушивания…"
+                            previewState.isPlaying -> "▶ Идёт предпрослушивание прямо в панели (без выхода в сторонний плеер)"
+                            else -> "Предпрослушивание готово"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                        color = if (!previewErr.isNullOrBlank()) CallMissedRed else TextPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
             LazyColumn(
-                modifier = Modifier.padding(10.dp),
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                itemsIndexed(result.candidates, key = { _, it -> it.id }) { idx, candidate ->
+                itemsIndexed(result.candidates, key = { idx, it -> "src_${idx}_${it.id}" }) { idx, candidate ->
+                    val canInlinePreview = candidate.localTrack != null ||
+                        !candidate.previewUrl.isNullOrBlank() ||
+                        !candidate.downloadUrl.isNullOrBlank()
+                    val isThisPreviewing = previewState.candidateId == candidate.id &&
+                        (previewState.isPlaying || previewState.isPreparing)
                     val meta = buildString {
                         append(candidate.sourceKind.title)
+                        if (candidate.durationMs > 0L) append(" • ${MediaControlRepository.formatTimeMs(candidate.durationMs)}")
                         if (candidate.bitrateKbps > 0) append(" • ${candidate.bitrateKbps} kbps")
                         if (candidate.sampleRateHz > 0) append(" • ${candidate.sampleRateHz / 1000}kHz")
                     }
@@ -3469,12 +3778,37 @@ fun SourceChooserDialog(
                         subtitle = meta,
                         badgeText = candidate.formatBadge,
                         badgeLossless = candidate.isLossless,
-                        statusBarColor = if (candidate.isLossless) CallIncomingGreen else MusicSourceAmber,
+                        isActive = isThisPreviewing,
+                        isPlaying = previewState.candidateId == candidate.id && previewState.isPlaying,
+                        statusBarColor = if (isThisPreviewing) theme.accent else if (candidate.isLossless) CallIncomingGreen else MusicSourceAmber,
                         onClick = {
-                            if (forDownload) onPickDownload(candidate) else onPickPlay(candidate)
+                            when {
+                                forDownload -> onPickDownload(candidate)
+                                canInlinePreview -> onTogglePreview(candidate)
+                                else -> onPickPlay(candidate)
+                            }
                         },
                         trailingSlot = {
-                            VistaButton(text = "▶", isPrimary = !forDownload, onClick = { onPickPlay(candidate) })
+                            if (canInlinePreview) {
+                                Box(
+                                    modifier = Modifier
+                                        .vistaAeroButton(isPrimary = isThisPreviewing, isActive = isThisPreviewing)
+                                        .clickable { onTogglePreview(candidate) }
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        .testTag("source_preview_btn_$idx")
+                                ) {
+                                    Text(
+                                        text = if (isThisPreviewing) "■ Стоп" else "♪ Проб.",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                        color = if (isThisPreviewing) Color.White else theme.accent
+                                    )
+                                }
+                            } else {
+                                VistaButton(text = "▶", isPrimary = !forDownload, onClick = { onPickPlay(candidate) })
+                            }
+                            if (canInlinePreview && !forDownload) {
+                                VistaButton(text = "▶", isPrimary = true, onClick = { onPickPlay(candidate) })
+                            }
                             VistaButton(
                                 text = if (candidate.sourceKind == MusicSourceKind.STREAMING_PAID) "Захват" else "⬇",
                                 isPrimary = forDownload,

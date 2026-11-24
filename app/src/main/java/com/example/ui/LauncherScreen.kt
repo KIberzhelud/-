@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -83,9 +84,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
+import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.model.AppEntry
 import com.example.model.CallsSubTab
 import com.example.model.MainTab
+import com.example.model.PowerampTab
 import com.example.ui.components.AddHubLinkDialog
 import com.example.ui.components.AndroidOptimizationAndSpoofDialog
 import com.example.ui.components.AppContextDialog
@@ -96,6 +99,7 @@ import com.example.ui.components.AutoKillSettingsDialog
 import com.example.ui.components.BackgroundWebAudioDialog
 import com.example.ui.components.Bb10RecentsOverlay
 import com.example.ui.components.CallsContactsView
+import com.example.ui.components.EditAudioMetadataDialog
 import com.example.ui.components.FavoritesAndAlphabetRail
 import com.example.ui.components.FileContextDialog
 import com.example.ui.components.HubView
@@ -109,6 +113,7 @@ import com.example.ui.components.PortraitMusicHeaderBar
 import com.example.ui.components.PowerampPlayerScreen
 import com.example.ui.components.RenameAppDialog
 import com.example.ui.components.SourceChooserDialog
+import com.example.ui.components.TrackContextMenuDialog
 import com.example.ui.components.VistaButton
 import com.example.ui.components.WeatherCityPickerDialog
 import com.example.ui.components.WeatherForecastDialog
@@ -175,6 +180,34 @@ fun LauncherScreen(
         pendingCoverAlbumId = null
         if (uri != null && albumId != null) {
             viewModel.setAlbumCoverFromUri(albumId, uri)
+        }
+    }
+
+    var pendingCoverTrackTarget by remember { mutableStateOf<Triple<String?, String, String>?>(null) }
+    val trackCoverPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val target = pendingCoverTrackTarget
+        pendingCoverTrackTarget = null
+        if (uri != null && target != null) {
+            viewModel.setTrackCustomCoverFromUri(target.first, target.second, target.third, uri)
+        }
+    }
+
+    var pendingMetadataCoverUri by remember(state.editingMetadataTrack?.id) { mutableStateOf<Uri?>(null) }
+    val metadataCoverPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            pendingMetadataCoverUri = uri
+        }
+    }
+
+    val fallbackCoverPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.setDefaultTrackFallbackCoverFromUri(uri)
         }
     }
 
@@ -417,6 +450,21 @@ fun LauncherScreen(
             }
         }
 
+        val activeSession = state.mediaState.activeSession
+        val activeTrackCustomCoverPath = remember(
+            state.trackCoverOverrides,
+            state.mediaState.currentLocalTrackId,
+            activeSession?.title,
+            activeSession?.artist
+        ) {
+            MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                overrides = state.trackCoverOverrides,
+                trackId = state.mediaState.currentLocalTrackId,
+                title = activeSession?.title.orEmpty(),
+                artist = activeSession?.artist.orEmpty()
+            )
+        }
+
         if (isLandscape) {
             // LANDSCAPE MODE: Player & vertical tabs on left; track/streaming drawer slides out SIDEWAYS to the right!
             Row(
@@ -432,6 +480,8 @@ fun LauncherScreen(
                     mediaState = state.mediaState,
                     livePositionMs = state.livePositionMs,
                     livePositionFlow = viewModel.livePositionMs,
+                    activeTrackCustomCoverPath = activeTrackCustomCoverPath,
+                    defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
                     isDrawerOpen = state.showMusicSheet,
                     coverStyle = state.playerCoverStyle,
                     activeTab = state.activeTab,
@@ -507,7 +557,23 @@ fun LauncherScreen(
                         onToggleMute = viewModel::toggleMute,
                         onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
                         onLaunchMusicApp = viewModel::launchApp,
-                        onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
+                        onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() },
+                        smartAlbums = state.smartAlbums,
+                        selectedAlbumId = state.selectedAlbumId,
+                        defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
+                        onSelectAlbum = viewModel::selectSmartAlbum,
+                        onCreateAlbum = viewModel::createSmartAlbum,
+                        onRefreshAlbumOnline = viewModel::refreshAlbumOnlineMetadata,
+                        onDownloadMissingAlbumTrack = viewModel::downloadExpectedTrackForAlbum,
+                        onOpenFullAlbumsTab = { viewModel.openFullPowerampPlayer(PowerampTab.ALBUMS) },
+                        onEditTrackMetadata = viewModel::openTrackMetadataEditor,
+                        onOpenLyricsForTrack = { tr ->
+                            viewModel.playLocalAudioTrack(tr)
+                            viewModel.openFullPowerampPlayer(PowerampTab.LYRICS)
+                        },
+                        onAttachLocalTracksToAlbum = viewModel::attachLocalTracksToAlbum,
+                        onDetachTrackFromAlbum = viewModel::detachTrackFromAlbum,
+                        onLongClickTrack = viewModel::openTrackContextMenu
                     )
                 }
 
@@ -591,6 +657,8 @@ fun LauncherScreen(
                             mediaState = state.mediaState,
                             livePositionMs = state.livePositionMs,
                             livePositionFlow = viewModel.livePositionMs,
+                            activeTrackCustomCoverPath = activeTrackCustomCoverPath,
+                            defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
                             isDrawerOpen = state.showMusicSheet,
                             isCollapsed = state.isPlayerCollapsed,
                             coverStyle = state.playerCoverStyle,
@@ -659,7 +727,23 @@ fun LauncherScreen(
                                 onToggleMute = viewModel::toggleMute,
                                 onOpenNotificationAccess = viewModel::openNotificationListenerSettings,
                                 onLaunchMusicApp = viewModel::launchApp,
-                                onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() }
+                                onOpenFullPoweramp = { viewModel.openFullPowerampPlayer() },
+                                smartAlbums = state.smartAlbums,
+                                selectedAlbumId = state.selectedAlbumId,
+                                defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
+                                onSelectAlbum = viewModel::selectSmartAlbum,
+                                onCreateAlbum = viewModel::createSmartAlbum,
+                                onRefreshAlbumOnline = viewModel::refreshAlbumOnlineMetadata,
+                                onDownloadMissingAlbumTrack = viewModel::downloadExpectedTrackForAlbum,
+                                onOpenFullAlbumsTab = { viewModel.openFullPowerampPlayer(PowerampTab.ALBUMS) },
+                                onEditTrackMetadata = viewModel::openTrackMetadataEditor,
+                                onOpenLyricsForTrack = { tr ->
+                                    viewModel.playLocalAudioTrack(tr)
+                                    viewModel.openFullPowerampPlayer(PowerampTab.LYRICS)
+                                },
+                                onAttachLocalTracksToAlbum = viewModel::attachLocalTracksToAlbum,
+                                onDetachTrackFromAlbum = viewModel::detachTrackFromAlbum,
+                                onLongClickTrack = viewModel::openTrackContextMenu
                             )
                         }
 
@@ -786,6 +870,12 @@ fun LauncherScreen(
                                 pendingCoverAlbumId = albumId
                                 albumCoverPickerLauncher.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            onPickTrackCoverForTarget = { trackId, title, artist ->
+                                pendingCoverTrackTarget = Triple(trackId, title, artist)
+                                trackCoverPickerLauncher.launch(
+                                    arrayOf("image/*", "image/gif", "video/mp4", "video/webm")
                                 )
                             },
                             modifier = Modifier.fillMaxSize()
@@ -916,6 +1006,12 @@ fun LauncherScreen(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
+                onPickTrackCoverForTarget = { trackId, title, artist ->
+                    pendingCoverTrackTarget = Triple(trackId, title, artist)
+                    trackCoverPickerLauncher.launch(
+                        arrayOf("image/*", "image/gif", "video/mp4", "video/webm")
+                    )
+                },
                 modifier = Modifier.imePadding()
             )
         }
@@ -1017,6 +1113,13 @@ fun LauncherScreen(
             onSelectCoverStyle = viewModel::setPlayerCoverStyle,
             onToggleWeatherInHubOther = viewModel::toggleWeatherInHubOther,
             onToggleWeatherInHomeTile = viewModel::toggleWeatherInHomeTile,
+            defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
+            onPickFallbackCover = {
+                fallbackCoverPickerLauncher.launch(
+                    arrayOf("image/*", "image/gif", "video/mp4", "video/webm")
+                )
+            },
+            onClearFallbackCover = viewModel::clearDefaultTrackFallbackCover,
             onDismiss = { viewModel.setShowAppearanceDialog(false) }
         )
     }
@@ -1116,7 +1219,65 @@ fun LauncherScreen(
             onShare = { viewModel.shareSearchFile(file) },
             onOpenFolder = { viewModel.openSearchFileFolder(file) },
             onCopyPath = { viewModel.copySearchFilePath(file) },
-            onDelete = { viewModel.deleteSearchFile(file) }
+            onDelete = { viewModel.deleteSearchFile(file) },
+            onEditAudioMetadata = { viewModel.openTrackMetadataForDeviceFile(file) }
+        )
+    }
+
+    state.contextMenuTrack?.let { tr ->
+        TrackContextMenuDialog(
+            track = tr,
+            albumContext = state.contextMenuTrackAlbum,
+            smartAlbums = state.smartAlbums,
+            onDismiss = { viewModel.openTrackContextMenu(null, null) },
+            onPlay = { viewModel.playLocalAudioTrack(tr) },
+            onOpenLyrics = {
+                viewModel.playLocalAudioTrack(tr)
+                viewModel.openFullPowerampPlayer(PowerampTab.LYRICS)
+            },
+            onEditMetadata = { viewModel.openTrackMetadataEditor(tr) },
+            onAttachToAlbum = { albId -> viewModel.attachLocalTracksToAlbum(albId, listOf(tr.id)) },
+            onDetachFromAlbum = { albId -> viewModel.detachTrackFromAlbum(albId, tr.id) },
+            onDeleteTrack = { viewModel.deleteLocalAudioTrack(tr) }
+        )
+    }
+
+    state.editingMetadataTrack?.let { tr ->
+        val existingOverride = remember(state.trackCoverOverrides, tr.id, tr.title, tr.artist) {
+            MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                overrides = state.trackCoverOverrides,
+                trackId = tr.id,
+                title = tr.title,
+                artist = tr.artist
+            )
+        }
+        EditAudioMetadataDialog(
+            track = tr,
+            loadedMetadata = state.editingMetadataPreview,
+            existingCoverOverridePath = existingOverride,
+            pendingCoverUri = pendingMetadataCoverUri,
+            onPickCoverImage = {
+                metadataCoverPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onClearPendingCover = { pendingMetadataCoverUri = null },
+            onDismiss = {
+                pendingMetadataCoverUri = null
+                viewModel.openTrackMetadataEditor(null)
+            },
+            onSave = { title, artist, album, clearEmbedded ->
+                val coverUri = pendingMetadataCoverUri
+                pendingMetadataCoverUri = null
+                viewModel.saveTrackFileMetadata(
+                    track = tr,
+                    title = title,
+                    artist = artist,
+                    album = album,
+                    newCoverUri = coverUri,
+                    clearEmbeddedCover = clearEmbedded
+                )
+            }
         )
     }
 
@@ -1136,9 +1297,14 @@ fun LauncherScreen(
         SourceChooserDialog(
             result = targetResult,
             forDownload = state.sourcePickerActionDownload,
+            previewState = state.previewPlaybackState,
+            onTogglePreview = viewModel::toggleCandidatePreview,
             onPickPlay = { candidate -> viewModel.playTrackSourceCandidate(candidate) },
             onPickDownload = { candidate -> viewModel.downloadTrackSourceCandidate(candidate) },
-            onDismiss = { viewModel.openSourcePicker(null) }
+            onDismiss = {
+                viewModel.stopCandidatePreview()
+                viewModel.openSourcePicker(null)
+            }
         )
     }
 
@@ -1215,6 +1381,7 @@ fun LauncherScreen(
             onApplyUpdate = viewModel::applyZipUpdate,
             onCloudBuildSourceZip = viewModel::cloudBuildApkFromSourceZip,
             onFetchLatestCloudApk = viewModel::fetchLatestCloudBuiltApk,
+            onOpenUnknownAppSources = viewModel::openUnknownAppSourcesSettings,
             onDismiss = { viewModel.setShowZipUpdateDialog(false) }
         )
     }
@@ -1425,6 +1592,7 @@ private fun MainTabContent(
                         searchFiles = state.searchFiles,
                         linuxSearchResults = state.linuxSearchResults,
                         musicSearchResults = state.musicSearchResults,
+                        albumSearchResults = state.albumSearchResults,
                         isSearchingDevice = state.isSearchingDevice,
                         indexedFolderCount = state.indexedFolderCount,
                         hasAllFilesAccess = state.hasAllFilesAccess,
@@ -1450,6 +1618,10 @@ private fun MainTabContent(
                         onResolveFileUri = viewModel::resolveShareableUri,
                         onRunLinuxPackage = viewModel::installOrRunLinuxPackage,
                         onLaunchMusicMatch = viewModel::launchMusicSearchMatch,
+                        onLongPressMusicMatch = { match ->
+                            match.localTrack?.let { tr -> viewModel.openTrackContextMenu(tr, null) }
+                        },
+                        onOpenSmartAlbum = { alb -> viewModel.openSmartAlbumFromSearch(alb.id) },
                         onConnectSearchFolder = onConnectSearchFolder,
                         onRequestAllFilesAccess = viewModel::openAllFilesAccessSettings,
                         onSearchWeb = viewModel::searchOnWeb,
@@ -1586,8 +1758,10 @@ private fun BoundPowerampPlayerScreen(
     isLandscape: Boolean,
     applySafeInsets: Boolean,
     onPickAlbumCover: (String) -> Unit,
+    onPickTrackCoverForTarget: (trackId: String?, title: String, artist: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val activeSession = state.mediaState.activeSession
     PowerampPlayerScreen(
         mediaState = state.mediaState,
         livePositionMs = state.livePositionMs,
@@ -1606,6 +1780,8 @@ private fun BoundPowerampPlayerScreen(
         audioCaptureState = state.audioCaptureState,
         smartAlbums = state.smartAlbums,
         selectedAlbumId = state.selectedAlbumId,
+        trackCoverOverrides = state.trackCoverOverrides,
+        defaultFallbackCoverPath = state.defaultTrackFallbackCoverPath,
         onClose = viewModel::closeFullPowerampPlayer,
         onSelectTab = viewModel::selectPowerampTab,
         onToggleSourceMode = viewModel::toggleMusicSourceMode,
@@ -1630,6 +1806,7 @@ private fun BoundPowerampPlayerScreen(
         onAutoFetchLyrics = viewModel::autoPickLyricsAgain,
         onSaveLyrics = viewModel::saveEditedLyrics,
         onDeleteLyrics = viewModel::deleteCurrentLyrics,
+        onToggleConfirmPrimaryLyrics = viewModel::toggleConfirmPrimaryLyrics,
         onSetEqualizerEnabled = viewModel::setEqualizerEnabled,
         onApplyEqualizerPreset = viewModel::applyEqualizerPreset,
         onSetEqualizerBand = viewModel::setEqualizerBandLevel,
@@ -1648,6 +1825,28 @@ private fun BoundPowerampPlayerScreen(
         onRenameLocalTrack = viewModel::renameLocalAudioTrack,
         onToggleCaptureAutoSplit = viewModel::toggleCaptureAutoSplit,
         onToggleCaptureSilentMute = viewModel::toggleCaptureSilentMute,
+        onPickCurrentTrackCover = {
+            val title = activeSession?.title.orEmpty()
+            val artist = activeSession?.artist.orEmpty()
+            if (title.isNotBlank()) {
+                onPickTrackCoverForTarget(state.mediaState.currentLocalTrackId, title, artist)
+            }
+        },
+        onClearCurrentTrackCover = {
+            val title = activeSession?.title.orEmpty()
+            val artist = activeSession?.artist.orEmpty()
+            if (title.isNotBlank()) {
+                viewModel.clearTrackCustomCover(state.mediaState.currentLocalTrackId, title, artist)
+            }
+        },
+        onPickTrackCover = { track ->
+            onPickTrackCoverForTarget(track.id, track.title, track.artist)
+        },
+        onClearTrackCover = { track ->
+            viewModel.clearTrackCustomCover(track.id, track.title, track.artist)
+        },
+        onEditTrackMetadata = viewModel::openTrackMetadataEditor,
+        onLongClickTrack = viewModel::openTrackContextMenu,
         applySafeInsets = applySafeInsets,
         modifier = modifier
     )

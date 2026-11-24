@@ -1,14 +1,18 @@
 package com.example.data
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.model.CustomColorPalette
 import com.example.model.HubQuickLink
@@ -17,6 +21,8 @@ import com.example.model.TrackLyricsData
 import com.example.model.ZipArchiveKind
 import com.example.model.ZipUpdateInspection
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -24,6 +30,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -33,6 +40,101 @@ class ZipUpdateRepository(
     private val context: Context,
     private val shizukuBridge: ShizukuBridge
 ) {
+    private val _installEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val installEvents = _installEvents.asSharedFlow()
+
+    @Volatile
+    private var receiverRegistered = false
+
+    private val packageInstallerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (intent == null) return
+            val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
+            val statusMsg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
+            when (status) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    val confirmIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(Intent.EXTRA_INTENT)
+                    }
+                    if (confirmIntent != null) {
+                        confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        val started = runCatching {
+                            context.startActivity(confirmIntent)
+                            true
+                        }.getOrDefault(false)
+                        if (started) {
+                            _installEvents.tryEmit("Открыто системное окно подтверждения установки APK…")
+                        } else {
+                            _installEvents.tryEmit("Система заблокировала автозапуск диалога установки APK.")
+                        }
+                    }
+                }
+                PackageInstaller.STATUS_SUCCESS -> {
+                    _installEvents.tryEmit("Установка APK успешно завершена.")
+                }
+                PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                    _installEvents.tryEmit("Установка отменена пользователем.")
+                }
+                PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> {
+                    _installEvents.tryEmit(
+                        "Ошибка INSTALL_FAILED_UPDATE_INCOMPATIBLE: подпись нового APK отличается от установленной версии. " +
+                            "Удалите текущую версию KeyDeck вручную 1 раз (или сохраните общий debug.keystore в GitHub), затем установите новый APK."
+                    )
+                }
+                else -> {
+                    val human = when {
+                        statusMsg.contains("UPDATE_INCOMPATIBLE", ignoreCase = true) ||
+                            statusMsg.contains("signatures do not match", ignoreCase = true) ->
+                            "Ошибка подписи APK (INSTALL_FAILED_UPDATE_INCOMPATIBLE): удалите текущую версию вручную 1 раз перед установкой новой сборки."
+                        statusMsg.isNotBlank() -> "Ошибка установки APK: $statusMsg"
+                        else -> "Системный установщик вернул ошибку (код $status)."
+                    }
+                    _installEvents.tryEmit(human)
+                }
+            }
+        }
+    }
+
+    private fun ensureInstallerReceiverRegistered() {
+        if (receiverRegistered) return
+        synchronized(this) {
+            if (receiverRegistered) return
+            runCatching {
+                ContextCompat.registerReceiver(
+                    context,
+                    packageInstallerReceiver,
+                    IntentFilter(ACTION_ZIP_APK_INSTALL_RESULT),
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+                receiverRegistered = true
+            }
+        }
+    }
+
+    fun canRequestPackageInstalls(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(true)
+        } else {
+            true
+        }
+    }
+
+    fun openUnknownAppSourcesSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        return runCatching {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        }.getOrDefault(false)
+    }
     private fun updatesCacheRoot(): File =
         File(context.cacheDir, "exports/updates").apply { mkdirs() }
 
@@ -204,6 +306,14 @@ class ZipUpdateRepository(
             }
 
             val samePackage = targetPkg != null && targetPkg == context.packageName
+            val targetSig = primaryApk?.let { extractApkSignatureSha256(it.absolutePath) }
+            val installedSig = targetPkg?.let { extractInstalledSignatureSha256(it) }
+            val sigMatches = if (targetSig != null && installedSig != null) {
+                targetSig == installedSig
+            } else {
+                null
+            }
+            val canRequestInstalls = canRequestPackageInstalls()
             val hasConfigItems = palettes.isNotEmpty() || quickLinks.isNotEmpty() || lyricsList.isNotEmpty() || wallpaperPath != null
 
             val kind = when {
@@ -260,7 +370,11 @@ class ZipUpdateRepository(
                 pendingPalettes = palettes.distinctBy { it.id },
                 pendingQuickLinks = quickLinks.distinctBy { it.url },
                 pendingLyrics = lyricsList.distinctBy { it.trackKey },
-                extractedWallpaperPath = wallpaperPath
+                extractedWallpaperPath = wallpaperPath,
+                signatureMatchesInstalled = sigMatches,
+                installedSignatureSha256 = installedSig,
+                targetSignatureSha256 = targetSig,
+                canRequestInstalls = canRequestInstalls
             )
         }
     }
@@ -277,6 +391,13 @@ class ZipUpdateRepository(
             }
         }
         val samePackage = targetPkg != null && targetPkg == context.packageName
+        val targetSig = extractApkSignatureSha256(apkFile.absolutePath)
+        val installedSig = targetPkg?.let { extractInstalledSignatureSha256(it) }
+        val sigMatches = if (targetSig != null && installedSig != null) {
+            targetSig == installedSig
+        } else {
+            null
+        }
         val kind = if (samePackage) ZipArchiveKind.APK_UPDATE else ZipArchiveKind.FOREIGN_APK
         ZipUpdateInspection(
             sourceUriString = Uri.fromFile(apkFile).toString(),
@@ -306,7 +427,11 @@ class ZipUpdateRepository(
                 sourceCodeCount = 0,
                 hasGradleFiles = false,
                 hasSigningKeystore = false
-            )
+            ),
+            signatureMatchesInstalled = sigMatches,
+            installedSignatureSha256 = installedSig,
+            targetSignatureSha256 = targetSig,
+            canRequestInstalls = canRequestPackageInstalls()
         )
     }
 
@@ -331,6 +456,15 @@ class ZipUpdateRepository(
                     if (res.isSuccess) {
                         return@runCatching "Установка APK запущена через Shizuku/Root (${res.getOrNull()?.trim().orEmpty()})"
                     }
+                    val err = res.exceptionOrNull()?.message.orEmpty()
+                    if (err.contains("UPDATE_INCOMPATIBLE", ignoreCase = true) ||
+                        err.contains("signatures do not match", ignoreCase = true)
+                    ) {
+                        throw IllegalStateException(
+                            "Ошибка INSTALL_FAILED_UPDATE_INCOMPATIBLE: подпись APK отличается от текущей версии KeyDeck. " +
+                                "Удалите установленную версию 1 раз вручную, затем установите собранный APK."
+                        )
+                    }
                 } else {
                     val totalSize = files.sumOf { it.length() }
                     val createRes = shizukuBridge.runPrivilegedOrRootShell("pm install-create -r -d -S $totalSize")
@@ -354,17 +488,43 @@ class ZipUpdateRepository(
                 }
             }
 
-            if (files.size == 1) {
+            if (inspection.signatureMatchesInstalled == false) {
+                throw IllegalStateException(
+                    "Подпись APK (${inspection.targetSignatureSha256?.take(10) ?: "?"}) не совпадает с установленной версией " +
+                        "(${inspection.installedSignatureSha256?.take(10) ?: "?"}). Система выдаст INSTALL_FAILED_UPDATE_INCOMPATIBLE. " +
+                        "Удалите текущее приложение 1 раз вручную и установите этот APK заново."
+                )
+            }
+
+            if (!canRequestPackageInstalls()) {
+                openUnknownAppSourcesSettings()
+                throw IllegalStateException(
+                    "Разрешите «Установка из неизвестных источников» для KeyDeck в открывшихся настройках, затем нажмите «Установить APK» ещё раз."
+                )
+            }
+
+            ensureInstallerReceiverRegistered()
+            val sessionCommitted = runCatching {
+                commitPackageInstallerSession(files)
+                true
+            }.getOrDefault(false)
+
+            if (sessionCommitted) {
+                if (files.size == 1) {
+                    "Системный установщик запущен для ${files.first().name}…"
+                } else {
+                    "Сессия установки ${files.size} APK отправлена в систему…"
+                }
+            } else if (files.size == 1) {
                 val apkFile = files.first()
                 val apkUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
                 val opened = launchSystemApkInstaller(apkUri)
                 if (!opened) {
-                    throw IllegalStateException("Система не нашла установщик пакетов для запуска APK")
+                    throw IllegalStateException("Система не смогла открыть окно установщика пакетов для ${apkFile.name}")
                 }
                 "Открыт системный установщик для ${apkFile.name}"
             } else {
-                commitPackageInstallerSession(files)
-                "Сессия установки ${files.size} APK отправлена в систему"
+                throw IllegalStateException("Не удалось запустить сессию установки split-APK")
             }
         }
     }
@@ -456,7 +616,7 @@ class ZipUpdateRepository(
             setDataAndType(apkUri, apkMime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        runCatching {
+        val candidatePackages = runCatching {
             val res = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.packageManager.queryIntentActivities(
                     baseIntent,
@@ -466,26 +626,30 @@ class ZipUpdateRepository(
                 @Suppress("DEPRECATION")
                 context.packageManager.queryIntentActivities(baseIntent, PackageManager.MATCH_DEFAULT_ONLY)
             }
-            res.forEach {
-                val pkg = it.activityInfo?.packageName
-                if (!pkg.isNullOrBlank()) {
-                    context.grantUriPermission(pkg, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            res.mapNotNull { it.activityInfo?.packageName }.distinct().also { pkgs ->
+                pkgs.forEach { pkg ->
+                    runCatching { context.grantUriPermission(pkg, apkUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
                 }
             }
+        }.getOrDefault(emptyList())
+
+        val preferredPkg = selectPreferredApkInstaller(candidatePackages)
+        if (!preferredPkg.isNullOrBlank()) {
+            val targeted = Intent(baseIntent).apply { setPackage(preferredPkg) }
+            val ok = runCatching {
+                context.startActivity(targeted)
+                true
+            }.getOrDefault(false)
+            if (ok) return true
         }
         return runCatching {
-            val chooser = Intent.createChooser(baseIntent, "Установка обновления KeyDeck").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(chooser)
-            true
-        }.recoverCatching {
             context.startActivity(baseIntent)
             true
         }.getOrDefault(false)
     }
 
     private fun commitPackageInstallerSession(apkFiles: List<File>) {
+        ensureInstallerReceiverRegistered()
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         val sessionId = installer.createSession(params)
@@ -499,7 +663,7 @@ class ZipUpdateRepository(
                     session.fsync(out)
                 }
             }
-            val callbackIntent = Intent("com.example.action.ZIP_APK_INSTALL_RESULT").apply {
+            val callbackIntent = Intent(ACTION_ZIP_APK_INSTALL_RESULT).apply {
                 setPackage(context.packageName)
             }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
@@ -521,6 +685,57 @@ class ZipUpdateRepository(
                 pm.getPackageArchiveInfo(apkPath, 0)
             }
         }.getOrNull()
+    }
+
+    internal fun extractApkSignatureSha256(apkPath: String): String? {
+        return runCatching {
+            val pm = context.packageManager
+            val flags = signingPackageFlags()
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageArchiveInfo(apkPath, PackageManager.PackageInfoFlags.of(flags.toLong()))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageArchiveInfo(apkPath, flags)
+            }
+            firstSignatureSha256(info)
+        }.getOrNull()
+    }
+
+    internal fun extractInstalledSignatureSha256(packageName: String): String? {
+        return runCatching {
+            val pm = context.packageManager
+            val flags = signingPackageFlags()
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, flags)
+            }
+            firstSignatureSha256(info)
+        }.getOrNull()
+    }
+
+    private fun signingPackageFlags(): Int {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+    }
+
+    private fun firstSignatureSha256(info: PackageInfo?): String? {
+        if (info == null) return null
+        val certBytes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val sInfo = info.signingInfo
+            val arr = sInfo?.apkContentsSigners ?: sInfo?.signingCertificateHistory
+            arr?.firstOrNull()?.toByteArray()
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures?.firstOrNull()?.toByteArray()
+        } ?: return null
+        val digest = MessageDigest.getInstance("SHA-256").digest(certBytes)
+        return digest.joinToString("") { "%02x".format(Locale.US, it) }
     }
 
     private fun selectPrimaryApk(apks: List<File>): File? {
@@ -554,6 +769,8 @@ class ZipUpdateRepository(
     }
 
     internal companion object {
+        private const val ACTION_ZIP_APK_INSTALL_RESULT = "com.example.action.ZIP_APK_INSTALL_RESULT"
+
         internal data class ParsedManifest(
             val versionName: String? = null,
             val changelog: String = "",

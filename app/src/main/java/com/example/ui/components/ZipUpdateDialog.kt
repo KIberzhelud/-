@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.InstallMobile
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -89,6 +90,7 @@ fun ZipUpdateDialog(
     onApplyUpdate: (preferShizuku: Boolean) -> Unit,
     onCloudBuildSourceZip: (GitHubBuildConfig, Boolean) -> Unit = { _, _ -> },
     onFetchLatestCloudApk: (GitHubBuildConfig, Boolean) -> Unit = { _, _ -> },
+    onOpenUnknownAppSources: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
@@ -331,6 +333,65 @@ fun ZipUpdateDialog(
                                         text = "Тихая установка/обновление через Shizuku / Root",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = TextPrimary
+                                    )
+                                }
+                            }
+
+                            if (inspection.signatureMatchesInstalled == false) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(CallMissedRed.copy(alpha = 0.16f), RoundedCornerShape(4.dp))
+                                        .border(1.dp, CallMissedRed.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                        .padding(8.dp)
+                                        .testTag("zip_signature_mismatch_banner"),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.WarningAmber,
+                                            contentDescription = null,
+                                            tint = CallMissedRed,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "НЕСОВПАДЕНИЕ ПОДПИСИ (UPDATE_INCOMPATIBLE)",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = CallMissedRed
+                                        )
+                                    }
+                                    Text(
+                                        text = "APK подписан другим сертификатом и Android не сможет обновить приложение поверх. Удалите текущую версию KeyDeck один раз и установите новый APK (дальнейшие обновления с этим debug.keystore будут ставиться поверх).",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = TextPrimary
+                                    )
+                                }
+                            }
+
+                            if (inspection.canInstallApks && !inspection.canRequestInstalls && !preferShizuku) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MusicSourceAmber.copy(alpha = 0.14f), RoundedCornerShape(4.dp))
+                                        .border(1.dp, MusicSourceAmber.copy(alpha = 0.75f), RoundedCornerShape(4.dp))
+                                        .padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Text(
+                                        text = "Требуется разрешение на установку неизвестных приложений, чтобы открывалось системное окно обновления.",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = MusicSourceAmber
+                                    )
+                                    VistaButton(
+                                        text = "Разрешить установку из KeyDeck",
+                                        isPrimary = true,
+                                        onClick = onOpenUnknownAppSources,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("zip_open_unknown_sources_btn")
                                     )
                                 }
                             }

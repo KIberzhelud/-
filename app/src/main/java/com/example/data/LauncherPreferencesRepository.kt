@@ -77,6 +77,8 @@ class LauncherPreferencesRepository(private val context: Context) {
         val GITHUB_BUILD_BRANCH = stringPreferencesKey("github_build_branch")
         val GITHUB_BUILD_TOKEN = stringPreferencesKey("github_build_token")
         val TUTORIAL_SEEN = booleanPreferencesKey("tutorial_seen_v25")
+        val TRACK_COVER_OVERRIDES_JSON = stringPreferencesKey("track_cover_overrides_json")
+        val DEFAULT_TRACK_FALLBACK_COVER_PATH = stringPreferencesKey("default_track_fallback_cover_path")
     }
 
     val pinnedAppIds: Flow<Set<String>> = context.launcherDataStore.data
@@ -121,38 +123,11 @@ class LauncherPreferencesRepository(private val context: Context) {
         .onStart { emit(emptyMap()) }
 
     val appIconOverrides: Flow<Map<String, AppIconOverride>> = context.launcherDataStore.data
-        .map { prefs ->
-            val raw = prefs[Keys.APP_ICON_OVERRIDES] ?: emptySet()
-            buildMap {
-                raw.forEach { entry ->
-                    val parts = entry.split("||", limit = 4)
-                    if (parts.size >= 2) {
-                        val id = parts[0]
-                        val mode = runCatching { AppIconMode.valueOf(parts[1]) }.getOrDefault(AppIconMode.AUTO)
-                        val symKey = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
-                        val customPath = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
-                        if (mode != AppIconMode.AUTO) {
-                            put(id, AppIconOverride(mode = mode, symbianKey = symKey, customFilePath = customPath))
-                        }
-                    }
-                }
-            }
-        }
+        .map { prefs -> parseAppIconOverrides(prefs[Keys.APP_ICON_OVERRIDES]) }
         .onStart { emit(emptyMap()) }
 
     val hubQuickLinks: Flow<List<HubQuickLink>> = context.launcherDataStore.data
-        .map { prefs ->
-            val raw = prefs[Keys.HUB_LINKS] ?: emptySet()
-            raw.mapNotNull { entry ->
-                val parts = entry.split("||")
-                if (parts.size >= 4) {
-                    val category = runCatching { HubSubTab.valueOf(parts[3]) }.getOrDefault(HubSubTab.NEWS)
-                    HubQuickLink(id = parts[0], title = parts[1], url = parts[2], category = category)
-                } else {
-                    null
-                }
-            }.sortedBy { it.title.lowercase() }
-        }
+        .map { prefs -> parseHubQuickLinks(prefs[Keys.HUB_LINKS]) }
         .onStart { emit(emptyList()) }
 
     val uiThemeColor: Flow<UiThemeColor> = context.launcherDataStore.data
@@ -287,6 +262,14 @@ class LauncherPreferencesRepository(private val context: Context) {
     val tutorialSeen: Flow<Boolean> = context.launcherDataStore.data
         .map { prefs -> prefs[Keys.TUTORIAL_SEEN] ?: false }
         .onStart { emit(false) }
+
+    val trackCoverOverrides: Flow<Map<String, String>> = context.launcherDataStore.data
+        .map { prefs -> parseTrackCoverOverrides(prefs[Keys.TRACK_COVER_OVERRIDES_JSON]) }
+        .onStart { emit(emptyMap()) }
+
+    val defaultTrackFallbackCoverPath: Flow<String?> = context.launcherDataStore.data
+        .map { prefs -> prefs[Keys.DEFAULT_TRACK_FALLBACK_COVER_PATH]?.takeIf { it.isNotBlank() } }
+        .onStart { emit(null) }
 
     suspend fun setTutorialSeen(seen: Boolean) {
         context.launcherDataStore.edit { prefs ->
@@ -713,6 +696,111 @@ class LauncherPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun getSmartAlbumsNow(): List<SmartAlbum> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseSmartAlbums(prefs[Keys.SMART_ALBUMS_JSON])
+    }
+
+    suspend fun updateSmartAlbums(transform: (List<SmartAlbum>) -> List<SmartAlbum>): List<SmartAlbum> {
+        var result: List<SmartAlbum> = emptyList()
+        context.launcherDataStore.edit { prefs ->
+            val current = parseSmartAlbums(prefs[Keys.SMART_ALBUMS_JSON])
+            result = transform(current)
+            prefs[Keys.SMART_ALBUMS_JSON] = serializeSmartAlbums(result)
+        }
+        return result
+    }
+
+    suspend fun getLyricsOverridesNow(): Map<String, TrackLyricsData> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseLyricsMap(prefs[Keys.LYRICS_OVERRIDES_JSON])
+    }
+
+    suspend fun getWallpaperPathNow(): String? {
+        val prefs = context.launcherDataStore.data.first()
+        return prefs[Keys.WALLPAPER_PATH]?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun getSavedPalettesNow(): List<CustomColorPalette> {
+        val prefs = context.launcherDataStore.data.first()
+        return parsePalettes(prefs[Keys.SAVED_PALETTES_JSON])
+    }
+
+    suspend fun getHubQuickLinksNow(): List<HubQuickLink> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseHubQuickLinks(prefs[Keys.HUB_LINKS])
+    }
+
+    suspend fun getInstalledLinuxTilesNow(): List<PersistedLinuxTile> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseInstalledLinuxTiles(prefs[Keys.INSTALLED_LINUX_TILES_JSON])
+    }
+
+    suspend fun getAppIconOverridesNow(): Map<String, AppIconOverride> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseAppIconOverrides(prefs[Keys.APP_ICON_OVERRIDES])
+    }
+
+    suspend fun getStreamingHistoryNow(): List<MediaQueueTrack> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseStreamingHistory(prefs[Keys.STREAMING_HISTORY_JSON])
+    }
+
+    suspend fun getEqualizerConfigNow(): SavedEqualizerConfig? {
+        val prefs = context.launcherDataStore.data.first()
+        return parseEqualizerConfig(prefs[Keys.EQUALIZER_JSON])
+    }
+
+    suspend fun getTrackCoverOverridesNow(): Map<String, String> {
+        val prefs = context.launcherDataStore.data.first()
+        return parseTrackCoverOverrides(prefs[Keys.TRACK_COVER_OVERRIDES_JSON])
+    }
+
+    suspend fun getSearchTreeUrisNow(): Set<String> {
+        val prefs = context.launcherDataStore.data.first()
+        return prefs[Keys.SEARCH_TREE_URIS] ?: emptySet()
+    }
+
+    suspend fun saveTrackCoverOverride(keys: List<String>, path: String) {
+        val cleanKeys = keys.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val cleanPath = path.trim()
+        if (cleanKeys.isEmpty() || cleanPath.isBlank()) return
+        context.launcherDataStore.edit { prefs ->
+            val map = parseTrackCoverOverrides(prefs[Keys.TRACK_COVER_OVERRIDES_JSON]).toMutableMap()
+            cleanKeys.forEach { key -> map[key] = cleanPath }
+            if (map.size > 240) {
+                val keysToDrop = map.keys.take(map.size - 240)
+                keysToDrop.forEach { if (it !in cleanKeys) map.remove(it) }
+            }
+            prefs[Keys.TRACK_COVER_OVERRIDES_JSON] = serializeTrackCoverOverrides(map)
+        }
+    }
+
+    suspend fun clearTrackCoverOverride(keys: List<String>) {
+        val cleanKeys = keys.map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        if (cleanKeys.isEmpty()) return
+        context.launcherDataStore.edit { prefs ->
+            val map = parseTrackCoverOverrides(prefs[Keys.TRACK_COVER_OVERRIDES_JSON]).toMutableMap()
+            var changed = false
+            cleanKeys.forEach { k ->
+                if (map.remove(k) != null) changed = true
+            }
+            if (changed) {
+                prefs[Keys.TRACK_COVER_OVERRIDES_JSON] = serializeTrackCoverOverrides(map)
+            }
+        }
+    }
+
+    suspend fun setDefaultTrackFallbackCoverPath(path: String?) {
+        context.launcherDataStore.edit { prefs ->
+            if (path.isNullOrBlank()) {
+                prefs.remove(Keys.DEFAULT_TRACK_FALLBACK_COVER_PATH)
+            } else {
+                prefs[Keys.DEFAULT_TRACK_FALLBACK_COVER_PATH] = path.trim()
+            }
+        }
+    }
+
     suspend fun saveLyricsOverride(lyrics: TrackLyricsData) {
         context.launcherDataStore.edit { prefs ->
             val map = parseLyricsMap(prefs[Keys.LYRICS_OVERRIDES_JSON]).toMutableMap()
@@ -738,6 +826,58 @@ class LauncherPreferencesRepository(private val context: Context) {
         context.launcherDataStore.edit { prefs ->
             prefs[Keys.EQUALIZER_JSON] = obj.toString()
         }
+    }
+
+    private fun parseAppIconOverrides(rawSet: Set<String>?): Map<String, AppIconOverride> {
+        val raw = rawSet ?: return emptyMap()
+        return buildMap {
+            raw.forEach { entry ->
+                val parts = entry.split("||", limit = 4)
+                if (parts.size >= 2) {
+                    val id = parts[0]
+                    val mode = runCatching { AppIconMode.valueOf(parts[1]) }.getOrDefault(AppIconMode.AUTO)
+                    val symKey = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
+                    val customPath = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
+                    if (mode != AppIconMode.AUTO) {
+                        put(id, AppIconOverride(mode = mode, symbianKey = symKey, customFilePath = customPath))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseHubQuickLinks(rawSet: Set<String>?): List<HubQuickLink> {
+        val raw = rawSet ?: return emptyList()
+        return raw.mapNotNull { entry ->
+            val parts = entry.split("||")
+            if (parts.size >= 4) {
+                val category = runCatching { HubSubTab.valueOf(parts[3]) }.getOrDefault(HubSubTab.NEWS)
+                HubQuickLink(id = parts[0], title = parts[1], url = parts[2], category = category)
+            } else {
+                null
+            }
+        }.sortedBy { it.title.lowercase() }
+    }
+
+    private fun serializeTrackCoverOverrides(map: Map<String, String>): String {
+        val obj = JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        return obj.toString()
+    }
+
+    private fun parseTrackCoverOverrides(raw: String?): Map<String, String> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(raw)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = obj.optString(k).trim()
+                    if (k.isNotBlank() && v.isNotBlank()) put(k, v)
+                }
+            }
+        }.getOrDefault(emptyMap())
     }
 
     private fun parseWorkspaceGrid(raw: String?): WorkspaceGridState {
@@ -951,6 +1091,7 @@ class LauncherPreferencesRepository(private val context: Context) {
                     put("src", item.sourceLabel)
                     put("del", item.isDeleted)
                     put("edt", item.isCustomEdited)
+                    put("conf", item.isConfirmedPrimary)
                 }
             )
         }
@@ -979,7 +1120,8 @@ class LauncherPreferencesRepository(private val context: Context) {
                             rawLrc = rawLrc,
                             sourceLabel = o.optString("src", "LRC"),
                             isDeleted = o.optBoolean("del", false),
-                            isCustomEdited = o.optBoolean("edt", false)
+                            isCustomEdited = o.optBoolean("edt", false),
+                            isConfirmedPrimary = o.optBoolean("conf", false)
                         )
                     )
                 }

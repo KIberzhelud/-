@@ -2,12 +2,13 @@ package com.example.model
 
 enum class MusicSourceKind(val title: String, val priorityOrder: Int) {
     LOCAL_FLAC("FLAC Локально", 0),
-    ARCHIVE_FLAC("FLAC Каталог", 1),
-    STREAMING_PAID("Стриминг", 2),
-    TELEGRAM_AUDIO("Telegram Аудио", 3),
-    LOCAL_FILE("Файл устройства", 4),
-    ARCHIVE_LOSSY("MP3/OGG Каталог", 5),
-    ITUNES_CATALOG("Каталог", 6)
+    ARCHIVE_FLAC("FLAC Интернет", 1),
+    DISCOGS_CATALOG("Discogs.com", 2),
+    STREAMING_PAID("Стриминг", 3),
+    TELEGRAM_AUDIO("Telegram Аудио", 4),
+    LOCAL_FILE("Файл устройства", 5),
+    ARCHIVE_LOSSY("Интернет Аудио", 6),
+    ITUNES_CATALOG("Каталог", 7)
 }
 
 enum class SourceSelectionMode(val title: String) {
@@ -88,6 +89,13 @@ data class UnifiedMusicSearchResult(
         get() = primaryCandidate?.formatBadge ?: "AUDIO"
 }
 
+data class PreviewPlaybackState(
+    val candidateId: String? = null,
+    val isPreparing: Boolean = false,
+    val isPlaying: Boolean = false,
+    val errorMessage: String? = null
+)
+
 data class SyncedLyricLine(
     val timeMs: Long,
     val text: String
@@ -102,7 +110,8 @@ data class TrackLyricsData(
     val rawLrc: String = "",
     val sourceLabel: String = "LRCLIB",
     val isDeleted: Boolean = false,
-    val isCustomEdited: Boolean = false
+    val isCustomEdited: Boolean = false,
+    val isConfirmedPrimary: Boolean = false
 ) {
     val hasSynced: Boolean get() = syncedLines.isNotEmpty()
     val hasAnyLyrics: Boolean get() = !isDeleted && (syncedLines.isNotEmpty() || plainText.isNotBlank() || rawLrc.isNotBlank())

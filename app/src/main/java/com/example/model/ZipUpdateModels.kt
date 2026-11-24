@@ -47,7 +47,11 @@ data class ZipUpdateInspection(
     val pendingPalettes: List<CustomColorPalette> = emptyList(),
     val pendingQuickLinks: List<HubQuickLink> = emptyList(),
     val pendingLyrics: List<TrackLyricsData> = emptyList(),
-    val extractedWallpaperPath: String? = null
+    val extractedWallpaperPath: String? = null,
+    val signatureMatchesInstalled: Boolean? = null,
+    val installedSignatureSha256: String? = null,
+    val targetSignatureSha256: String? = null,
+    val canRequestInstalls: Boolean = true
 ) {
     val canInstallApks: Boolean
         get() = extractedApkPaths.isNotEmpty()

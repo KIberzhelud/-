@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
@@ -58,6 +59,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaControlRepository
+import com.example.data.MusicCatalogAndLyricsRepository
 import com.example.model.AudioCaptureState
 import com.example.model.LocalAudioTrack
 import com.example.model.MediaPlayerState
@@ -93,7 +95,12 @@ fun PowerampFilesLibraryTab(
     onOpenLyricsForTrack: (LocalAudioTrack) -> Unit,
     onAttachTrackToAlbum: (String, List<String>) -> Unit,
     onToggleCaptureAutoSplit: () -> Unit,
-    onToggleCaptureSilentMute: () -> Unit
+    onToggleCaptureSilentMute: () -> Unit,
+    trackCoverOverrides: Map<String, String> = emptyMap(),
+    onPickTrackCover: (LocalAudioTrack) -> Unit = {},
+    onClearTrackCover: (LocalAudioTrack) -> Unit = {},
+    onEditTrackMetadata: (LocalAudioTrack) -> Unit = {},
+    onLongClickTrack: ((LocalAudioTrack) -> Unit)? = null
 ) {
     val theme = LocalVistaTheme.current
     var filter by remember { mutableStateOf(LibrarySourceFilter.ALL) }
@@ -101,6 +108,7 @@ fun PowerampFilesLibraryTab(
     var renameTarget by remember { mutableStateOf<LocalAudioTrack?>(null) }
     var deleteTarget by remember { mutableStateOf<LocalAudioTrack?>(null) }
     var attachTarget by remember { mutableStateOf<LocalAudioTrack?>(null) }
+    var contextTarget by remember { mutableStateOf<LocalAudioTrack?>(null) }
 
     val active = mediaState.activeSession
 
@@ -281,8 +289,16 @@ fun PowerampFilesLibraryTab(
                 contentPadding = PaddingValues(bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                itemsIndexed(filteredTracks, key = { _, t -> "lib_${t.id}" }) { idx, track ->
+                itemsIndexed(filteredTracks, key = { idx, t -> "lib_${idx}_${t.id}" }) { idx, track ->
                     val isPlayingThis = track.id == mediaState.currentLocalTrackId
+                    val hasCustomCover = remember(trackCoverOverrides, track.id, track.title, track.artist) {
+                        MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                            overrides = trackCoverOverrides,
+                            trackId = track.id,
+                            title = track.title,
+                            artist = track.artist
+                        ) != null
+                    }
                     val folderHint = track.displayPath.ifBlank {
                         track.filePath?.substringBeforeLast('/')?.substringAfterLast('/').orEmpty()
                     }
@@ -301,7 +317,50 @@ fun PowerampFilesLibraryTab(
                         isActive = isPlayingThis,
                         isPlaying = isPlayingThis && active?.isPlaying == true,
                         onClick = { onPlayTrack(track) },
+                        onLongClick = {
+                            if (onLongClickTrack != null) onLongClickTrack(track)
+                            else contextTarget = track
+                        },
                         trailingSlot = {
+                            Box(
+                                modifier = Modifier
+                                    .vistaAeroButton()
+                                    .clickable { onEditTrackMetadata(track) }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .testTag("track_edit_meta_btn_${track.id}")
+                            ) {
+                                Icon(Icons.Rounded.Edit, contentDescription = "Теги и обложка файла", tint = theme.accent, modifier = Modifier.size(14.dp))
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .vistaAeroButton(isActive = hasCustomCover)
+                                    .clickable { onPickTrackCover(track) }
+                                    .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    .testTag("track_cover_btn_${track.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Image,
+                                    contentDescription = "Своя обложка",
+                                    tint = if (hasCustomCover) CallIncomingGreen else theme.accent,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            if (hasCustomCover) {
+                                Box(
+                                    modifier = Modifier
+                                        .vistaAeroButton()
+                                        .clickable { onClearTrackCover(track) }
+                                        .padding(horizontal = 5.dp, vertical = 5.dp)
+                                        .testTag("track_clear_cover_btn_${track.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Сбросить обложку",
+                                        tint = MusicSourceAmber,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
                             Box(
                                 modifier = Modifier
                                     .vistaAeroButton()
@@ -461,10 +520,12 @@ fun PowerampFilesLibraryTab(
                     VistaButton(text = "✕", onClick = { attachTarget = null })
                 }
                 LazyColumn(
-                    modifier = Modifier.padding(10.dp),
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .padding(10.dp),
                     verticalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    itemsIndexed(smartAlbums, key = { _, alb -> alb.id }) { idx, alb ->
+                    itemsIndexed(smartAlbums, key = { idx, alb -> "alb_att_${idx}_${alb.id}" }) { idx, alb ->
                         RetroGlossyTrackRow(
                             index = idx,
                             title = alb.title,
@@ -479,6 +540,20 @@ fun PowerampFilesLibraryTab(
                 }
             }
         }
+    }
+
+    contextTarget?.let { target ->
+        TrackContextMenuDialog(
+            track = target,
+            albumContext = null,
+            smartAlbums = smartAlbums,
+            onDismiss = { contextTarget = null },
+            onPlay = { onPlayTrack(target) },
+            onOpenLyrics = { onOpenLyricsForTrack(target) },
+            onEditMetadata = { onEditTrackMetadata(target) },
+            onAttachToAlbum = { albId -> onAttachTrackToAlbum(albId, listOf(target.id)) },
+            onDeleteTrack = { onDeleteTrack(target) }
+        )
     }
 }
 

@@ -115,6 +115,8 @@ fun PortraitMusicHeaderBar(
     onOpenFullPlayer: () -> Unit = {},
     onDeleteWorkspace: () -> Unit = {},
     livePositionFlow: StateFlow<Long>? = null,
+    activeTrackCustomCoverPath: String? = null,
+    defaultFallbackCoverPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -169,7 +171,9 @@ fun PortraitMusicHeaderBar(
                     artwork = active?.artwork,
                     size = 26.dp,
                     coverStyle = coverStyle,
-                    isPlaying = active?.isPlaying == true
+                    isPlaying = active?.isPlaying == true,
+                    customCoverPath = activeTrackCustomCoverPath,
+                    fallbackCoverPath = defaultFallbackCoverPath
                 )
                 Text(
                     text = active?.let {
@@ -285,6 +289,8 @@ fun PortraitMusicHeaderBar(
                     size = 42.dp,
                     coverStyle = coverStyle,
                     isPlaying = active?.isPlaying == true,
+                    customCoverPath = activeTrackCustomCoverPath,
+                    fallbackCoverPath = defaultFallbackCoverPath,
                     modifier = Modifier.pointerInput(isDrawerOpen) {
                         var dragX = 0f
                         var dragY = 0f
@@ -604,6 +610,8 @@ fun LandscapeSymbianSidebar(
     onLaunchCamera: () -> Unit,
     onOpenWriter: () -> Unit,
     livePositionFlow: StateFlow<Long>? = null,
+    activeTrackCustomCoverPath: String? = null,
+    defaultFallbackCoverPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
@@ -691,7 +699,9 @@ fun LandscapeSymbianSidebar(
                     artwork = active?.artwork,
                     size = coverSize,
                     coverStyle = coverStyle,
-                    isPlaying = active?.isPlaying == true
+                    isPlaying = active?.isPlaying == true,
+                    customCoverPath = activeTrackCustomCoverPath,
+                    fallbackCoverPath = defaultFallbackCoverPath
                 )
             }
 
@@ -1061,9 +1071,13 @@ fun AlbumArtThumb(
     size: Dp,
     coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
     isPlaying: Boolean = false,
+    customCoverPath: String? = null,
+    fallbackCoverPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
+    val resolvedCustom = customCoverPath?.takeIf { it.isNotBlank() }
+    val resolvedFallback = fallbackCoverPath?.takeIf { it.isNotBlank() }
     if (coverStyle == PlayerCoverStyle.DISC) {
         val infiniteTransition = rememberInfiniteTransition(label = "disc_spin")
         val angle by infiniteTransition.animateFloat(
@@ -1088,23 +1102,71 @@ fun AlbumArtThumb(
                 .border(1.5.dp, theme.chromeInnerGlow.copy(alpha = 0.8f), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            if (artwork != null) {
-                Image(
-                    bitmap = artwork,
-                    contentDescription = "Диск трека",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(size * 0.84f)
-                        .clip(CircleShape)
-                )
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.ic_symbian_music),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(size * 0.56f)
-                        .clip(CircleShape)
-                )
+            val discMediaModifier = Modifier
+                .size(size * 0.84f)
+                .clip(CircleShape)
+            when {
+                resolvedCustom != null -> {
+                    RichCoverMedia(
+                        mediaPathOrUrl = resolvedCustom,
+                        contentDescription = "Диск трека",
+                        modifier = discMediaModifier,
+                        placeholder = {
+                            if (artwork != null) {
+                                Image(
+                                    bitmap = artwork,
+                                    contentDescription = "Диск трека",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = discMediaModifier
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(R.drawable.ic_symbian_music),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(size * 0.56f)
+                                        .clip(CircleShape)
+                                )
+                            }
+                        }
+                    )
+                }
+
+                artwork != null -> {
+                    Image(
+                        bitmap = artwork,
+                        contentDescription = "Диск трека",
+                        contentScale = ContentScale.Crop,
+                        modifier = discMediaModifier
+                    )
+                }
+
+                resolvedFallback != null -> {
+                    RichCoverMedia(
+                        mediaPathOrUrl = resolvedFallback,
+                        contentDescription = "Заглушка диска",
+                        modifier = discMediaModifier,
+                        placeholder = {
+                            Image(
+                                painter = painterResource(R.drawable.ic_symbian_music),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(size * 0.56f)
+                                    .clip(CircleShape)
+                            )
+                        }
+                    )
+                }
+
+                else -> {
+                    Image(
+                        painter = painterResource(R.drawable.ic_symbian_music),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(size * 0.56f)
+                            .clip(CircleShape)
+                    )
+                }
             }
             Canvas(modifier = Modifier.matchParentSize()) {
                 drawCircle(
@@ -1132,19 +1194,62 @@ fun AlbumArtThumb(
                 .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.65f), RoundedCornerShape(3.dp)),
             contentAlignment = Alignment.Center
         ) {
-            if (artwork != null) {
-                Image(
-                    bitmap = artwork,
-                    contentDescription = "Обложка трека",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
-                )
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.ic_symbian_music),
-                    contentDescription = null,
-                    modifier = Modifier.size(size * 0.58f)
-                )
+            when {
+                resolvedCustom != null -> {
+                    RichCoverMedia(
+                        mediaPathOrUrl = resolvedCustom,
+                        contentDescription = "Обложка трека",
+                        modifier = Modifier.matchParentSize(),
+                        placeholder = {
+                            if (artwork != null) {
+                                Image(
+                                    bitmap = artwork,
+                                    contentDescription = "Обложка трека",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.matchParentSize()
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(R.drawable.ic_symbian_music),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(size * 0.58f)
+                                )
+                            }
+                        }
+                    )
+                }
+
+                artwork != null -> {
+                    Image(
+                        bitmap = artwork,
+                        contentDescription = "Обложка трека",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                }
+
+                resolvedFallback != null -> {
+                    RichCoverMedia(
+                        mediaPathOrUrl = resolvedFallback,
+                        contentDescription = "Заглушка обложки",
+                        modifier = Modifier.matchParentSize(),
+                        placeholder = {
+                            Image(
+                                painter = painterResource(R.drawable.ic_symbian_music),
+                                contentDescription = null,
+                                modifier = Modifier.size(size * 0.58f)
+                            )
+                        }
+                    )
+                }
+
+                else -> {
+                    Image(
+                        painter = painterResource(R.drawable.ic_symbian_music),
+                        contentDescription = null,
+                        modifier = Modifier.size(size * 0.58f)
+                    )
+                }
             }
         }
     }

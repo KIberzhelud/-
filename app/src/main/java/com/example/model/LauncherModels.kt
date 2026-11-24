@@ -71,7 +71,8 @@ enum class SearchCategoryGroup {
 
 enum class MusicDrawerTab(val title: String) {
     STREAMING("Стриминг и ТГ"),
-    LOCAL("Файлы")
+    LOCAL("Файлы"),
+    ALBUMS("Альбомы")
 }
 
 data class RecentAppFrame(

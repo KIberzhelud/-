@@ -113,6 +113,9 @@ fun AppearanceSettingsDialog(
     onSelectCoverStyle: (PlayerCoverStyle) -> Unit = {},
     onToggleWeatherInHubOther: () -> Unit = {},
     onToggleWeatherInHomeTile: () -> Unit = {},
+    defaultFallbackCoverPath: String? = null,
+    onPickFallbackCover: () -> Unit = {},
+    onClearFallbackCover: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val theme = LocalVistaTheme.current
@@ -548,6 +551,67 @@ fun AppearanceSettingsDialog(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
+                        }
+                    }
+                    HorizontalDivider(color = theme.divider, modifier = Modifier.padding(vertical = 2.dp))
+                    Text(
+                        text = "ЗАГЛУШКА ПУСТОЙ ОБЛОЖКИ / ДИСКА (GIF / MP4 / ФОТО)",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = theme.accent
+                    )
+                    Text(
+                        text = "Показывается вместо стандартной иконки ноты, когда у трека нет собственной обложки.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                    if (!defaultFallbackCoverPath.isNullOrBlank()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .border(1.dp, theme.chromeInnerGlow, RoundedCornerShape(4.dp))
+                            ) {
+                                RichCoverMedia(
+                                    mediaPathOrUrl = defaultFallbackCoverPath,
+                                    contentDescription = "Текущая заглушка обложки",
+                                    modifier = Modifier.matchParentSize()
+                                )
+                            }
+                            Text(
+                                text = defaultFallbackCoverPath.substringAfterLast('/'),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CallIncomingGreen,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        VistaButton(
+                            text = if (defaultFallbackCoverPath.isNullOrBlank()) "Выбрать GIF / MP4 / Фото" else "Сменить заглушку",
+                            isPrimary = true,
+                            onClick = onPickFallbackCover,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("pick_fallback_cover_btn")
+                        )
+                        if (!defaultFallbackCoverPath.isNullOrBlank()) {
+                            VistaButton(
+                                text = "Сбросить",
+                                onClick = onClearFallbackCover,
+                                modifier = Modifier
+                                    .weight(0.6f)
+                                    .testTag("clear_fallback_cover_btn")
+                            )
                         }
                     }
                 }

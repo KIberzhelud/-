@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Share
@@ -593,7 +594,8 @@ fun FileContextDialog(
     onShare: () -> Unit,
     onOpenFolder: () -> Unit,
     onCopyPath: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onEditAudioMetadata: (() -> Unit)? = null
 ) {
     val sizeText = UniversalSearchRepository.formatSize(file.sizeBytes)
     val metaLine = buildString {
@@ -690,6 +692,22 @@ fun FileContextDialog(
                     onClick = onShare,
                     modifier = Modifier.testTag("context_file_share")
                 )
+                if (onEditAudioMetadata != null) {
+                    val audioExts = setOf("mp3", "flac", "m4a", "ogg", "opus", "wav", "aac")
+                    val ext = file.name.substringAfterLast('.', "").lowercase()
+                    if (ext in audioExts || file.mimeType.startsWith("audio/", ignoreCase = true)) {
+                        ContextActionRow(
+                            icon = Icons.Rounded.MusicNote,
+                            label = "Свойства и теги аудио (автор, альбом, обложка)",
+                            tint = CallIncomingGreen,
+                            onClick = {
+                                onDismiss()
+                                onEditAudioMetadata()
+                            },
+                            modifier = Modifier.testTag("context_file_edit_audio_metadata")
+                        )
+                    }
+                }
                 ContextActionRow(
                     icon = Icons.Rounded.FolderOpen,
                     label = "Перейти по пути (папка)",

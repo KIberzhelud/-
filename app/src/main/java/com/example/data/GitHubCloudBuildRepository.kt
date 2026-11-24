@@ -76,7 +76,17 @@ class GitHubCloudBuildRepository(private val context: Context) {
                 remoteTreeMap[path] != localShas[path]
             }
 
-            val uploadedShas = HashMap<String, String>(files.size)
+            val uploadedShas = HashMap<String, String>(files.size + 4)
+            listOf(
+                "debug.keystore",
+                "debug.keystore.base64",
+                "app/debug.keystore",
+                "app/debug.keystore.base64"
+            ).forEach { keystorePath ->
+                if (!files.containsKey(keystorePath)) {
+                    remoteTreeMap[keystorePath]?.let { uploadedShas[keystorePath] = it }
+                }
+            }
             files.forEach { (path, _) ->
                 val remote = remoteTreeMap[path]
                 if (remote != null && remote == localShas[path]) {

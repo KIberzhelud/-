@@ -119,7 +119,6 @@ import com.example.ui.theme.vistaInsetBox
 import com.example.ui.theme.vistaWindowFrame
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -179,6 +178,8 @@ class LockScreenActivity : ComponentActivity() {
             val playerCoverStyle by prefsRepo.playerCoverStyle.collectAsStateWithLifecycle(initialValue = PlayerCoverStyle.COVER)
             val showWeatherInHubOther by prefsRepo.showWeatherInHubOther.collectAsStateWithLifecycle(initialValue = true)
             val showWeatherInHomeTile by prefsRepo.showWeatherInHomeTile.collectAsStateWithLifecycle(initialValue = false)
+            val trackCoverOverrides by prefsRepo.trackCoverOverrides.collectAsStateWithLifecycle(initialValue = emptyMap())
+            val defaultTrackFallbackCoverPath by prefsRepo.defaultTrackFallbackCoverPath.collectAsStateWithLifecycle(initialValue = null)
             val selectedCity by prefsRepo.selectedWeatherCity.collectAsStateWithLifecycle(
                 initialValue = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY
             )
@@ -194,12 +195,25 @@ class LockScreenActivity : ComponentActivity() {
             val activeTrackTitle = mediaState.activeSession?.title.orEmpty()
             val activeTrackArtist = mediaState.activeSession?.artist.orEmpty()
             val activeDuration = mediaState.activeSession?.durationMs ?: 0L
+            val activeTrackCustomCoverPath = remember(
+                trackCoverOverrides,
+                mediaState.currentLocalTrackId,
+                activeTrackTitle,
+                activeTrackArtist
+            ) {
+                MusicCatalogAndLyricsRepository.resolveTrackCoverPath(
+                    overrides = trackCoverOverrides,
+                    trackId = mediaState.currentLocalTrackId,
+                    title = activeTrackTitle,
+                    artist = activeTrackArtist
+                )
+            }
             LaunchedEffect(activeTrackTitle, activeTrackArtist) {
                 if (activeTrackTitle.isBlank() || activeTrackTitle == mediaState.activeSession?.appLabel) {
                     currentLyrics = null
                 } else {
                     val key = MusicCatalogAndLyricsRepository.buildTrackKey(activeTrackTitle, activeTrackArtist)
-                    val overrides = runCatching { prefsRepo.lyricsOverrides.first() }.getOrDefault(emptyMap())
+                    val overrides = runCatching { prefsRepo.getLyricsOverridesNow() }.getOrDefault(emptyMap())
                     val saved = overrides[key]
                     currentLyrics = if (saved != null) {
                         if (saved.isDeleted) null else saved
@@ -288,6 +302,8 @@ class LockScreenActivity : ComponentActivity() {
                         shizukuState = shizukuState,
                         wallpaperBitmap = wallpaperState.first,
                         coverStyle = playerCoverStyle,
+                        activeTrackCustomCoverPath = activeTrackCustomCoverPath,
+                        defaultFallbackCoverPath = defaultTrackFallbackCoverPath,
                         weatherReport = weatherReport,
                         selectedWeatherCity = selectedCity,
                         isWeatherLoading = isWeatherLoading,
@@ -449,6 +465,8 @@ internal fun SymbianLockScreen(
     @Suppress("UNUSED_PARAMETER") shizukuState: ShizukuState = ShizukuState(),
     wallpaperBitmap: ImageBitmap? = null,
     coverStyle: PlayerCoverStyle = PlayerCoverStyle.COVER,
+    activeTrackCustomCoverPath: String? = null,
+    defaultFallbackCoverPath: String? = null,
     weatherReport: ConsensusWeatherReport? = null,
     selectedWeatherCity: WeatherCityResult = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY,
     isWeatherLoading: Boolean = false,
@@ -586,6 +604,8 @@ internal fun SymbianLockScreen(
                                 repeatModeLabel = repeatModeLabel,
                                 playbackSpeed = playbackSpeed,
                                 coverStyle = coverStyle,
+                                activeTrackCustomCoverPath = activeTrackCustomCoverPath,
+                                defaultFallbackCoverPath = defaultFallbackCoverPath,
                                 lang = lang,
                                 onTogglePlayPause = onTogglePlayPause,
                                 onSkipPrevious = onSkipPrevious,
@@ -676,6 +696,8 @@ internal fun SymbianLockScreen(
                         repeatModeLabel = repeatModeLabel,
                         playbackSpeed = playbackSpeed,
                         coverStyle = coverStyle,
+                        activeTrackCustomCoverPath = activeTrackCustomCoverPath,
+                        defaultFallbackCoverPath = defaultFallbackCoverPath,
                         lang = lang,
                         onTogglePlayPause = onTogglePlayPause,
                         onSkipPrevious = onSkipPrevious,
@@ -768,6 +790,8 @@ private fun LockMusicTile(
     repeatModeLabel: String,
     playbackSpeed: Float,
     coverStyle: PlayerCoverStyle,
+    activeTrackCustomCoverPath: String? = null,
+    defaultFallbackCoverPath: String? = null,
     lang: AppLanguage,
     onTogglePlayPause: () -> Unit,
     onSkipPrevious: () -> Unit,
@@ -812,7 +836,9 @@ private fun LockMusicTile(
                     artwork = active?.artwork,
                     size = 44.dp,
                     coverStyle = coverStyle,
-                    isPlaying = active?.isPlaying == true
+                    isPlaying = active?.isPlaying == true,
+                    customCoverPath = activeTrackCustomCoverPath,
+                    fallbackCoverPath = defaultFallbackCoverPath
                 )
             }
             Spacer(Modifier.width(9.dp))

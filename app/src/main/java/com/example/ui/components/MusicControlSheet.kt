@@ -7,16 +7,20 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -25,6 +29,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -33,12 +40,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -52,6 +63,8 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -64,6 +77,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,6 +100,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.KeyboardSearchMatcher
 import com.example.data.MediaControlRepository
+import com.example.model.AlbumExpectedTrack
 import com.example.model.AppEntry
 import com.example.model.HubNotificationItem
 import com.example.model.LocalAudioTrack
@@ -93,10 +108,12 @@ import com.example.model.MediaBrowserTrack
 import com.example.model.MediaPlayerState
 import com.example.model.MediaQueueTrack
 import com.example.model.MusicDrawerTab
+import com.example.model.SmartAlbum
 import com.example.ui.L10n
 import com.example.ui.LocalAppLang
 import androidx.compose.ui.text.font.FontFamily
 import com.example.ui.theme.CallIncomingGreen
+import com.example.ui.theme.CallMissedRed
 import com.example.ui.theme.LocalVistaTheme
 import com.example.ui.theme.MusicSourceAmber
 import com.example.ui.theme.TextMuted
@@ -175,13 +192,33 @@ fun InlineMusicControlDrawer(
     onOpenNotificationAccess: () -> Unit,
     onLaunchMusicApp: (AppEntry) -> Unit,
     onOpenFullPoweramp: () -> Unit = {},
+    smartAlbums: List<SmartAlbum> = emptyList(),
+    selectedAlbumId: String? = null,
+    defaultFallbackCoverPath: String? = null,
+    onSelectAlbum: (String?) -> Unit = {},
+    onCreateAlbum: (String, String) -> Unit = { _, _ -> },
+    onRefreshAlbumOnline: (String) -> Unit = {},
+    onDownloadMissingAlbumTrack: (SmartAlbum, AlbumExpectedTrack) -> Unit = { _, _ -> },
+    onOpenFullAlbumsTab: () -> Unit = {},
+    onEditTrackMetadata: (LocalAudioTrack) -> Unit = {},
+    onOpenLyricsForTrack: (LocalAudioTrack) -> Unit = {},
+    onAttachLocalTracksToAlbum: (String, List<String>) -> Unit = { _, _ -> },
+    onDetachTrackFromAlbum: (String, String) -> Unit = { _, _ -> },
+    onLongClickTrack: ((LocalAudioTrack, SmartAlbum?) -> Unit)? = null,
     livePositionFlow: StateFlow<Long>? = null,
     modifier: Modifier = Modifier
 ) {
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
     val active = mediaState.activeSession
-    var pendingDeleteTrack by remember { mutableStateOf<LocalAudioTrack?>(null) }
+    var contextMenuTrackPair by remember { mutableStateOf<Pair<LocalAudioTrack, SmartAlbum?>?>(null) }
+    val handleTrackLongClick: (LocalAudioTrack, SmartAlbum?) -> Unit = { tr, alb ->
+        if (onLongClickTrack != null) {
+            onLongClickTrack(tr, alb)
+        } else {
+            contextMenuTrackPair = tr to alb
+        }
+    }
     val isActiveStreaming = active != null &&
         active.id != MediaControlRepository.LOCAL_SESSION_ID &&
         MediaControlRepository.isStreamingPackage(active.packageName)
@@ -189,11 +226,7 @@ fun InlineMusicControlDrawer(
     val drawerBody: @Composable (Modifier) -> Unit = { contentModifier ->
         Column(
             modifier = contentModifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
+                .pointerInput(Unit) { detectTapGestures { } }
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             // 1. Pinned Compact Top Header: Source + Open + YT Audio + Close (reverse-swipe closes drawer)
@@ -615,7 +648,7 @@ fun InlineMusicControlDrawer(
 
             Spacer(Modifier.height(5.dp))
 
-            // 3. Strictly 2 Tabs: "Стриминг и ТГ" | "Файлы"
+            // 3. 3 Tabs: "Стриминг и ТГ" | "Файлы" | "Альбомы"
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -635,6 +668,14 @@ fun InlineMusicControlDrawer(
                     modifier = Modifier
                         .weight(1f)
                         .testTag("music_tab_local")
+                )
+                MusicDrawerTabPill(
+                    title = L10n.musicTab(lang, MusicDrawerTab.ALBUMS),
+                    selected = selectedTab == MusicDrawerTab.ALBUMS,
+                    onClick = { onSelectTab(MusicDrawerTab.ALBUMS) },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("music_tab_albums")
                 )
             }
 
@@ -1040,7 +1081,7 @@ fun InlineMusicControlDrawer(
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
                                             onClick = { onPlayLocalTrack(track) },
-                                            onLongClick = { pendingDeleteTrack = track }
+                                            onLongClick = { handleTrackLongClick(track, null) }
                                         )
                                     }
                                 }
@@ -1211,7 +1252,341 @@ fun InlineMusicControlDrawer(
                                             isSelected = isCurrent,
                                             isPlaying = isCurrent && active?.isPlaying == true,
                                             onClick = { onPlayLocalTrack(track) },
-                                            onLongClick = { pendingDeleteTrack = track }
+                                            onLongClick = { handleTrackLongClick(track, null) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    MusicDrawerTab.ALBUMS -> {
+                        val filteredAlbums = remember(smartAlbums, trackSearchQuery) {
+                            val q = trackSearchQuery.trim()
+                            if (q.isBlank()) smartAlbums
+                            else smartAlbums.filter { alb ->
+                                KeyboardSearchMatcher.matches(alb.title, q) ||
+                                    KeyboardSearchMatcher.matches(alb.artist, q) ||
+                                    alb.expectedTracks.any { KeyboardSearchMatcher.matches(it.title, q) }
+                            }
+                        }
+                        val activeAlbum = remember(smartAlbums, selectedAlbumId) {
+                            selectedAlbumId?.let { id -> smartAlbums.firstOrNull { it.id == id } }
+                        }
+
+                        if (activeAlbum == null) {
+                            if (filteredAlbums.isEmpty()) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .vistaInsetBox()
+                                        .padding(12.dp)
+                                        .testTag("drawer_albums_empty"),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Album,
+                                        contentDescription = null,
+                                        tint = theme.accent,
+                                        modifier = Modifier.size(30.dp)
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = if (trackSearchQuery.isBlank()) {
+                                            "Умных альбомов пока нет"
+                                        } else {
+                                            "Альбомы по запросу «$trackSearchQuery» не найдены"
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    VistaButton(
+                                        text = "Открыть менеджер альбомов",
+                                        isPrimary = true,
+                                        onClick = onOpenFullAlbumsTab,
+                                        modifier = Modifier.testTag("drawer_open_full_albums_btn")
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "АЛЬБОМЫ (${filteredAlbums.size})",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = theme.focusBorder,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton()
+                                                .clickable(onClick = onOpenFullAlbumsTab)
+                                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                                                .testTag("drawer_open_full_albums_btn")
+                                        ) {
+                                            Text(
+                                                text = "Создать / Все ↗",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                color = theme.accent,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                    LazyVerticalGrid(
+                                        columns = GridCells.Fixed(2),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth()
+                                            .vistaInsetBox()
+                                            .testTag("drawer_albums_grid"),
+                                        contentPadding = PaddingValues(6.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        gridItems(filteredAlbums, key = { it.id }) { album ->
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .vistaWindowFrame(RoundedCornerShape(4.dp))
+                                                    .clickable { onSelectAlbum(album.id) }
+                                                    .padding(5.dp)
+                                                    .testTag("drawer_album_card_${album.id}"),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .aspectRatio(1f)
+                                                        .vistaInsetBox(shape = RoundedCornerShape(3.dp)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    val resolvedCover = album.customCoverPath?.takeIf { it.isNotBlank() }
+                                                        ?: album.coverUrl?.takeIf { it.isNotBlank() }
+                                                        ?: defaultFallbackCoverPath
+                                                    RichCoverMedia(
+                                                        mediaPathOrUrl = resolvedCover,
+                                                        contentDescription = album.title,
+                                                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp)),
+                                                        placeholder = {
+                                                            Box(
+                                                                modifier = Modifier.fillMaxSize(),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Rounded.Album,
+                                                                    contentDescription = album.title,
+                                                                    tint = theme.accent,
+                                                                    modifier = Modifier.size(34.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    )
+                                                    val badge = if (album.totalExpected > 0) {
+                                                        "${album.matchedCount}/${album.totalExpected}"
+                                                    } else {
+                                                        "${album.attachedLocalTrackIds.size}"
+                                                    }
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .align(Alignment.BottomEnd)
+                                                            .padding(3.dp)
+                                                            .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(2.dp))
+                                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = badge,
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontSize = 9.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                fontFamily = FontFamily.Monospace
+                                                            ),
+                                                            color = if (album.missingCount == 0 && album.matchedCount > 0) CallIncomingGreen else MusicSourceAmber
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = album.title,
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                                    color = TextPrimary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (album.artist.isNotBlank()) {
+                                                    Text(
+                                                        text = album.artist,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                                        color = TextSecondary,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            var drawerHideMissing by rememberSaveable(activeAlbum.id) { mutableStateOf(false) }
+                            val localById = remember(localTracks) { localTracks.associateBy { it.id } }
+                            val slotsToShow = remember(activeAlbum.expectedTracks, drawerHideMissing) {
+                                if (drawerHideMissing) activeAlbum.expectedTracks.filter { it.isMatched }
+                                else activeAlbum.expectedTracks
+                            }
+
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .vistaInsetBox()
+                                    .padding(5.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable { onSelectAlbum(null) }
+                                            .padding(horizontal = 6.dp, vertical = 5.dp)
+                                            .testTag("drawer_album_back_btn")
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Назад", tint = TextPrimary, modifier = Modifier.size(14.dp))
+                                    }
+                                    SmartAlbumCoverBox(
+                                        customPath = activeAlbum.customCoverPath,
+                                        coverUrl = activeAlbum.coverUrl,
+                                        fallbackCoverPath = defaultFallbackCoverPath,
+                                        size = 34.dp
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = activeAlbum.title,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = if (activeAlbum.totalExpected > 0) {
+                                                "${activeAlbum.matchedCount}/${activeAlbum.totalExpected} • -${activeAlbum.missingCount}"
+                                            } else {
+                                                "Треков: ${activeAlbum.attachedLocalTrackIds.size}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                            color = if (activeAlbum.missingCount == 0 && activeAlbum.matchedCount > 0) CallIncomingGreen else MusicSourceAmber,
+                                            maxLines = 1
+                                        )
+                                    }
+                                    if (activeAlbum.missingCount > 0) {
+                                        Box(
+                                            modifier = Modifier
+                                                .vistaAeroButton(isPrimary = drawerHideMissing, isActive = drawerHideMissing)
+                                                .clickable { drawerHideMissing = !drawerHideMissing }
+                                                .padding(horizontal = 6.dp, vertical = 5.dp)
+                                                .testTag("drawer_album_toggle_missing_btn")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (drawerHideMissing) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+                                                contentDescription = "Скрыть/показать недостающие",
+                                                tint = if (drawerHideMissing) Color.White else MusicSourceAmber,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton()
+                                            .clickable { onRefreshAlbumOnline(activeAlbum.id) }
+                                            .padding(horizontal = 6.dp, vertical = 5.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Refresh, contentDescription = "Сверить", tint = theme.accent, modifier = Modifier.size(14.dp))
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .vistaAeroButton(isPrimary = true)
+                                            .clickable(onClick = onOpenFullAlbumsTab)
+                                            .padding(horizontal = 7.dp, vertical = 5.dp)
+                                    ) {
+                                        Text("Все ↗", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold), color = Color.White)
+                                    }
+                                }
+
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    itemsIndexed(slotsToShow, key = { idx, slot -> "dr_exp_${slot.trackNumber}_${slot.title}_$idx" }) { idx, slot ->
+                                        val matched = slot.matchedLocalTrackId?.let { localById[it] }
+                                        RetroGlossyTrackRow(
+                                            index = idx,
+                                            title = "${slot.trackNumber}. ${slot.title}",
+                                            subtitle = if (matched != null) {
+                                                matched.artist.ifBlank { activeAlbum.artist }
+                                            } else {
+                                                "Недостаёт • нажмите для загрузки"
+                                            },
+                                            badgeText = matched?.formatLabel ?: "НЕТ",
+                                            badgeLossless = matched?.isLossless == true,
+                                            isActive = matched != null,
+                                            statusBarColor = if (matched != null) CallIncomingGreen else MusicSourceAmber,
+                                            onClick = {
+                                                if (matched != null) onPlayLocalTrack(matched)
+                                                else onDownloadMissingAlbumTrack(activeAlbum, slot)
+                                            },
+                                            onLongClick = {
+                                                if (matched != null) {
+                                                    handleTrackLongClick(matched, activeAlbum)
+                                                } else {
+                                                    onDownloadMissingAlbumTrack(activeAlbum, slot)
+                                                }
+                                            },
+                                            trailingSlot = {
+                                                if (matched != null) {
+                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Играть", tint = CallIncomingGreen, modifier = Modifier.size(16.dp))
+                                                } else {
+                                                    Icon(Icons.Rounded.Download, contentDescription = "Скачать", tint = MusicSourceAmber, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        )
+                                    }
+                                    val matchedIds = activeAlbum.expectedTracks.mapNotNull { it.matchedLocalTrackId }.toSet()
+                                    val extraTracks = activeAlbum.attachedLocalTrackIds
+                                        .filterNot { matchedIds.contains(it) }
+                                        .mapNotNull { localById[it] }
+                                        .distinctBy { it.filePath?.lowercase() ?: it.id }
+                                    itemsIndexed(extraTracks, key = { idx, tr -> "dr_extra_${idx}_${tr.id}" }) { idx, tr ->
+                                        RetroGlossyTrackRow(
+                                            index = idx,
+                                            title = tr.title,
+                                            subtitle = tr.artist.ifBlank { activeAlbum.title },
+                                            badgeText = tr.formatLabel.ifBlank { "AUDIO" },
+                                            badgeLossless = tr.isLossless,
+                                            isActive = true,
+                                            statusBarColor = theme.accent,
+                                            onClick = { onPlayLocalTrack(tr) },
+                                            onLongClick = { handleTrackLongClick(tr, activeAlbum) },
+                                            trailingSlot = {
+                                                Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = theme.accent, modifier = Modifier.size(15.dp))
+                                            }
                                         )
                                     }
                                 }
@@ -1274,11 +1649,7 @@ fun InlineMusicControlDrawer(
                 .widthIn(min = 285.dp, max = 345.dp)
                 .fillMaxHeight()
                 .vistaWindowFrame(RoundedCornerShape(topEnd = 6.dp, bottomEnd = 6.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
+                .pointerInput(Unit) { detectTapGestures { } }
                 .testTag("inline_music_drawer")
         ) {
             drawerBody(
@@ -1325,24 +1696,23 @@ fun InlineMusicControlDrawer(
             }
         }
     } else {
-        Column(
-            modifier = modifier
-                .fillMaxWidth()
-                .vistaWindowFrame(RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {}
-                )
-                .testTag("inline_music_drawer")
+        BoxWithConstraints(
+            modifier = modifier.fillMaxWidth()
         ) {
-            val maxPortraitDrawerH = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.72f)
-                .coerceIn(260.dp, 470.dp)
-            drawerBody(
-                Modifier
+            val containerH = if (constraints.hasBoundedHeight) maxHeight else 640.dp
+            val maxPortraitDrawerH = (containerH * 0.78f).coerceIn(300.dp, 520.dp)
+            Column(
+                modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 240.dp, max = maxPortraitDrawerH)
-            )
+                    .vistaWindowFrame(RoundedCornerShape(bottomStart = 6.dp, bottomEnd = 6.dp))
+                    .pointerInput(Unit) { detectTapGestures { } }
+                    .testTag("inline_music_drawer")
+            ) {
+                drawerBody(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(maxPortraitDrawerH)
+                )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1388,54 +1758,33 @@ fun InlineMusicControlDrawer(
                     color = theme.chromeInnerGlow
                 )
             }
+            }
         }
     }
 
-    pendingDeleteTrack?.let { trackToDelete ->
-        Dialog(
-            onDismissRequest = { pendingDeleteTrack = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth(0.88f)
-                    .widthIn(max = 380.dp)
-                    .vistaWindowFrame(RoundedCornerShape(6.dp))
-                    .padding(14.dp)
-            ) {
-                Text(
-                    text = "Удалить аудиофайл?",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = TextPrimary
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = trackToDelete.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    VistaButton(text = "Отмена", onClick = { pendingDeleteTrack = null })
-                    Spacer(Modifier.width(8.dp))
-                    VistaButton(
-                        text = "Удалить",
-                        isPrimary = true,
-                        onClick = {
-                            onDeleteLocalTrack(trackToDelete)
-                            pendingDeleteTrack = null
-                        },
-                        modifier = Modifier.testTag("confirm_delete_audio_btn")
-                    )
-                }
+    contextMenuTrackPair?.let { (track, alb) ->
+        TrackContextMenuDialog(
+            track = track,
+            albumContext = alb,
+            smartAlbums = smartAlbums,
+            onDismiss = { contextMenuTrackPair = null },
+            onPlay = { onPlayLocalTrack(track) },
+            onOpenLyrics = {
+                onOpenLyricsForTrack(track)
+            },
+            onEditMetadata = {
+                onEditTrackMetadata(track)
+            },
+            onAttachToAlbum = { targetAlbId ->
+                onAttachLocalTracksToAlbum(targetAlbId, listOf(track.id))
+            },
+            onDetachFromAlbum = { targetAlbId ->
+                onDetachTrackFromAlbum(targetAlbId, track.id)
+            },
+            onDeleteTrack = {
+                onDeleteLocalTrack(track)
             }
-        }
+        )
     }
 }
 

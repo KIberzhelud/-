@@ -43,6 +43,7 @@ object L10n {
         AppLanguage.EN -> when (t) {
             MusicDrawerTab.STREAMING -> "Streaming & TG"
             MusicDrawerTab.LOCAL -> "Files"
+            MusicDrawerTab.ALBUMS -> "Albums"
         }
     }
 
@@ -96,6 +97,7 @@ object L10n {
     fun filesFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Файлы ($count)" else "Files ($count)"
     fun linuxFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Пакеты Linux ($count)" else "Linux Packages ($count)"
     fun musicFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Музыка и стриминги ($count)" else "Music & Streaming ($count)"
+    fun albumsFolder(lang: AppLanguage, count: Int) = if (lang == AppLanguage.RU) "Альбомы ($count)" else "Albums ($count)"
     fun internetFolder(lang: AppLanguage) = if (lang == AppLanguage.RU) "Интернет" else "Web"
     fun workspaceLabel(lang: AppLanguage, x: Int, y: Int) = if (lang == AppLanguage.RU) {
         "Стол ($x, $y)"
