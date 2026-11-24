@@ -103,7 +103,7 @@ class KeyDeckAccessibilityService : AccessibilityService() {
     private var edgeGestureViewRight: View? = null
 
     private var workspaceBarView: View? = null
-    private var workspaceBarCollapsed = false
+    private var workspaceBarCollapsed = true
     private var currentWorkspaceLabel: String = "Рабочий стол"
     private var workspaceBarTickRunnable: Runnable? = null
 
@@ -260,11 +260,24 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                 }
+                collapsedRow.addView(createShadePillButton("◀", Color.rgb(38, 52, 72)) {
+                    sendWorkspaceAction(WS_ACTION_PREV)
+                })
+                collapsedRow.addView(spaceView(dp(3)))
                 collapsedRow.addView(createShadePillButton("▼ $currentWorkspaceLabel", Color.rgb(36, 98, 168)) {
                     workspaceBarCollapsed = false
                     showOrUpdateWorkspaceBar(currentWorkspaceLabel)
                 })
-                collapsedRow.addView(spaceView(dp(4)))
+                collapsedRow.addView(spaceView(dp(3)))
+                collapsedRow.addView(createShadePillButton("🏠", Color.rgb(36, 102, 174)) {
+                    dismissWorkspaceBar()
+                    sendWorkspaceAction(WS_ACTION_HOME)
+                })
+                collapsedRow.addView(spaceView(dp(3)))
+                collapsedRow.addView(createShadePillButton("▶", Color.rgb(38, 52, 72)) {
+                    sendWorkspaceAction(WS_ACTION_NEXT)
+                })
+                collapsedRow.addView(spaceView(dp(3)))
                 collapsedRow.addView(createShadePillButton("✕", Color.rgb(88, 38, 44)) {
                     dismissWorkspaceBar()
                 })
@@ -392,6 +405,35 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                 }
                 workspaceBarTickRunnable = ticker
                 mainHandler.postDelayed(ticker, 1000L)
+            }
+
+            var barDownX = 0f
+            var barDownY = 0f
+            var barSwipeTriggered = false
+            barContainer.setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        barDownX = ev.rawX
+                        barDownY = ev.rawY
+                        barSwipeTriggered = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                        if (!barSwipeTriggered) {
+                            val dx = ev.rawX - barDownX
+                            val dy = barDownY - ev.rawY
+                            if (abs(dx) > 28f * density && abs(dx) > abs(dy) * 1.15f) {
+                                barSwipeTriggered = true
+                                sendWorkspaceAction(if (dx < 0f) WS_ACTION_NEXT else WS_ACTION_PREV)
+                            } else if (dy > 24f * density && dy > abs(dx) * 1.2f) {
+                                barSwipeTriggered = true
+                                dismissWorkspaceBar()
+                            }
+                        }
+                        true
+                    }
+                    else -> false
+                }
             }
 
             val widthPx = if (workspaceBarCollapsed) {
@@ -587,6 +629,7 @@ class KeyDeckAccessibilityService : AccessibilityService() {
             val bottomView = View(this).apply {
                 setBackgroundColor(Color.TRANSPARENT)
                 alpha = 0f
+                var downX = 0f
                 var downY = 0f
                 var latestDy = 0f
                 var handled = false
@@ -600,6 +643,7 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                     }
                     when (ev.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
+                            downX = ev.rawX
                             downY = ev.rawY
                             latestDy = 0f
                             handled = false
@@ -608,8 +652,14 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                             true
                         }
                         MotionEvent.ACTION_MOVE -> {
+                            val dx = ev.rawX - downX
                             latestDy = downY - ev.rawY
-                            if (!handled && latestDy > 34f * density && holdRunnable == null) {
+                            if (!handled && abs(dx) > 28f * density && abs(dx) > abs(latestDy) * 1.25f) {
+                                handled = true
+                                holdRunnable?.let { mainHandler.removeCallbacks(it) }
+                                holdRunnable = null
+                                sendWorkspaceAction(if (dx < 0f) WS_ACTION_NEXT else WS_ACTION_PREV)
+                            } else if (!handled && latestDy > 34f * density && holdRunnable == null) {
                                 val r = Runnable {
                                     if (!handled && latestDy > 28f * density) {
                                         handled = true
@@ -624,8 +674,12 @@ class KeyDeckAccessibilityService : AccessibilityService() {
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             holdRunnable?.let { mainHandler.removeCallbacks(it) }
                             holdRunnable = null
+                            val dx = ev.rawX - downX
                             val dy = downY - ev.rawY
-                            if (!handled && dy > 24f * density) {
+                            if (!handled && abs(dx) > 26f * density && abs(dx) > abs(dy) * 1.25f) {
+                                handled = true
+                                sendWorkspaceAction(if (dx < 0f) WS_ACTION_NEXT else WS_ACTION_PREV)
+                            } else if (!handled && dy > 24f * density) {
                                 handled = true
                                 performGlobalAction(GLOBAL_ACTION_HOME)
                             }

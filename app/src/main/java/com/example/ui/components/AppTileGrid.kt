@@ -152,7 +152,7 @@ fun AppTileGrid(
     onSearchWeb: (query: String, engine: String) -> Unit,
     onOpenShortcuts: () -> Unit,
     onOpenWriter: () -> Unit,
-    onSwipeToWorkspaceSpace: () -> Unit = {},
+    onSwipeToWorkspaceSpace: (dx: Int) -> Unit = {},
     showWeatherTile: Boolean = false,
     weatherReport: ConsensusWeatherReport? = null,
     selectedWeatherCity: WeatherCityResult = LauncherPreferencesRepository.DEFAULT_WEATHER_CITY,
@@ -501,6 +501,7 @@ fun AppTileGrid(
                 onSearchWeb = onSearchWeb
             )
         } else {
+            val density = androidx.compose.ui.platform.LocalDensity.current
             LazyVerticalGrid(
                 columns = GridCells.Fixed(columns),
                 state = gridState,
@@ -511,6 +512,7 @@ fun AppTileGrid(
                     .fillMaxSize()
                     .pointerInput(searchQuery, highlightedLetter) {
                         if (searchQuery.isBlank() && highlightedLetter == null) {
+                            val thresholdPx = with(density) { 64.dp.toPx() }
                             var dragX = 0f
                             var triggered = false
                             detectHorizontalDragGestures(
@@ -521,9 +523,9 @@ fun AppTileGrid(
                                 onHorizontalDrag = { _, dragAmount ->
                                     if (triggered) return@detectHorizontalDragGestures
                                     dragX += dragAmount
-                                    if (kotlin.math.abs(dragX) > 110f) {
+                                    if (kotlin.math.abs(dragX) >= thresholdPx) {
                                         triggered = true
-                                        onSwipeToWorkspaceSpace()
+                                        onSwipeToWorkspaceSpace(if (dragX < 0f) +1 else -1)
                                     }
                                 }
                             )

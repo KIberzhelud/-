@@ -93,6 +93,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -2005,7 +2006,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         KeyDeckAccessibilityService.hideDockedWorkspaceBar()
     }
 
-    fun swipeToWorkspaceSpace() {
+    fun swipeToWorkspaceSpace(dx: Int = 1) {
+        val dirX = if (dx >= 0) 1 else -1
         _isWriterModeOpen.value = false
         _activeTab.value = MainTab.HOME
         _showWorkspaceSpace.value = true
@@ -2015,12 +2017,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     if (!current.isOnHome) {
                         current
                     } else {
-                        val existingNonHome = current.cells.firstOrNull { !it.isHome }
-                        if (existingNonHome != null) {
-                            current.copy(activeX = existingNonHome.x, activeY = existingNonHome.y)
+                        val existingInDir = current.cells
+                            .filter { !it.isHome && if (dirX > 0) it.x > 0 else it.x < 0 }
+                            .minByOrNull { kotlin.math.abs(it.x) + kotlin.math.abs(it.y) * 10 }
+                        if (existingInDir != null) {
+                            current.copy(activeX = existingInDir.x, activeY = existingInDir.y)
                         } else {
-                            val tx = current.activeX + 1
-                            val ty = current.activeY
+                            val tx = dirX
+                            val ty = 0
                             val nextCells = if (current.cells.any { it.x == tx && it.y == ty }) {
                                 current.cells
                             } else {
@@ -2039,21 +2043,63 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun navigateWorkspace(dx: Int, dy: Int) {
         if (dx == 0 && dy == 0) return
-        _showWorkspaceSpace.value = true
         viewModelScope.launch {
             workspaceMutex.withLock {
                 val updated = prefsRepo.updateWorkspaceGridState { current ->
                     val tx = current.activeX + dx
                     val ty = current.activeY + dy
-                    val exists = current.cells.any { it.x == tx && it.y == ty }
-                    val nextCells = if (exists) current.cells else current.cells + WorkspaceCell(tx, ty)
+                    val prevCell = current.activeCell
+                    val prunedCells = if (!prevCell.isHome && !prevCell.hasAssignedApp) {
+                        current.cells.filterNot { it.x == prevCell.x && it.y == prevCell.y }
+                    } else {
+                        current.cells
+                    }
+                    val exists = prunedCells.any { it.x == tx && it.y == ty }
+                    val nextCells = if (exists || (tx == 0 && ty == 0)) {
+                        prunedCells
+                    } else {
+                        prunedCells + WorkspaceCell(tx, ty)
+                    }
                     current.copy(cells = nextCells, activeX = tx, activeY = ty)
                 }
-                _workspaceActionFeedback.value = if (updated.isOnHome) {
-                    "Главный рабочий стол (0, 0)"
+                if (updated.isOnHome) {
+                    _showWorkspaceSpace.value = false
+                    KeyDeckAccessibilityService.hideDockedWorkspaceBar()
+                    _workspaceActionFeedback.value = "Главный рабочий стол (0, 0)"
                 } else {
-                    "Рабочий стол (${updated.activeX}, ${updated.activeY})"
+                    _showWorkspaceSpace.value = true
+                    _workspaceActionFeedback.value = "Рабочий стол (${updated.activeX}, ${updated.activeY})"
                 }
+            }
+        }
+    }
+
+    fun switchWorkspaceByGesture(dx: Int) {
+        val dir = if (dx >= 0) 1 else -1
+        viewModelScope.launch {
+            val targetCell = workspaceMutex.withLock {
+                val current = prefsRepo.workspaceGridState.first()
+                val ordered = current.cells
+                    .filter { it.isHome || it.hasAssignedApp }
+                    .sortedWith(compareBy<WorkspaceCell> { it.y }.thenBy { it.x })
+                if (ordered.size <= 1) {
+                    current.activeCell
+                } else {
+                    val curIdx = ordered.indexOfFirst { it.x == current.activeX && it.y == current.activeY }
+                        .let { if (it >= 0) it else 0 }
+                    val nextIdx = (curIdx + dir + ordered.size) % ordered.size
+                    val chosen = ordered[nextIdx]
+                    prefsRepo.updateWorkspaceGridState { st ->
+                        st.copy(activeX = chosen.x, activeY = chosen.y)
+                    }
+                    chosen
+                }
+            }
+            if (targetCell.isHome) {
+                openHomeWorkspace()
+            } else {
+                _showWorkspaceSpace.value = true
+                launchWorkspaceCellFullscreen(targetCell)
             }
         }
     }
@@ -2148,19 +2194,17 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun launchCurrentWorkspaceAppInBounds(bounds: Rect) {
+    fun launchCurrentWorkspaceAppInBounds(@Suppress("UNUSED_PARAMETER") bounds: Rect = Rect()) {
+        val cell = uiState.value.workspaceGrid.activeCell
+        launchWorkspaceCellFullscreen(cell)
+    }
+
+    private fun launchWorkspaceCellFullscreen(cell: WorkspaceCell) {
         val state = uiState.value
-        val cell = state.workspaceGrid.activeCell
         val pkg = cell.packageName ?: return
         val app = state.allApps.firstOrNull {
             it.packageName == pkg && (cell.activityName == null || it.activityName == cell.activityName)
         } ?: state.allApps.firstOrNull { it.packageName == pkg }
-
-        val dm = getApplication<Application>().resources.displayMetrics
-        val minTopPx = KeyDeckAccessibilityService.getRecommendedWorkspaceTopPx(getApplication())
-        val adjustedTop = maxOf(bounds.top, minTopPx)
-        val adjustedBottom = maxOf(adjustedTop + 200, bounds.bottom, dm.heightPixels)
-        val clampedBounds = Rect(0, adjustedTop, maxOf(bounds.right, dm.widthPixels), adjustedBottom)
 
         autoCloseManager.recordLaunchedPackage(pkg)
         val wsTitle = "${cell.label ?: app?.label ?: "Стол"} (${cell.x},${cell.y})"
@@ -2170,13 +2214,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val hasPrivileged = (shizuku.isBinderAlive && shizuku.isPermissionGranted) || shizuku.isRootAvailable
         if (hasPrivileged) {
             viewModelScope.launch {
-                val res = shizukuBridge.launchAppInBoundsViaShizuku(
+                val res = shizukuBridge.launchAppFullscreenViaShizuku(
                     packageName = pkg,
-                    activityName = app?.activityName ?: cell.activityName,
-                    left = clampedBounds.left,
-                    top = clampedBounds.top,
-                    right = clampedBounds.right,
-                    bottom = clampedBounds.bottom
+                    activityName = app?.activityName ?: cell.activityName
                 )
                 if (res.isFailure) {
                     if (app != null) appsRepo.launchApp(app) else appsRepo.launchPackage(pkg)

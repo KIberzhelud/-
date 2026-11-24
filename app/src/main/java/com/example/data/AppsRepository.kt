@@ -413,30 +413,8 @@ class AppsRepository(private val context: Context) {
         }.getOrDefault(false)
     }
 
-    fun launchAppInBounds(app: AppEntry, bounds: android.graphics.Rect): Boolean {
-        val opts = android.app.ActivityOptions.makeBasic().apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                setLaunchBounds(bounds)
-            }
-        }
-        val launchedViaService = runCatching {
-            val component = ComponentName(app.packageName, app.activityName)
-            launcherApps?.startMainActivity(component, Process.myUserHandle(), bounds, opts.toBundle())
-            launcherApps != null
-        }.getOrDefault(false)
-        if (launchedViaService) return true
-
-        return runCatching {
-            val intent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                component = ComponentName(app.packageName, app.activityName)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT
-            }
-            context.startActivity(intent, opts.toBundle())
-            true
-        }.getOrElse {
-            launchApp(app)
-        }
+    fun launchAppInBounds(app: AppEntry, @Suppress("UNUSED_PARAMETER") bounds: android.graphics.Rect): Boolean {
+        return launchApp(app)
     }
 
     fun openAppInfo(packageName: String) {

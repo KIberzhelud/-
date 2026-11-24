@@ -1577,10 +1577,7 @@ private fun MainTabContent(
                         onLaunchCellAppInBounds = viewModel::launchCurrentWorkspaceAppInBounds,
                         onOpenHome = viewModel::openHomeWorkspace,
                         onDeleteWorkspace = { viewModel.deleteWorkspace() },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.navigationBars)
-                            .padding(4.dp)
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
 
@@ -1627,7 +1624,7 @@ private fun MainTabContent(
                         onSearchWeb = viewModel::searchOnWeb,
                         onOpenShortcuts = { viewModel.setShowShortcutsDialog(true) },
                         onOpenWriter = { viewModel.openWriterMode() },
-                        onSwipeToWorkspaceSpace = viewModel::swipeToWorkspaceSpace,
+                        onSwipeToWorkspaceSpace = { dx -> viewModel.swipeToWorkspaceSpace(dx) },
                         showWeatherTile = state.showWeatherInHomeTile,
                         weatherReport = state.weatherReport,
                         selectedWeatherCity = state.selectedWeatherCity,

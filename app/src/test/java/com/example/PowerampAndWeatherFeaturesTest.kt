@@ -24,6 +24,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.LauncherPreferencesRepository
@@ -1055,7 +1058,7 @@ class PowerampAndWeatherFeaturesTest {
     }
 
     @Test
-    fun `workspace canvas host renders launch and single delete button cleanly`() {
+    fun `workspace canvas host renders fullscreen launch supports 2d swipes and returns home on swipe back`() {
         val grid = WorkspaceGridState(
             cells = listOf(
                 WorkspaceCell(0, 0),
@@ -1064,13 +1067,14 @@ class PowerampAndWeatherFeaturesTest {
             activeX = 1,
             activeY = 0
         )
+        val navEvents = mutableListOf<Pair<Int, Int>>()
 
         composeTestRule.setContent {
             KeyDeckTheme {
                 WorkspaceCanvasHost(
                     workspaceGrid = grid,
                     allApps = emptyList(),
-                    onNavigateWorkspace = { _, _ -> },
+                    onNavigateWorkspace = { dx, dy -> navEvents += (dx to dy) },
                     onAssignApp = {},
                     onLaunchCellAppInBounds = {},
                     onOpenHome = {},
@@ -1081,6 +1085,36 @@ class PowerampAndWeatherFeaturesTest {
 
         composeTestRule.onNodeWithTag("workspace_launch_btn").assertIsDisplayed()
         composeTestRule.onNodeWithTag("workspace_delete_btn").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Открыть на весь экран").assertIsDisplayed()
+
+        // Horizontal swipe right inside workspace body navigates back (-1, 0)
+        composeTestRule.onNodeWithTag("workspace_canvas_host").performTouchInput {
+            swipeRight(startX = centerX * 0.4f, endX = centerX * 1.6f)
+        }
+        composeTestRule.waitForIdle()
+        assertTrue(navEvents.contains(-1 to 0))
+
+        // Vertical swipe up inside workspace body navigates (0, +1)
+        composeTestRule.onNodeWithTag("workspace_canvas_host").performTouchInput {
+            swipeUp(startY = centerY * 1.4f, endY = centerY * 0.4f)
+        }
+        composeTestRule.waitForIdle()
+        assertTrue(navEvents.contains(0 to 1))
+    }
+
+    @Test
+    fun `viewmodel navigateWorkspace returns to home tiles when stepping to (0, 0) and prunes empty ghost cells`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val vm = LauncherViewModel(app)
+        pumpMainUntil { !vm.uiState.value.isLoadingApps }
+
+        vm.swipeToWorkspaceSpace(1)
+        pumpMainUntil { vm.uiState.value.showWorkspaceSpace && vm.uiState.value.workspaceGrid.activeX == 1 }
+
+        // Swipe back to (0, 0) via navigateWorkspace(-1, 0) -> closes workspace mode & shows Home tiles
+        vm.navigateWorkspace(-1, 0)
+        pumpMainUntil { !vm.uiState.value.showWorkspaceSpace && vm.uiState.value.workspaceGrid.isOnHome }
+        assertTrue(vm.uiState.value.workspaceGrid.cells.none { it.x == 1 && it.y == 0 })
     }
 
     @Test

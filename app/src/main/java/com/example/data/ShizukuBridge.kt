@@ -325,45 +325,35 @@ class ShizukuBridge(private val context: Context) {
         return found.toList()
     }
 
-    @Volatile
-    private var freeformBootConfigured = false
-
-    suspend fun launchAppInBoundsViaShizuku(
+    suspend fun launchAppFullscreenViaShizuku(
         packageName: String,
-        activityName: String?,
-        left: Int,
-        top: Int,
-        right: Int,
-        bottom: Int
+        activityName: String?
     ): Result<String> {
         val safePkg = packageName.trim()
         if (!safePkg.matches(Regex("""^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$"""))) {
             return Result.failure(IllegalArgumentException("Некорректный пакет"))
         }
-        val prepCmd = if (!freeformBootConfigured) {
-            freeformBootConfigured = true
-            "settings put global enable_freeform_support 1 2>/dev/null; settings put global force_resizable_activities 1 2>/dev/null; "
-        } else {
-            ""
-        }
+        val resetTaskMode = "tid=\$(dumpsys activity activities 2>/dev/null | grep -E \"Task\\{.*$safePkg|topActivity=.*$safePkg|realActivity=.*$safePkg\" -B 1 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
+            "if [ -n \"\$tid\" ]; then cmd activity task set-windowing-mode \$tid 1 2>/dev/null; fi"
         val launchPart = if (!activityName.isNullOrBlank()) {
-            "am start -n $safePkg/$activityName --windowingMode 5"
+            "am start -n $safePkg/$activityName --windowingMode 1 2>/dev/null || am start -n $safePkg/$activityName"
         } else {
             "comp=\$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER $safePkg 2>/dev/null | tail -n 1); " +
                 "if [ -n \"\$comp\" ] && echo \"\$comp\" | grep -q \"/\"; then " +
-                "am start -n \"\$comp\" --windowingMode 5; " +
+                "(am start -n \"\$comp\" --windowingMode 1 2>/dev/null || am start -n \"\$comp\"); " +
                 "else monkey -p $safePkg -c android.intent.category.LAUNCHER 1; fi"
         }
-        val resizePart = "tid=\$(dumpsys activity activities 2>/dev/null | grep -E \"Task\\{.*$safePkg|topActivity=.*$safePkg|realActivity=.*$safePkg\" -B 1 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
-            "if [ -z \"\$tid\" ]; then " +
-            "tid=\$(dumpsys activity recents 2>/dev/null | grep -E \"Recent #.*$safePkg|$safePkg\" -B 1 | grep -oE \"(taskId=|id=|#)[0-9]+\" | grep -oE \"[0-9]+\" | head -n 1); " +
-            "fi; " +
-            "if [ -n \"\$tid\" ]; then " +
-            "cmd activity task set-windowing-mode \$tid 5 2>/dev/null; " +
-            "cmd activity task resize \$tid $left $top $right $bottom 2>/dev/null || am task resize \$tid $left $top $right $bottom 2>/dev/null; " +
-            "fi"
-        return runPrivilegedOrRootShell("$prepCmd$launchPart; sleep 0.35; $resizePart; sleep 0.25; $resizePart")
+        return runPrivilegedOrRootShell("$resetTaskMode; $launchPart")
     }
+
+    suspend fun launchAppInBoundsViaShizuku(
+        packageName: String,
+        activityName: String?,
+        @Suppress("UNUSED_PARAMETER") left: Int,
+        @Suppress("UNUSED_PARAMETER") top: Int,
+        @Suppress("UNUSED_PARAMETER") right: Int,
+        @Suppress("UNUSED_PARAMETER") bottom: Int
+    ): Result<String> = launchAppFullscreenViaShizuku(packageName, activityName)
 
     suspend fun dumpUiTreeXmlViaRoot(): String? {
         val dumpCmd = "uiautomator dump /data/local/tmp/keydeck_ui.xml >/dev/null 2>&1 && cat /data/local/tmp/keydeck_ui.xml"

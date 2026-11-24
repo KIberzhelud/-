@@ -117,13 +117,11 @@ class MainActivity : ComponentActivity() {
         }
         when (intent?.getStringExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)) {
             KeyDeckAccessibilityService.WS_ACTION_PREV -> {
-                viewModel.openWorkspaceSpace()
-                viewModel.navigateWorkspace(-1, 0)
+                viewModel.switchWorkspaceByGesture(-1)
                 intent.removeExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)
             }
             KeyDeckAccessibilityService.WS_ACTION_NEXT -> {
-                viewModel.openWorkspaceSpace()
-                viewModel.navigateWorkspace(+1, 0)
+                viewModel.switchWorkspaceByGesture(+1)
                 intent.removeExtra(KeyDeckAccessibilityService.EXTRA_WORKSPACE_ACTION)
             }
             KeyDeckAccessibilityService.WS_ACTION_HOME -> {

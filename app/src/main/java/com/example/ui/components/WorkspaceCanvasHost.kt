@@ -5,8 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +90,7 @@ fun WorkspaceCanvasHost(
 ) {
     val theme = LocalVistaTheme.current
     val lang = LocalAppLang.current
+    val density = LocalDensity.current
     val cell = workspaceGrid.activeCell
     var showPickerOverride by remember(cell.x, cell.y) { mutableStateOf(false) }
     var appFilterTfv by remember(cell.x, cell.y) { mutableStateOf(TextFieldValue("")) }
@@ -100,37 +102,61 @@ fun WorkspaceCanvasHost(
             ?: allApps.firstOrNull { it.packageName == pkg }
     }
 
-    var swipeXAcc by remember { mutableFloatStateOf(0f) }
-    var swipeYAcc by remember { mutableFloatStateOf(0f) }
+    val swipeThresholdPx = with(density) { 56.dp.toPx() }
+    val verticalSwipeThresholdPx = with(density) { 68.dp.toPx() }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .vistaWindowFrame(RoundedCornerShape(4.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {}
-            )
-            .padding(6.dp)
+            .background(theme.insetBg.copy(alpha = if (theme.isGlassMode) 0.42f else 0.85f))
+            .pointerInput(cell.x, cell.y, showPickerOverride, cell.hasAssignedApp) {
+                var accX = 0f
+                var accY = 0f
+                var triggered = false
+                if (!cell.hasAssignedApp || showPickerOverride) {
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            accX = 0f
+                            triggered = false
+                        },
+                        onHorizontalDrag = { _, drag ->
+                            if (triggered) return@detectHorizontalDragGestures
+                            accX += drag
+                            if (abs(accX) >= swipeThresholdPx) {
+                                triggered = true
+                                onNavigateWorkspace(if (accX < 0f) +1 else -1, 0)
+                            }
+                        }
+                    )
+                } else {
+                    detectDragGestures(
+                        onDragStart = {
+                            accX = 0f
+                            accY = 0f
+                            triggered = false
+                        },
+                        onDrag = { _, drag ->
+                            if (triggered) return@detectDragGestures
+                            accX += drag.x
+                            accY += drag.y
+                            if (abs(accX) >= swipeThresholdPx && abs(accX) > abs(accY) * 1.15f) {
+                                triggered = true
+                                onNavigateWorkspace(if (accX < 0f) +1 else -1, 0)
+                            } else if (abs(accY) >= verticalSwipeThresholdPx && abs(accY) > abs(accX) * 1.15f) {
+                                triggered = true
+                                onNavigateWorkspace(0, if (accY < 0f) +1 else -1)
+                            }
+                        }
+                    )
+                }
+            }
+            .padding(horizontal = 8.dp, vertical = 6.dp)
             .testTag("workspace_canvas_host")
     ) {
         // Workspace header + 4-way navigation + Home & Delete controls
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .pointerInput(cell.x, cell.y) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { swipeXAcc = 0f },
-                        onHorizontalDrag = { _, drag -> swipeXAcc += drag },
-                        onDragEnd = {
-                            if (abs(swipeXAcc) > 70f) {
-                                onNavigateWorkspace(if (swipeXAcc < 0f) +1 else -1, 0)
-                            }
-                            swipeXAcc = 0f
-                        }
-                    )
-                }
                 .padding(bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -176,34 +202,20 @@ fun WorkspaceCanvasHost(
             onOpenHome = onOpenHome
         )
 
-        Spacer(Modifier.height(5.dp))
+        Spacer(Modifier.height(6.dp))
 
-        // Docked viewport container
+        // Clean borderless desktop workspace surface
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .clip(RoundedCornerShape(4.dp))
-                .background(theme.insetBg.copy(alpha = if (theme.isGlassMode) 0.58f else 0.92f))
-                .border(1.dp, theme.chromeInnerGlow.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
                 .onGloballyPositioned { coords ->
                     val b = coords.boundsInWindow()
                     val next = Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
                     if (next.width() > 50 && next.height() > 50) {
                         viewportRect = next
                     }
-                }
-                .pointerInput(cell.x, cell.y, showPickerOverride) {
-                    detectVerticalDragGestures(
-                        onDragStart = { swipeYAcc = 0f },
-                        onVerticalDrag = { _, drag -> swipeYAcc += drag },
-                        onDragEnd = {
-                            if (abs(swipeYAcc) > 110f && cell.hasAssignedApp && !showPickerOverride) {
-                                onNavigateWorkspace(0, if (swipeYAcc < 0f) +1 else -1)
-                            }
-                            swipeYAcc = 0f
-                        }
-                    )
                 }
         ) {
             if (!cell.hasAssignedApp || showPickerOverride) {
@@ -303,37 +315,45 @@ fun WorkspaceCanvasHost(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(14.dp),
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    assignedApp?.icon?.let { bmp ->
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = assignedApp.label,
-                            modifier = Modifier.size(56.dp)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onLaunchCellAppInBounds(viewportRect ?: Rect()) }
+                            .padding(horizontal = 18.dp, vertical = 14.dp)
+                    ) {
+                        assignedApp?.icon?.let { bmp ->
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = assignedApp.label,
+                                modifier = Modifier.size(64.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = cell.label ?: assignedApp?.label ?: cell.packageName.orEmpty(),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
                     Text(
-                        text = cell.label ?: assignedApp?.label ?: cell.packageName.orEmpty(),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "Закреплено на столе (${cell.x}, ${cell.y}) • Верхняя панель KeyDeck останется доступной",
+                        text = "Стол (${cell.x}, ${cell.y}) • Полный экран без рамок\nСвайп ← ↑ ↓ → для смены стола",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(14.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         VistaButton(
-                            text = "Открыть в окне",
+                            text = "Открыть на весь экран",
                             isPrimary = true,
-                            onClick = { viewportRect?.let { onLaunchCellAppInBounds(it) } },
+                            onClick = { onLaunchCellAppInBounds(viewportRect ?: Rect()) },
                             modifier = Modifier.testTag("workspace_launch_btn")
                         )
                         VistaButton(
